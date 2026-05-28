@@ -1,11 +1,16 @@
 import OpenAI from "openai";
 
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
 export async function POST(request: Request) {
   try {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      return Response.json(
+        { error: "OPENAI_API_KEY_NOT_CONFIGURED" },
+        { status: 500 }
+      );
+    }
+
+    const client = new OpenAI({ apiKey });
     const body = await request.json();
     const message = String(body.message ?? "").trim();
 

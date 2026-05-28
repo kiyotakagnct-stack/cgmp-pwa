@@ -1,25 +1,14 @@
-import OpenAI from "openai";
+import { NextResponse } from "next/server";
 
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+export const runtime = "nodejs";
 
-type AnalyzeResponse = {
-  action: { a: "calendar" | "reminder" | "note" | "unclear" } | null;
-  date: { dt: string } | null;
-  tag: { t: string[] } | null;
-  title: { ttl: string } | null;
-  errors: Partial<Record<"action" | "date" | "tag" | "title", string>>;
+type AnalyzeRequest = {
+  text?: string;
+  input_at?: string;
+  model?: string;
 };
 
-type JsonTaskResult<T> = {
-  value: T | null;
-  error?: string;
-};
-
-type ActionValue = "calendar" | "reminder" | "note" | "unclear";
-
-function getJstNow() {
+function getJstStamp(date = new Date()) {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Tokyo",
     year: "numeric",
@@ -27,234 +16,174 @@ function getJstNow() {
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
+    second: "2-digit",
     hour12: false,
-  }).formatToParts(new Date());
+  }).formatToParts(date);
 
   const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  const currentDate = `${map.year}-${map.month}-${map.day}`;
-  const currentTime = `${map.hour}:${map.minute}`;
-
-  return {
-    currentDate,
-    currentTime,
-    timezone: "Asia/Tokyo",
-  };
+  return `${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}:${map.second}`;
 }
 
-function extractContent(input: unknown): string {
-  if (typeof input === "string") {
-    return input;
-  }
-
-  if (input && typeof input === "object" && "content" in input) {
-    const content = (input as { content?: unknown }).content;
-    if (typeof content === "string") {
-      return content;
-    }
-  }
-
-  return "";
+function normalizeJson(input: unknown) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return {};
+  return input as Record<string, unknown>;
 }
 
-function parseJsonTask<T>(
-  taskName: string,
-  rawContent: string,
-  expectedKey: string,
-  validator: (value: unknown) => value is T
-): JsonTaskResult<T> {
-  const trimmed = rawContent.trim();
-
-  if (!trimmed) {
-    return { value: null, error: `${taskName}: empty response` };
-  }
-
-  let parsed: unknown;
-
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    return { value: null, error: `${taskName}: JSON parse failed` };
-  }
-
-  if (!parsed || typeof parsed !== "object" || !(expectedKey in parsed)) {
-    return {
-      value: null,
-      error: `${taskName}: expected key ${expectedKey} missing`,
-    };
-  }
-
-  const candidate = (parsed as Record<string, unknown>)[expectedKey];
-  if (!validator(candidate)) {
-    return {
-      value: null,
-      error: `${taskName}: invalid ${expectedKey} value`,
-    };
-  }
-
-  return { value: parsed as T };
+function normalizeTags(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(
+      value
+        .map((item) => String(item || "").trim().replace(/^#+/, ""))
+        .filter(Boolean)
+    )
+  ).slice(0, 12);
 }
 
-async function callJsonTask<T>({
-  taskName,
-  systemPrompt,
-  userMessage,
-  maxTokens,
-  expectedKey,
-  validator,
-}: {
-  taskName: string;
-  systemPrompt: string;
-  userMessage: string;
-  maxTokens: number;
-  expectedKey: string;
-  validator: (value: unknown) => value is T;
-}): Promise<JsonTaskResult<T>> {
-  const completion = await client.chat.completions.create({
-    model: "gpt-4.1-nano",
-    temperature: 0,
-    max_tokens: maxTokens,
-    response_format: { type: "json_object" },
-    messages: [
-      {
-        role: "system",
-        content: systemPrompt,
-      },
-      {
-        role: "user",
-        content: userMessage,
-      },
-    ],
-  });
-
-  const content = extractContent(completion.choices[0]?.message?.content);
-  return parseJsonTask<T>(taskName, content, expectedKey, validator);
+function toBoolean(value: unknown) {
+  if (value === true || value === false) return value;
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(normalized);
 }
 
-function isActionValue(value: unknown): value is ActionValue {
-  if (typeof value !== "string") {
-    return false;
-  }
-
-  return ["calendar", "reminder", "note", "unclear"].includes(value);
+function buildPrompt(originalInputTime: string, text: string) {
+  return [
+    "You are a strict CGMP memo parser for a Japanese PWA.",
+    "Return JSON only.",
+    "Use the provided Original input time as the base for relative date/time interpretation.",
+    "Do not invent facts.",
+    "Schema:",
+    "{",
+    '  "action": "note|reminder|calendar|unclear",',
+    '  "para": "project|area|resource|archive|",',
+    '  "domain": "work|family|self|health|finance|learning|creation|life_admin|other|",',
+    '  "title": "string",',
+    '  "body": "string",',
+    '  "date": "YYYY-MM-DD or empty string",',
+    '  "time": "HH:mm or empty string",',
+    '  "duration_minutes": 60,',
+    '  "all_day": false,',
+    '  "location": "string",',
+    '  "confirmation": "string",',
+    '  "note_tags": "#tag #tag",',
+    '  "note_index_line": "YYYY-MM-DD | TYPE | #tag | summary",',
+    '  "user_intent_summary": "string",',
+    '  "summary": "string",',
+    '  "tags": ["tag"]',
+    "}",
+    "Rules:",
+    "- action must be one of note, reminder, calendar, unclear.",
+    "- title should be short and specific.",
+    "- body should be a concise memo body in Japanese.",
+    "- If action is reminder and date exists without time, set time to 17:00 and all_day to false.",
+    "- If action is calendar and date exists without time, set time to 08:00 and all_day to true.",
+    "- If date/time is unknown, leave them empty.",
+    "- Tags should be concrete search keywords.",
+    "- note_tags should be space-separated hashtags.",
+    "- note_index_line should use TYPE as one of IDEA, WORK, LEARN, LOG.",
+    "- confirmation and user_intent_summary should be short Japanese one-liners.",
+    `Original input time: ${originalInputTime}`,
+    "",
+    "User input:",
+    text,
+  ].join("\n");
 }
 
-function isDateValue(value: unknown): value is string | null {
-  return typeof value === "string" || value === null;
-}
-
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "string");
-}
-
-function isTitleValue(value: unknown): value is string {
-  return typeof value === "string";
+function pickContent(payload: any) {
+  return (
+    payload?.choices?.[0]?.message?.content ??
+    payload?.output_text ??
+    payload?.output?.[0]?.content?.[0]?.text ??
+    ""
+  );
 }
 
 export async function POST(request: Request) {
-  const body = await request.json().catch(() => ({}));
-  const message = String(body.message ?? "").trim();
-
-  if (!message) {
-    return Response.json({ error: "message is required" }, { status: 400 });
-  }
-
-  const { currentDate, currentTime, timezone } = getJstNow();
-  const sharedUserMessage = message;
-
-  const actionTask = callJsonTask<{ a: ActionValue }>({
-    taskName: "action",
-    systemPrompt:
-      "You classify the message into one Japanese intent. Return JSON only with key a. Choose calendar, reminder, note, or unclear.",
-    userMessage: sharedUserMessage,
-    maxTokens: 20,
-    expectedKey: "a",
-    validator: isActionValue,
-  });
-
-  const dateTask = callJsonTask<{ dt: string | null }>({
-    taskName: "date",
-    systemPrompt:
-      `You extract a date/time from Japanese text. Current date is ${currentDate}, current time is ${currentTime}, timezone is ${timezone}. Return JSON only with key dt. If date is unclear, return {"dt":null}. Use "YYYY-MM-DD HH:mm" when time is available, "YYYY-MM-DD" when only date is available.`,
-    userMessage: sharedUserMessage,
-    maxTokens: 40,
-    expectedKey: "dt",
-    validator: isDateValue,
-  });
-
-  const tagTask = callJsonTask<{ t: string[] }>({
-    taskName: "tag",
-    systemPrompt:
-      "You extract 2 to 5 short Japanese tags. Return JSON only with key t as an array of strings. No #. Prefer specific names, project names, and action types. Avoid generic tags. Do not use date/time/generic tags like 今日, 明日, 午後, 14時, スケジュール.",
-    userMessage: sharedUserMessage,
-    maxTokens: 80,
-    expectedKey: "t",
-    validator: isStringArray,
-  });
-
-  const titleTask = callJsonTask<{ ttl: string }>({
-    taskName: "title",
-    systemPrompt:
-      "You summarize the message into a 10 to 30 character Japanese title. Return JSON only with key ttl.",
-    userMessage: sharedUserMessage,
-    maxTokens: 60,
-    expectedKey: "ttl",
-    validator: isTitleValue,
-  });
-
-  const [actionResult, dateResult, tagResult, titleResult] = await Promise.allSettled([
-    actionTask,
-    dateTask,
-    tagTask,
-    titleTask,
-  ]);
-
-  const response: AnalyzeResponse = {
-    action: null,
-    date: null,
-    tag: null,
-    title: null,
-    errors: {},
-  };
-
-  if (actionResult.status === "fulfilled") {
-    response.action = actionResult.value.value;
-    if (actionResult.value.error) {
-      response.errors.action = actionResult.value.error;
+  try {
+    const body = (await request.json()) as AnalyzeRequest;
+    const text = String(body.text || "").trim();
+    if (!text) {
+      return NextResponse.json({ ok: false, error: "TEXT_REQUIRED" }, { status: 400 });
     }
-  } else {
-    response.errors.action = "request failed";
-  }
 
-  if (dateResult.status === "fulfilled") {
-    const extractedDate = dateResult.value.value?.dt;
-    response.date =
-      typeof extractedDate === "string" && extractedDate.length > 0
-        ? { dt: extractedDate }
-        : null;
-    if (dateResult.value.error) {
-      response.errors.date = dateResult.value.error;
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json({ ok: false, error: "OPENAI_API_KEY_NOT_CONFIGURED" }, { status: 500 });
     }
-  } else {
-    response.errors.date = "request failed";
-  }
 
-  if (tagResult.status === "fulfilled") {
-    response.tag = tagResult.value.value;
-    if (tagResult.value.error) {
-      response.errors.tag = tagResult.value.error;
+    const model = String(body.model || process.env.OPENAI_MODEL || "gpt-4.1-nano").trim();
+    const originalInputTime = String(body.input_at || getJstStamp()).trim();
+    const prompt = buildPrompt(originalInputTime, text);
+
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.2,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content: "You output only valid JSON that matches the requested schema.",
+          },
+          {
+            role: "user",
+            content: prompt,
+          },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return NextResponse.json(
+        { ok: false, error: `OPENAI_ERROR_${response.status}`, detail: errorText.slice(0, 1000) },
+        { status: 502 }
+      );
     }
-  } else {
-    response.errors.tag = "request failed";
-  }
 
-  if (titleResult.status === "fulfilled") {
-    response.title = titleResult.value.value;
-    if (titleResult.value.error) {
-      response.errors.title = titleResult.value.error;
-    }
-  } else {
-    response.errors.title = "request failed";
-  }
+    const payload = await response.json();
+    const content = pickContent(payload);
+    const parsed = normalizeJson(JSON.parse(content || "{}"));
 
-  return Response.json(response);
+    const result = {
+      action: String(parsed.action || "unclear"),
+      para: String(parsed.para || ""),
+      domain: String(parsed.domain || ""),
+      title: String(parsed.title || ""),
+      body: String(parsed.body || text),
+      date: String(parsed.date || ""),
+      time: String(parsed.time || ""),
+      duration_minutes: Number.isFinite(Number(parsed.duration_minutes)) ? Number(parsed.duration_minutes) : 60,
+      all_day: toBoolean(parsed.all_day),
+      location: String(parsed.location || ""),
+      confirmation: String(parsed.confirmation || ""),
+      note_tags: String(parsed.note_tags || ""),
+      note_index_line: String(parsed.note_index_line || ""),
+      user_intent_summary: String(parsed.user_intent_summary || ""),
+      summary: String(parsed.summary || parsed.user_intent_summary || ""),
+      tags: normalizeTags(parsed.tags),
+    };
+
+    return NextResponse.json({
+      ok: true,
+      model,
+      generated_at: new Date().toISOString(),
+      result,
+      raw_response_text: content,
+    });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "ANALYZE_FAILED",
+        detail: error instanceof Error ? error.message : String(error),
+      },
+      { status: 500 }
+    );
+  }
 }
