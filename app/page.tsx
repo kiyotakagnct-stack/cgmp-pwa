@@ -82,9 +82,9 @@ const fieldClass =
   "mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-blue-400/80 focus:ring-4 focus:ring-blue-200/55";
 const textareaClass = `${fieldClass} min-h-[120px] resize-y`;
 const panelClass =
-  "rounded-[28px] border border-sky-100 bg-white/95 p-5 shadow-[0_18px_55px_rgba(37,99,235,0.10),0_2px_10px_rgba(15,23,42,0.04)]";
+  "rounded-[24px] border border-sky-100 bg-white/95 p-4 shadow-[0_18px_55px_rgba(37,99,235,0.10),0_2px_10px_rgba(15,23,42,0.04)] sm:rounded-[28px] sm:p-5";
 const softPanelClass =
-  "rounded-[24px] border border-slate-200 bg-slate-50/90 p-4 shadow-[0_10px_30px_rgba(15,23,42,0.04)]";
+  "rounded-[22px] border border-slate-200 bg-slate-50/90 p-3 shadow-[0_10px_30px_rgba(15,23,42,0.04)] sm:rounded-[24px] sm:p-4";
 const primaryButtonClass =
   "rounded-2xl border border-blue-500 bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(37,99,235,0.22)] transition hover:border-blue-600 hover:bg-blue-700";
 const secondaryButtonClass =
@@ -287,12 +287,12 @@ function matchesMiniQuery(record: CGMPRecord, query: string) {
 }
 
 function getBackupLabel(record: CGMPRecord) {
-  if (record.backup_status === "backed_up") return "バックアップ済み";
-  if (record.backup_status === "backing_up") return "バックアップ中";
-  if (record.backup_status === "pending_backup") return "バックアップ待ち";
-  if (record.backup_status === "backup_failed") return "バックアップ失敗";
+  if (record.backup_status === "backed_up") return "同期済";
+  if (record.backup_status === "backing_up") return "同期中";
+  if (record.backup_status === "pending_backup") return "未同期";
+  if (record.backup_status === "backup_failed") return "同期失敗";
   if (record.backup_status === "conflicted") return "競合";
-  return "端末のみ";
+  return "端末";
 }
 
 function getBackupTone(record: CGMPRecord): "slate" | "cyan" | "emerald" | "amber" | "rose" {
@@ -311,18 +311,49 @@ function getPhotoBackupBadge(record: CGMPRecord): { label: string; tone: "slate"
   const failed = attachments.filter(
     (attachment) => attachment.backup_status === "backup_failed" || attachment.backup_status === "conflicted"
   ).length;
-  if (failed > 0) return { label: `写真同期失敗 ${failed}/${attachments.length}`, tone: "rose" };
-  if (backingUp > 0) return { label: `写真同期中 ${backedUp}/${attachments.length}`, tone: "cyan" };
-  if (backedUp === attachments.length) return { label: `写真同期済み ${backedUp}/${attachments.length}`, tone: "emerald" };
-  return { label: `写真バックアップ未 ${backedUp}/${attachments.length}`, tone: "amber" };
+  if (failed > 0) return { label: `写失敗 ${failed}/${attachments.length}`, tone: "rose" };
+  if (backingUp > 0) return { label: `写同期 ${backedUp}/${attachments.length}`, tone: "cyan" };
+  if (backedUp === attachments.length) return { label: `写済 ${backedUp}/${attachments.length}`, tone: "emerald" };
+  return { label: `写未 ${backedUp}/${attachments.length}`, tone: "amber" };
+}
+
+function getActionLabel(action: CGMPAction) {
+  if (action === "calendar") return "Cal";
+  if (action === "reminder") return "Rem";
+  if (action === "unclear") return "?";
+  return "Note";
+}
+
+function getParaLabel(para: CGMPPara) {
+  if (para === "project") return "P";
+  if (para === "resource") return "R";
+  if (para === "archive") return "Arc";
+  return "A";
+}
+
+function getDomainLabel(domain: CGMPDomain | string) {
+  const labels: Record<string, string> = {
+    work: "work",
+    family: "fam",
+    self: "self",
+    health: "hlth",
+    finance: "fin",
+    learning: "learn",
+    creation: "make",
+    life_admin: "admin",
+    other: "other",
+  };
+  return labels[domain || "other"] || String(domain || "other");
 }
 
 function Badge({
   children,
   tone = "slate",
+  compact = false,
 }: {
   children: ReactNode;
   tone?: "slate" | "cyan" | "emerald" | "amber" | "rose";
+  compact?: boolean;
 }) {
   const toneClass =
     tone === "cyan"
@@ -335,7 +366,11 @@ function Badge({
             ? "border-rose-200 bg-rose-50 text-rose-700"
             : "border-slate-200 bg-slate-100 text-slate-700";
   return (
-    <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs ${toneClass}`}>
+    <span
+      className={`inline-flex items-center rounded-full border ${
+        compact ? "px-2 py-0.5 text-[11px] leading-5" : "px-2.5 py-1 text-xs"
+      } ${toneClass}`}
+    >
       {children}
     </span>
   );
@@ -674,7 +709,7 @@ function RecordCard({
       aria-expanded={isSelected}
     >
       <div
-        className={`rounded-[24px] border p-4 transition duration-300 ${
+        className={`rounded-[22px] border p-3 transition duration-300 sm:rounded-[24px] sm:p-4 ${
           isChecked
             ? "border-orange-300 bg-orange-50/70 shadow-[0_0_0_1px_rgba(249,115,22,0.12),0_16px_42px_rgba(249,115,22,0.12)]"
             : isSelected
@@ -682,7 +717,7 @@ function RecordCard({
             : "border-slate-200 bg-white group-hover:border-blue-200 group-hover:bg-blue-50/50"
         }`}
       >
-        <div className="flex items-start gap-3">
+        <div className="flex flex-wrap items-center gap-1.5">
           <span
             role="checkbox"
             aria-checked={isChecked}
@@ -697,7 +732,7 @@ function RecordCard({
               event.stopPropagation();
               onToggleCheck(record.id);
             }}
-            className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-xl border text-sm font-bold transition ${
+            className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border text-xs font-bold transition ${
               isChecked
                 ? "border-orange-400 bg-orange-500 text-white shadow-[0_8px_18px_rgba(249,115,22,0.22)]"
                 : "border-slate-300 bg-white text-transparent group-hover:border-blue-300"
@@ -706,17 +741,15 @@ function RecordCard({
           >
             ✓
           </span>
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-            <Badge tone={record.action === "calendar" ? "amber" : record.action === "reminder" ? "rose" : record.action === "unclear" ? "slate" : "cyan"}>
-              {record.action}
-            </Badge>
-            <Badge tone="slate">{record.domain || "other"}</Badge>
-            <Badge tone="slate">{para}</Badge>
-            <Badge tone={getBackupTone(record)}>{getBackupLabel(record)}</Badge>
-            {photoBackupBadge ? <Badge tone={photoBackupBadge.tone}>{photoBackupBadge.label}</Badge> : null}
-            <span className="text-xs text-slate-400">{formatJstDateTime(record.updated_at)}</span>
-          </div>
-          <div className="shrink-0">
+          <Badge compact tone={record.action === "calendar" ? "amber" : record.action === "reminder" ? "rose" : record.action === "unclear" ? "slate" : "cyan"}>
+            {getActionLabel(record.action)}
+          </Badge>
+          <Badge compact tone="slate">{getDomainLabel(record.domain || "other")}</Badge>
+          <Badge compact tone="slate">{getParaLabel(para)}</Badge>
+          <Badge compact tone={getBackupTone(record)}>{getBackupLabel(record)}</Badge>
+          {photoBackupBadge ? <Badge compact tone={photoBackupBadge.tone}>{photoBackupBadge.label}</Badge> : null}
+          <span className="text-[11px] text-slate-400">{formatJstDateTime(record.updated_at)}</span>
+          <div className="ml-auto shrink-0">
             <input
               ref={photoInputRef}
               type="file"
@@ -739,9 +772,9 @@ function RecordCard({
                 photoInputRef.current?.click();
               }}
               onKeyDown={(event) => event.stopPropagation()}
-              className="rounded-xl border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 shadow-[0_6px_16px_rgba(37,99,235,0.08)] transition hover:border-blue-300 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-full border border-blue-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-blue-700 shadow-[0_6px_16px_rgba(37,99,235,0.08)] transition hover:border-blue-300 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              写真追加
+              ＋写真
             </button>
           </div>
         </div>
@@ -755,7 +788,7 @@ function RecordCard({
 
         <div className="mt-4 flex flex-wrap gap-2">
           {(record.tags || []).slice(0, 5).map((tag) => (
-            <Badge key={tag}>{`#${tag}`}</Badge>
+            <Badge key={tag} compact>{`#${tag}`}</Badge>
           ))}
         </div>
 
@@ -910,6 +943,7 @@ export default function Page() {
   const [domainFilter, setDomainFilter] = useState<"all" | CGMPDomain>("all");
   const [paraFilter, setParaFilter] = useState<"all" | CGMPPara>("all");
   const [sortKey, setSortKey] = useState<SortKey>("updated_at");
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [composeDraft, setComposeDraft] = useState<RecordFormState>(() => blankForm(""));
   const [composeAiStatus, setComposeAiStatus] = useState<CGMPRecord["ai_status"]>("none");
   const [composeAiError, setComposeAiError] = useState("");
@@ -1179,6 +1213,13 @@ export default function Page() {
   const checkedCount = checkedRecordIds.length;
   const allFilteredChecked =
     filteredRecords.length > 0 && filteredRecords.every((record) => checkedRecordIds.includes(record.id));
+  const activeFilterCount = [
+    tagQuery.trim(),
+    actionFilter !== "all",
+    domainFilter !== "all",
+    paraFilter !== "all",
+    sortKey !== "updated_at",
+  ].filter(Boolean).length;
 
   function toggleCheckedRecord(id: string) {
     setCheckedRecordIds((current) =>
@@ -1586,7 +1627,7 @@ export default function Page() {
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(191,219,254,0.75),_transparent_42%),linear-gradient(180deg,#f8fbff_0%,#eef5ff_52%,#f7fafc_100%)] text-slate-800">
-      <div className="mx-auto flex min-h-screen max-w-7xl flex-col px-4 py-4 pb-28 sm:px-6 lg:px-8">
+      <div className="mx-auto flex min-h-screen max-w-7xl flex-col px-2 py-3 pb-28 sm:px-5 lg:px-7">
         {notice ? (
           <div
             className={`mb-4 rounded-2xl border px-4 py-3 text-sm ${
@@ -1600,111 +1641,132 @@ export default function Page() {
         ) : null}
 
         {tab === "home" ? (
-          <div className="grid gap-5">
+          <div className="grid gap-3 sm:gap-4">
             <section className={panelClass}>
               <SectionHeading
                 eyebrow="Home"
                 title="一覧・検索・フィルター"
               />
 
-              <div className="grid grid-cols-2 gap-3">
-                <LabeledInput label="Text search" value={query} onChange={setQuery} placeholder="title / summary / body / raw_input" />
-                <LabeledInput label="Tag search" value={tagQuery} onChange={setTagQuery} placeholder="例: 仕様" />
+              <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+                <LabeledInput label="Text search" value={query} onChange={setQuery} placeholder="title / summary / body" />
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsFilterOpen((open) => !open)}
+                    className={secondaryButtonClass}
+                    aria-expanded={isFilterOpen}
+                  >
+                    {isFilterOpen ? "フィルターを閉じる" : `フィルター${activeFilterCount > 0 ? ` ${activeFilterCount}` : ""}`}
+                  </button>
+                  <button type="button" onClick={() => setTab("compose")} className={primaryButtonClass}>
+                    新規入力へ
+                  </button>
+                </div>
               </div>
 
-              <div className="mt-3 grid grid-cols-4 gap-3">
-                <LabeledSelect
-                  label="Action"
-                  value={actionFilter}
-                  onChange={(value) => setActionFilter(value === "all" ? "all" : normalizeAction(value))}
-                  options={[
-                    { value: "all", label: "all" },
-                    { value: "note", label: "note" },
-                    { value: "reminder", label: "reminder" },
-                    { value: "calendar", label: "calendar" },
-                    { value: "unclear", label: "unclear" },
-                  ]}
-                />
-                <LabeledSelect
-                  label="Domain"
-                  value={domainFilter}
-                  onChange={(value) => setDomainFilter(value === "all" ? "all" : normalizeDomain(value))}
-                  options={[
-                    { value: "all", label: "all" },
-                    { value: "work", label: "work" },
-                    { value: "family", label: "family" },
-                    { value: "self", label: "self" },
-                    { value: "health", label: "health" },
-                    { value: "finance", label: "finance" },
-                    { value: "learning", label: "learning" },
-                    { value: "creation", label: "creation" },
-                    { value: "life_admin", label: "life_admin" },
-                    { value: "other", label: "other" },
-                  ]}
-                />
-                <LabeledSelect
-                  label="PARA"
-                  value={paraFilter}
-                  onChange={(value) => setParaFilter(value === "all" ? "all" : normalizePara(value))}
-                  options={[
-                    { value: "all", label: "all" },
-                    { value: "project", label: "project" },
-                    { value: "area", label: "area" },
-                    { value: "resource", label: "resource" },
-                    { value: "archive", label: "archive" },
-                  ]}
-                />
-                <LabeledSelect
-                  label="Sort"
-                  value={sortKey}
-                  onChange={(value) => setSortKey(value === "datetime" ? "datetime" : "updated_at")}
-                  options={[
-                    { value: "updated_at", label: "updated_at" },
-                    { value: "datetime", label: "date/time" },
-                  ]}
-                />
-              </div>
-
-              <div className="mt-4 flex flex-wrap gap-2">
-                <button type="button" onClick={() => {
-                  setQuery("");
-                  setTagQuery("");
-                  setActionFilter("all");
-                  setDomainFilter("all");
-                  setParaFilter("all");
-                }} className={secondaryButtonClass}>
-                  クリア
-                </button>
-                <button type="button" onClick={() => setTab("compose")} className={primaryButtonClass}>
-                  新規入力へ
-                </button>
-              </div>
-
-              <div className="mt-5 grid gap-3">
-                {filteredRecords.length > 0 ? (
-                  filteredRecords.map((record) => (
-                    <RecordCard
-                      key={record.id}
-                      record={record}
-                      onOpen={(id) => setSelectedId((current) => (current === id ? null : id))}
-                      onEdit={openEditPanel}
-                      onDelete={deleteRecordById}
-                      onOpenImage={(attachment, imageUrl) => setLightbox({ imageUrl, title: attachment.summary_80 || "添付画像" })}
-                      onReanalyzeAttachment={handleReanalyzeAttachment}
-                      onDeleteAttachment={handleDeleteAttachment}
-                      onAddPhotos={handleAddPhotos}
-                      isPhotoProcessing={photoProcessingCount > 0}
-                      isChecked={checkedRecordIds.includes(record.id)}
-                      onToggleCheck={toggleCheckedRecord}
-                      isSelected={record.id === selectedId}
+              <div
+                className={`overflow-hidden transition-[max-height,opacity,margin-top] duration-300 ease-out ${
+                  isFilterOpen ? "mt-3 max-h-[32rem] opacity-100" : "mt-0 max-h-0 opacity-0"
+                }`}
+              >
+                <div className="rounded-[20px] border border-slate-200 bg-slate-50/80 p-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <LabeledInput label="Tag search" value={tagQuery} onChange={setTagQuery} placeholder="例: 仕様" />
+                    <LabeledSelect
+                      label="並び順"
+                      value={sortKey}
+                      onChange={(value) => setSortKey(value === "datetime" ? "datetime" : "updated_at")}
+                      options={[
+                        { value: "updated_at", label: "更新順" },
+                        { value: "datetime", label: "日時順" },
+                      ]}
                     />
-                  ))
-                ) : (
-                  <div className={`${softPanelClass} text-sm text-slate-500`}>
-                    条件に一致する記録がありません。まずは Compose で1件保存してみてください。
                   </div>
-                )}
+                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                    <LabeledSelect
+                      label="Action"
+                      value={actionFilter}
+                      onChange={(value) => setActionFilter(value === "all" ? "all" : normalizeAction(value))}
+                      options={[
+                        { value: "all", label: "すべて" },
+                        { value: "note", label: "note" },
+                        { value: "reminder", label: "reminder" },
+                        { value: "calendar", label: "calendar" },
+                        { value: "unclear", label: "unclear" },
+                      ]}
+                    />
+                    <LabeledSelect
+                      label="Domain"
+                      value={domainFilter}
+                      onChange={(value) => setDomainFilter(value === "all" ? "all" : normalizeDomain(value))}
+                      options={[
+                        { value: "all", label: "すべて" },
+                        { value: "work", label: "work" },
+                        { value: "family", label: "family" },
+                        { value: "self", label: "self" },
+                        { value: "health", label: "health" },
+                        { value: "finance", label: "finance" },
+                        { value: "learning", label: "learning" },
+                        { value: "creation", label: "creation" },
+                        { value: "life_admin", label: "life_admin" },
+                        { value: "other", label: "other" },
+                      ]}
+                    />
+                    <LabeledSelect
+                      label="PARA"
+                      value={paraFilter}
+                      onChange={(value) => setParaFilter(value === "all" ? "all" : normalizePara(value))}
+                      options={[
+                        { value: "all", label: "すべて" },
+                        { value: "project", label: "project" },
+                        { value: "area", label: "area" },
+                        { value: "resource", label: "resource" },
+                        { value: "archive", label: "archive" },
+                      ]}
+                    />
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button type="button" onClick={() => {
+                      setQuery("");
+                      setTagQuery("");
+                      setActionFilter("all");
+                      setDomainFilter("all");
+                      setParaFilter("all");
+                      setSortKey("updated_at");
+                    }} className={secondaryButtonClass}>
+                      クリア
+                    </button>
+                  </div>
+                </div>
               </div>
+            </section>
+
+            <section className="grid gap-3">
+              {filteredRecords.length > 0 ? (
+                filteredRecords.map((record) => (
+                  <RecordCard
+                    key={record.id}
+                    record={record}
+                    onOpen={(id) => setSelectedId((current) => (current === id ? null : id))}
+                    onEdit={openEditPanel}
+                    onDelete={deleteRecordById}
+                    onOpenImage={(attachment, imageUrl) => setLightbox({ imageUrl, title: attachment.summary_80 || "添付画像" })}
+                    onReanalyzeAttachment={handleReanalyzeAttachment}
+                    onDeleteAttachment={handleDeleteAttachment}
+                    onAddPhotos={handleAddPhotos}
+                    isPhotoProcessing={photoProcessingCount > 0}
+                    isChecked={checkedRecordIds.includes(record.id)}
+                    onToggleCheck={toggleCheckedRecord}
+                    isSelected={record.id === selectedId}
+                  />
+                ))
+              ) : (
+                <div className={`${softPanelClass} text-sm text-slate-500`}>
+                  条件に一致する記録がありません。まずは Compose で1件保存してみてください。
+                </div>
+              )}
             </section>
           </div>
         ) : null}
