@@ -43,6 +43,13 @@ type AppTab = "home" | "compose" | "settings";
 type SortKey = "updated_at" | "datetime";
 type Notice = { kind: "info" | "error"; text: string } | null;
 type LightboxState = { imageUrl: string; title: string } | null;
+type AiProcessingOverlayState = {
+  id: number;
+  kind: "text" | "image";
+  label: string;
+  startedAt: number;
+  finishedAt?: number;
+};
 type DriveBackupRecordPreview = {
   id: string;
   title: string;
@@ -373,6 +380,46 @@ function Badge({
     >
       {children}
     </span>
+  );
+}
+
+function AiProcessingOverlay({
+  state,
+  elapsedMs,
+}: {
+  state: AiProcessingOverlayState | null;
+  elapsedMs: number;
+}) {
+  if (!state) return null;
+
+  const isDone = typeof state.finishedAt === "number";
+  const title = isDone ? "完了しました" : state.label;
+  const description = isDone
+    ? `所要時間 ${elapsedMs.toLocaleString("ja-JP")} ms`
+    : `${elapsedMs.toLocaleString("ja-JP")} ms`;
+
+  return (
+    <div
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-white/68 px-6 backdrop-blur-[2px]"
+      role="status"
+      aria-live="polite"
+      aria-label={title}
+    >
+      <div className="w-full max-w-[280px] rounded-[28px] border border-blue-100 bg-white/95 p-6 text-center shadow-[0_24px_80px_rgba(37,99,235,0.18)]">
+        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-blue-50">
+          {isDone ? (
+            <span className="text-2xl font-bold text-blue-600">✓</span>
+          ) : (
+            <span className="h-8 w-8 animate-spin rounded-full border-4 border-blue-100 border-t-blue-600" />
+          )}
+        </div>
+        <div className="mt-4 text-xs font-semibold uppercase tracking-[0.28em] text-blue-500">
+          {state.kind === "text" ? "Text AI" : "Image AI"}
+        </div>
+        <div className="mt-2 text-lg font-semibold text-slate-950">{title}</div>
+        <div className="mt-2 font-mono text-sm text-slate-500">{description}</div>
+      </div>
+    </div>
   );
 }
 
@@ -971,7 +1018,11 @@ export default function Page() {
   const [checkedRecordIds, setCheckedRecordIds] = useState<string[]>([]);
   const [lightbox, setLightbox] = useState<LightboxState>(null);
   const [photoProcessingCount, setPhotoProcessingCount] = useState(0);
+  const [aiProcessingOverlay, setAiProcessingOverlay] = useState<AiProcessingOverlayState | null>(null);
+  const [aiProcessingElapsedMs, setAiProcessingElapsedMs] = useState(0);
   const initialDriveImportDoneRef = useRef(false);
+  const aiProcessingIdRef = useRef(0);
+  const aiProcessingHideTimerRef = useRef<number | null>(null);
 
   async function reloadRecords(preferredId?: string) {
     const nextRecords = await loadAllRecords();
@@ -995,6 +1046,36 @@ export default function Page() {
   async function reloadBackupSummary() {
     const nextSummary = await getBackupStatus();
     setBackupSummary(nextSummary);
+  }
+
+  function beginAiProcessing(kind: "text" | "image", label: string) {
+    if (aiProcessingHideTimerRef.current !== null) {
+      window.clearTimeout(aiProcessingHideTimerRef.current);
+      aiProcessingHideTimerRef.current = null;
+    }
+    const id = aiProcessingIdRef.current + 1;
+    aiProcessingIdRef.current = id;
+    setAiProcessingElapsedMs(0);
+    setAiProcessingOverlay({
+      id,
+      kind,
+      label,
+      startedAt: performance.now(),
+    });
+    return id;
+  }
+
+  function finishAiProcessing(id: number) {
+    const finishedAt = performance.now();
+    setAiProcessingOverlay((current) => {
+      if (!current || current.id !== id) return current;
+      setAiProcessingElapsedMs(Math.round(finishedAt - current.startedAt));
+      return { ...current, finishedAt };
+    });
+    aiProcessingHideTimerRef.current = window.setTimeout(() => {
+      setAiProcessingOverlay((current) => (current?.id === id ? null : current));
+      aiProcessingHideTimerRef.current = null;
+    }, 300);
   }
 
   async function runBackupQueue(showNotice = false) {
@@ -1136,6 +1217,29 @@ export default function Page() {
     const timer = window.setTimeout(() => setNotice(null), 3500);
     return () => window.clearTimeout(timer);
   }, [notice]);
+
+  useEffect(() => {
+    if (!aiProcessingOverlay) return;
+
+    if (typeof aiProcessingOverlay.finishedAt === "number") {
+      setAiProcessingElapsedMs(Math.round(aiProcessingOverlay.finishedAt - aiProcessingOverlay.startedAt));
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setAiProcessingElapsedMs(Math.round(performance.now() - aiProcessingOverlay.startedAt));
+    }, 33);
+
+    return () => window.clearInterval(timer);
+  }, [aiProcessingOverlay]);
+
+  useEffect(() => {
+    return () => {
+      if (aiProcessingHideTimerRef.current !== null) {
+        window.clearTimeout(aiProcessingHideTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (tab !== "compose") return;
@@ -1311,41 +1415,46 @@ export default function Page() {
     const targetRecord = records.find((record) => record.id === recordId);
     if (!targetRecord || files.length === 0) return;
 
+    const processingId = beginAiProcessing("image", files.length > 1 ? `画像AI解析中（${files.length}枚）` : "画像AI解析中");
     setPhotoProcessingCount((count) => count + files.length);
-    for (const file of files) {
-      try {
-        const prepared = await createImageAttachmentFromFile(recordId, file, { createThumbnail: true });
-        await putImageBlob(prepared.attachment.previewBlobKey, prepared.previewBlob);
-        if (prepared.thumbnailBlob && prepared.attachment.thumbnailBlobKey) {
-          await putImageBlob(prepared.attachment.thumbnailBlobKey, prepared.thumbnailBlob);
-        }
+    try {
+      for (const file of files) {
+        try {
+          const prepared = await createImageAttachmentFromFile(recordId, file, { createThumbnail: true });
+          await putImageBlob(prepared.attachment.previewBlobKey, prepared.previewBlob);
+          if (prepared.thumbnailBlob && prepared.attachment.thumbnailBlobKey) {
+            await putImageBlob(prepared.attachment.thumbnailBlobKey, prepared.thumbnailBlob);
+          }
 
-        const shouldAnalyze = typeof navigator === "undefined" ? true : navigator.onLine;
-        const initialAttachment: ImageAttachment = {
-          ...prepared.attachment,
-          analysis_status: shouldAnalyze ? "analyzing" : "pending",
-        };
-        const latestRecords = await loadAllRecords();
-        const latestRecord = latestRecords.find((record) => record.id === recordId) || targetRecord;
-        await saveRecordWithAttachments(latestRecord, [...(latestRecord.attachments || []), initialAttachment]);
-        console.debug("[cgmp:image] attachment saved", {
-          recordId,
-          attachmentId: initialAttachment.id,
-          status: initialAttachment.analysis_status,
-        });
+          const shouldAnalyze = typeof navigator === "undefined" ? true : navigator.onLine;
+          const initialAttachment: ImageAttachment = {
+            ...prepared.attachment,
+            analysis_status: shouldAnalyze ? "analyzing" : "pending",
+          };
+          const latestRecords = await loadAllRecords();
+          const latestRecord = latestRecords.find((record) => record.id === recordId) || targetRecord;
+          await saveRecordWithAttachments(latestRecord, [...(latestRecord.attachments || []), initialAttachment]);
+          console.debug("[cgmp:image] attachment saved", {
+            recordId,
+            attachmentId: initialAttachment.id,
+            status: initialAttachment.analysis_status,
+          });
 
-        if (shouldAnalyze) {
-          await analyzeAndUpdateAttachment(recordId, initialAttachment.id, prepared.previewBlob);
+          if (shouldAnalyze) {
+            await analyzeAndUpdateAttachment(recordId, initialAttachment.id, prepared.previewBlob);
+          }
+        } catch (error) {
+          console.debug("[cgmp:image] photo add failed", { recordId, fileName: file.name, error });
+          setNotice({
+            kind: "error",
+            text: error instanceof Error ? `写真追加に失敗しました: ${error.message}` : "写真追加に失敗しました",
+          });
+        } finally {
+          setPhotoProcessingCount((count) => Math.max(0, count - 1));
         }
-      } catch (error) {
-        console.debug("[cgmp:image] photo add failed", { recordId, fileName: file.name, error });
-        setNotice({
-          kind: "error",
-          text: error instanceof Error ? `写真追加に失敗しました: ${error.message}` : "写真追加に失敗しました",
-        });
-      } finally {
-        setPhotoProcessingCount((count) => Math.max(0, count - 1));
       }
+    } finally {
+      finishAiProcessing(processingId);
     }
   }
 
@@ -1364,12 +1473,17 @@ export default function Page() {
       return;
     }
 
-    await patchAttachment(recordId, attachmentId, (current) => ({
-      ...current,
-      analysis_status: "analyzing",
-      error: undefined,
-    }));
-    await analyzeAndUpdateAttachment(recordId, attachmentId, blob);
+    const processingId = beginAiProcessing("image", "画像AI再解析中");
+    try {
+      await patchAttachment(recordId, attachmentId, (current) => ({
+        ...current,
+        analysis_status: "analyzing",
+        error: undefined,
+      }));
+      await analyzeAndUpdateAttachment(recordId, attachmentId, blob);
+    } finally {
+      finishAiProcessing(processingId);
+    }
   }
 
   async function handleDeleteAttachment(recordId: string, attachmentId: string) {
@@ -1415,6 +1529,7 @@ export default function Page() {
 
     setComposeLoading(true);
     setComposeAiError("");
+    const processingId = beginAiProcessing("text", "テキストAI解析中");
     try {
       const response = await fetch("/api/analyze", {
         method: "POST",
@@ -1464,6 +1579,7 @@ export default function Page() {
       setComposeAiError(message);
       setNotice({ kind: "error", text: message });
     } finally {
+      finishAiProcessing(processingId);
       setComposeLoading(false);
     }
   }
@@ -2183,6 +2299,8 @@ export default function Page() {
           onClose={() => setLightbox(null)}
         />
       ) : null}
+
+      <AiProcessingOverlay state={aiProcessingOverlay} elapsedMs={aiProcessingElapsedMs} />
 
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/90 px-4 py-3 backdrop-blur-xl">
         <div className="mx-auto grid max-w-3xl grid-cols-3 gap-2">
