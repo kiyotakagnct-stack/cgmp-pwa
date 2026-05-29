@@ -217,6 +217,13 @@ export function buildRecordFromAnalysis({
     external_action_status: "none",
     external_target: "",
     external_registered_at: "",
+    backup_status: "pending_backup",
+    backup_retry_count: 0,
+    backup_last_error: "",
+    backup_next_retry_at: "",
+    drive_file_id: "",
+    last_backup_at: "",
+    backup_checksum: "",
     ai: {
       model: aiMeta.model,
       generated_at: aiMeta.generated_at,

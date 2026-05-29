@@ -25,6 +25,14 @@ export type CGMPExternalActionStatus =
 
 export type CGMPAIStatus = "none" | "done" | "error" | "timeout" | "pending_ai";
 
+export type CGMPBackupStatus =
+  | "local_only"
+  | "pending_backup"
+  | "backing_up"
+  | "backed_up"
+  | "backup_failed"
+  | "conflicted";
+
 export type CGMPAnalysis = {
   action: CGMPAction;
   para: CGMPPara;
@@ -80,6 +88,13 @@ export type CGMPRecord = {
   external_action_status: CGMPExternalActionStatus;
   external_target: CGMPExtId;
   external_registered_at: string;
+  backup_status: CGMPBackupStatus;
+  backup_retry_count: number;
+  backup_last_error: string;
+  backup_next_retry_at: string;
+  drive_file_id: string;
+  last_backup_at: string;
+  backup_checksum: string;
   ai: {
     model: string;
     generated_at: string;
@@ -92,6 +107,30 @@ export type CGMPRecord = {
     initial_domain: CGMPDomain;
     initial_summary: string;
   };
+};
+
+export type CGMPBackupQueueItem = {
+  id: string;
+  record_id: string;
+  item_type: "record" | "attachment";
+  attachment_id: string;
+  status: CGMPBackupStatus;
+  retry_count: number;
+  last_error: string;
+  next_retry_at: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CGMPBackupSummary = {
+  localOnly: number;
+  pending: number;
+  backingUp: number;
+  backedUp: number;
+  failed: number;
+  conflicted: number;
+  queue: number;
+  lastBackupAt: string;
 };
 
 export type CGMPSettings = {

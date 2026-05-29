@@ -1,9 +1,10 @@
-import type { CGMPRecord, CGMPSettings } from "./types";
+import type { CGMPBackupQueueItem, CGMPBackupStatus, CGMPRecord, CGMPSettings } from "./types";
 
 const DB_NAME = "cgmp-pwa";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const RECORDS_STORE = "records";
 const SETTINGS_STORE = "settings";
+const BACKUP_QUEUE_STORE = "backup_queue";
 const SETTINGS_KEY = "settings";
 
 function hasWindow() {
@@ -35,11 +36,30 @@ function openDatabase() {
       if (!db.objectStoreNames.contains(SETTINGS_STORE)) {
         db.createObjectStore(SETTINGS_STORE);
       }
+      if (!db.objectStoreNames.contains(BACKUP_QUEUE_STORE)) {
+        const store = db.createObjectStore(BACKUP_QUEUE_STORE, { keyPath: "id" });
+        store.createIndex("record_id", "record_id", { unique: false });
+        store.createIndex("status", "status", { unique: false });
+        store.createIndex("next_retry_at", "next_retry_at", { unique: false });
+      }
     };
 
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error || new Error("Failed to open IndexedDB"));
   });
+}
+
+function normalizeRecord(record: CGMPRecord): CGMPRecord {
+  return {
+    ...record,
+    backup_status: record.backup_status || "local_only",
+    backup_retry_count: Number.isFinite(Number(record.backup_retry_count)) ? Number(record.backup_retry_count) : 0,
+    backup_last_error: record.backup_last_error || "",
+    backup_next_retry_at: record.backup_next_retry_at || "",
+    drive_file_id: record.drive_file_id || "",
+    last_backup_at: record.last_backup_at || "",
+    backup_checksum: record.backup_checksum || "",
+  };
 }
 
 async function withTransaction<T>(
@@ -122,7 +142,7 @@ export async function loadAllRecords() {
     const tx = db.transaction(RECORDS_STORE, "readonly");
     const store = tx.objectStore(RECORDS_STORE);
     const result = await requestToPromise<CGMPRecord[]>(store.getAll());
-    return (Array.isArray(result) ? result : []).sort((a, b) => {
+    return (Array.isArray(result) ? result : []).map(normalizeRecord).sort((a, b) => {
       const aKey = new Date(a.updated_at || a.created_at).getTime();
       const bKey = new Date(b.updated_at || b.created_at).getTime();
       if (aKey === bKey) return String(b.id).localeCompare(String(a.id));
@@ -136,8 +156,49 @@ export async function loadAllRecords() {
 export async function upsertRecord(record: CGMPRecord) {
   if (!hasWindow()) return record;
 
+  const now = new Date().toISOString();
+  const nextRecord = normalizeRecord({
+    ...record,
+    backup_status: "pending_backup",
+    backup_last_error: "",
+    backup_next_retry_at: "",
+  });
+  const queueItem: CGMPBackupQueueItem = {
+    id: `record:${nextRecord.id}`,
+    record_id: nextRecord.id,
+    item_type: "record",
+    attachment_id: "",
+    status: "pending_backup",
+    retry_count: 0,
+    last_error: "",
+    next_retry_at: "",
+    created_at: now,
+    updated_at: now,
+  };
+
+  const db = await openDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction([RECORDS_STORE, BACKUP_QUEUE_STORE], "readwrite");
+    tx.objectStore(RECORDS_STORE).put(nextRecord);
+    tx.objectStore(BACKUP_QUEUE_STORE).put(queueItem);
+    tx.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+    tx.onerror = () => {
+      db.close();
+      reject(tx.error || new Error("IndexedDB transaction failed"));
+    };
+  });
+
+  return nextRecord;
+}
+
+export async function putRecordWithoutBackup(record: CGMPRecord) {
+  if (!hasWindow()) return record;
+
   await withTransaction(RECORDS_STORE, "readwrite", async (store) => {
-    store.put(record);
+    store.put(normalizeRecord(record));
   });
 
   return record;
@@ -146,15 +207,130 @@ export async function upsertRecord(record: CGMPRecord) {
 export async function deleteRecord(id: string) {
   if (!hasWindow()) return;
 
-  await withTransaction(RECORDS_STORE, "readwrite", async (store) => {
-    store.delete(id);
+  const db = await openDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction([RECORDS_STORE, BACKUP_QUEUE_STORE], "readwrite");
+    tx.objectStore(RECORDS_STORE).delete(id);
+    tx.objectStore(BACKUP_QUEUE_STORE).delete(`record:${id}`);
+    tx.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+    tx.onerror = () => {
+      db.close();
+      reject(tx.error || new Error("IndexedDB transaction failed"));
+    };
   });
 }
 
 export async function clearAllRecords() {
   if (!hasWindow()) return;
 
-  await withTransaction(RECORDS_STORE, "readwrite", async (store) => {
-    store.clear();
+  const db = await openDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction([RECORDS_STORE, BACKUP_QUEUE_STORE], "readwrite");
+    tx.objectStore(RECORDS_STORE).clear();
+    tx.objectStore(BACKUP_QUEUE_STORE).clear();
+    tx.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+    tx.onerror = () => {
+      db.close();
+      reject(tx.error || new Error("IndexedDB transaction failed"));
+    };
   });
+}
+
+export async function enqueueBackup(recordId: string) {
+  if (!hasWindow()) return;
+
+  const now = new Date().toISOString();
+  const item: CGMPBackupQueueItem = {
+    id: `record:${recordId}`,
+    record_id: recordId,
+    item_type: "record",
+    attachment_id: "",
+    status: "pending_backup",
+    retry_count: 0,
+    last_error: "",
+    next_retry_at: "",
+    created_at: now,
+    updated_at: now,
+  };
+
+  await withTransaction(BACKUP_QUEUE_STORE, "readwrite", async (store) => {
+    store.put(item);
+  });
+}
+
+export async function loadBackupQueue() {
+  if (!hasWindow()) return [];
+
+  const db = await openDatabase();
+  try {
+    const tx = db.transaction(BACKUP_QUEUE_STORE, "readonly");
+    const store = tx.objectStore(BACKUP_QUEUE_STORE);
+    const result = await requestToPromise<CGMPBackupQueueItem[]>(store.getAll());
+    return Array.isArray(result) ? result : [];
+  } finally {
+    db.close();
+  }
+}
+
+export async function removeBackupQueueItem(id: string) {
+  if (!hasWindow()) return;
+
+  await withTransaction(BACKUP_QUEUE_STORE, "readwrite", async (store) => {
+    store.delete(id);
+  });
+}
+
+export async function updateBackupQueueItem(item: CGMPBackupQueueItem) {
+  if (!hasWindow()) return item;
+
+  await withTransaction(BACKUP_QUEUE_STORE, "readwrite", async (store) => {
+    store.put({ ...item, updated_at: new Date().toISOString() });
+  });
+
+  return item;
+}
+
+export async function updateRecordBackupState(
+  recordId: string,
+  patch: Partial<
+    Pick<
+      CGMPRecord,
+      | "backup_status"
+      | "backup_retry_count"
+      | "backup_last_error"
+      | "backup_next_retry_at"
+      | "drive_file_id"
+      | "last_backup_at"
+      | "backup_checksum"
+    >
+  >
+) {
+  if (!hasWindow()) return null;
+
+  const db = await openDatabase();
+  try {
+    const tx = db.transaction(RECORDS_STORE, "readwrite");
+    const store = tx.objectStore(RECORDS_STORE);
+    const current = await requestToPromise<CGMPRecord | undefined>(store.get(recordId));
+    if (!current) return null;
+    const next: CGMPRecord = normalizeRecord({
+      ...current,
+      ...patch,
+      backup_status: (patch.backup_status || current.backup_status || "local_only") as CGMPBackupStatus,
+    });
+    store.put(next);
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error("IndexedDB transaction failed"));
+    });
+    return next;
+  } finally {
+    db.close();
+  }
 }

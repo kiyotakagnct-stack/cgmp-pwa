@@ -10,9 +10,11 @@ import {
   saveSettings,
   upsertRecord,
 } from "@/lib/cgmp/storage";
+import { getBackupStatus, processBackupQueue } from "@/lib/cgmp/backup";
 import type {
   CGMPAction,
   CGMPAnalysisResponse,
+  CGMPBackupSummary,
   CGMPDomain,
   CGMPPara,
   CGMPRecord,
@@ -156,6 +158,13 @@ function formToRecord(
     external_action_status: existing?.external_action_status ?? "none",
     external_target: existing?.external_target ?? "",
     external_registered_at: existing?.external_registered_at ?? "",
+    backup_status: existing?.backup_status ?? "pending_backup",
+    backup_retry_count: existing?.backup_retry_count ?? 0,
+    backup_last_error: existing?.backup_last_error ?? "",
+    backup_next_retry_at: existing?.backup_next_retry_at ?? "",
+    drive_file_id: existing?.drive_file_id ?? "",
+    last_backup_at: existing?.last_backup_at ?? "",
+    backup_checksum: existing?.backup_checksum ?? "",
     ai: {
       model: aiMeta?.model ?? existing?.ai?.model ?? "",
       generated_at: aiMeta?.generated_at ?? existing?.ai?.generated_at ?? stamp,
@@ -242,6 +251,23 @@ function matchesMiniQuery(record: CGMPRecord, query: string) {
     .split(/\s+/)
     .filter(Boolean)
     .every((token) => getMiniListText(record).includes(token));
+}
+
+function getBackupLabel(record: CGMPRecord) {
+  if (record.backup_status === "backed_up") return "バックアップ済み";
+  if (record.backup_status === "backing_up") return "バックアップ中";
+  if (record.backup_status === "pending_backup") return "バックアップ待ち";
+  if (record.backup_status === "backup_failed") return "バックアップ失敗";
+  if (record.backup_status === "conflicted") return "競合";
+  return "端末のみ";
+}
+
+function getBackupTone(record: CGMPRecord): "slate" | "cyan" | "emerald" | "amber" | "rose" {
+  if (record.backup_status === "backed_up") return "emerald";
+  if (record.backup_status === "backing_up") return "cyan";
+  if (record.backup_status === "pending_backup") return "amber";
+  if (record.backup_status === "backup_failed" || record.backup_status === "conflicted") return "rose";
+  return "slate";
 }
 
 function Badge({
@@ -577,6 +603,7 @@ function RecordCard({
           </Badge>
           <Badge tone="slate">{record.domain || "other"}</Badge>
           <Badge tone="slate">{para}</Badge>
+          <Badge tone={getBackupTone(record)}>{getBackupLabel(record)}</Badge>
           <span className="text-xs text-zinc-500">{formatJstDateTime(record.updated_at)}</span>
         </div>
 
@@ -597,6 +624,7 @@ function RecordCard({
           <span>{record.date || "未設定日付"}</span>
           <span>{record.time || "未設定時刻"}</span>
           <span>{record.external_action_status}</span>
+          {record.last_backup_at ? <span>backup {formatJstDateTime(record.last_backup_at)}</span> : null}
         </div>
 
         <div
@@ -679,6 +707,8 @@ export default function Page() {
   const [isMiniListOpen, setIsMiniListOpen] = useState(false);
   const [miniListQuery, setMiniListQuery] = useState("");
   const [pendingMiniJumpId, setPendingMiniJumpId] = useState<string | null>(null);
+  const [backupSummary, setBackupSummary] = useState<CGMPBackupSummary | null>(null);
+  const [backupProcessing, setBackupProcessing] = useState(false);
 
   async function reloadRecords(preferredId?: string) {
     const nextRecords = await loadAllRecords();
@@ -699,14 +729,54 @@ export default function Page() {
     setSettingsDraft(nextSettings);
   }
 
+  async function reloadBackupSummary() {
+    const nextSummary = await getBackupStatus();
+    setBackupSummary(nextSummary);
+  }
+
+  async function runBackupQueue(showNotice = false) {
+    if (backupProcessing) return;
+    setBackupProcessing(true);
+    try {
+      const results = await processBackupQueue();
+      await Promise.all([reloadRecords(), reloadBackupSummary()]);
+      const failed = results.filter((result) => !result.ok).length;
+      if (showNotice) {
+        setNotice({
+          kind: failed > 0 ? "error" : "info",
+          text:
+            results.length === 0
+              ? "バックアップ待ちの記録はありません。"
+              : failed > 0
+                ? `バックアップに失敗した記録があります（${failed}件）。`
+                : `バックアップしました（${results.length}件）。`,
+        });
+      }
+    } catch (error) {
+      if (showNotice) {
+        setNotice({
+          kind: "error",
+          text: error instanceof Error ? error.message : "バックアップに失敗しました",
+        });
+      }
+    } finally {
+      setBackupProcessing(false);
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const [nextRecords, nextSettings] = await Promise.all([loadAllRecords(), loadSettings()]);
+        const [nextRecords, nextSettings, nextBackupSummary] = await Promise.all([
+          loadAllRecords(),
+          loadSettings(),
+          getBackupStatus(),
+        ]);
         if (cancelled) return;
         setRecords(nextRecords);
         setSettingsDraft(nextSettings);
+        setBackupSummary(nextBackupSummary);
         setSelectedId(null);
         setIsReady(true);
       } catch (error) {
@@ -765,6 +835,24 @@ export default function Page() {
     }, 120);
     return () => window.clearTimeout(timer);
   }, [composeAiStatus, tab]);
+
+  useEffect(() => {
+    if (!isReady) return;
+    void runBackupQueue(false);
+
+    const handleVisible = () => {
+      if (document.visibilityState === "visible") {
+        void runBackupQueue(false);
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisible);
+    window.addEventListener("focus", handleVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisible);
+      window.removeEventListener("focus", handleVisible);
+    };
+  }, [isReady]);
 
   const filteredRecords = useMemo(() => {
     const tagged = records.filter((record) => {
@@ -867,6 +955,7 @@ export default function Page() {
     try {
       await upsertRecord(nextRecord);
       await reloadRecords(nextRecord.id);
+      await reloadBackupSummary();
       setNotice({ kind: "info", text: "保存しました。" });
       setComposeDraft(blankForm(""));
       setComposeAiStatus("none");
@@ -888,6 +977,7 @@ export default function Page() {
       const nextRecord = formToRecord(detailDraft, { existing: selectedRecord });
       await upsertRecord(nextRecord);
       await reloadRecords(nextRecord.id);
+      await reloadBackupSummary();
       setNotice({ kind: "info", text: "更新しました。" });
       setReloadTick((value) => value + 1);
     } catch (error) {
@@ -909,6 +999,7 @@ export default function Page() {
     try {
       await deleteRecord(selectedRecord.id);
       await reloadRecords();
+      await reloadBackupSummary();
       setSelectedId((current) => {
         const remaining = records.filter((record) => record.id !== selectedRecord.id);
         return remaining.find((record) => record.id === current)?.id ?? remaining[0]?.id ?? null;
@@ -946,6 +1037,7 @@ export default function Page() {
     if (!confirmed) return;
     await clearAllRecords();
     await reloadRecords();
+    await reloadBackupSummary();
     setSelectedId(null);
     setNotice({ kind: "info", text: "全件削除しました。" });
   }
@@ -976,12 +1068,25 @@ export default function Page() {
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(34,211,238,0.14),_transparent_36%),linear-gradient(180deg,#020617_0%,#040b17_40%,#020617_100%)] text-zinc-100">
       <div className="mx-auto flex min-h-screen max-w-7xl flex-col px-4 py-4 pb-28 sm:px-6 lg:px-8">
         <header className="mb-4 rounded-[30px] border border-white/10 bg-black/25 px-5 py-4 shadow-[0_0_0_1px_rgba(255,255,255,0.03)] backdrop-blur-xl">
-          <div className="flex flex-wrap items-center gap-2 text-xs sm:gap-3">
-            <Badge tone="cyan">All {counts.total}</Badge>
-            <Badge tone="slate">Filtered {counts.filtered}</Badge>
-            <Badge tone="slate">Note {counts.notes}</Badge>
-            <Badge tone="amber">Cal {counts.calendars}</Badge>
-            <Badge tone="rose">Rem {counts.reminders}</Badge>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2 text-xs sm:gap-3">
+              <Badge tone="cyan">All {counts.total}</Badge>
+              <Badge tone="slate">Filtered {counts.filtered}</Badge>
+              <Badge tone="slate">Note {counts.notes}</Badge>
+              <Badge tone="amber">Cal {counts.calendars}</Badge>
+              <Badge tone="rose">Rem {counts.reminders}</Badge>
+              <Badge tone={backupSummary?.failed ? "rose" : backupSummary?.pending ? "amber" : "emerald"}>
+                Backup {backupSummary ? `${backupSummary.backedUp}/${counts.total}` : "-"}
+              </Badge>
+            </div>
+            <button
+              type="button"
+              onClick={() => runBackupQueue(true)}
+              disabled={backupProcessing}
+              className="rounded-2xl border border-emerald-400/25 bg-emerald-400/10 px-3 py-2 text-xs font-medium text-emerald-50 transition hover:border-emerald-300/50 hover:bg-emerald-400/20 disabled:opacity-60"
+            >
+              {backupProcessing ? "バックアップ中..." : "今すぐバックアップ"}
+            </button>
           </div>
         </header>
 
@@ -1260,8 +1365,39 @@ export default function Page() {
                 />
                 <div className={softPanelClass}>
                   <p className="text-sm leading-6 text-zinc-300">
-                    Vercel では `OPENAI_API_KEY` を環境変数で設定してください。クライアント側には渡しません。
+                    Vercel では `OPENAI_API_KEY` と Google Drive 用の環境変数を設定してください。クライアント側には渡しません。
                   </p>
+                </div>
+                <div className={softPanelClass}>
+                  <div className="text-sm font-medium text-zinc-100">Google Drive バックアップ</div>
+                  <dl className="mt-3 grid grid-cols-2 gap-3 text-xs text-zinc-300">
+                    <div>
+                      <dt className="text-zinc-500">未バックアップ</dt>
+                      <dd className="mt-1 text-lg font-semibold text-amber-100">{backupSummary ? backupSummary.localOnly + backupSummary.pending : "-"}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-zinc-500">バックアップ中</dt>
+                      <dd className="mt-1 text-lg font-semibold text-cyan-100">{backupSummary?.backingUp ?? "-"}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-zinc-500">失敗</dt>
+                      <dd className="mt-1 text-lg font-semibold text-rose-100">{backupSummary?.failed ?? "-"}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-zinc-500">最終バックアップ</dt>
+                      <dd className="mt-1 text-sm text-zinc-100">
+                        {backupSummary?.lastBackupAt ? formatJstDateTime(backupSummary.lastBackupAt) : "未実行"}
+                      </dd>
+                    </div>
+                  </dl>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button type="button" onClick={() => runBackupQueue(true)} disabled={backupProcessing} className={primaryButtonClass}>
+                      {backupProcessing ? "処理中..." : "今すぐバックアップ"}
+                    </button>
+                    <a href="/api/auth/google/start" className={secondaryButtonClass}>
+                      Google Driveを認可
+                    </a>
+                  </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <button type="button" onClick={handleSaveSettings} disabled={settingsSaving} className={primaryButtonClass}>
