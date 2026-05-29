@@ -10,7 +10,7 @@ import {
   saveSettings,
   upsertRecord,
 } from "@/lib/cgmp/storage";
-import { getBackupStatus, processBackupQueue } from "@/lib/cgmp/backup";
+import { getBackupStatus, importMissingRecordsFromDrive, processBackupQueue } from "@/lib/cgmp/backup";
 import type {
   CGMPAction,
   CGMPAnalysisResponse,
@@ -35,6 +35,20 @@ import type { ReactNode, RefObject } from "react";
 type AppTab = "home" | "compose" | "settings";
 type SortKey = "updated_at" | "datetime";
 type Notice = { kind: "info" | "error"; text: string } | null;
+type DriveBackupRecordPreview = {
+  id: string;
+  title: string;
+  summary: string;
+  action: string;
+  domain: string;
+  para: string;
+  updated_at: string;
+  backed_up_at: string;
+  checksum: string;
+  file_id: string;
+  record?: Partial<CGMPRecord>;
+  error?: boolean;
+};
 
 type RecordFormState = {
   raw_input: string;
@@ -709,6 +723,11 @@ export default function Page() {
   const [pendingMiniJumpId, setPendingMiniJumpId] = useState<string | null>(null);
   const [backupSummary, setBackupSummary] = useState<CGMPBackupSummary | null>(null);
   const [backupProcessing, setBackupProcessing] = useState(false);
+  const [driveBackupLoading, setDriveBackupLoading] = useState(false);
+  const [driveImporting, setDriveImporting] = useState(false);
+  const [driveBackupRecords, setDriveBackupRecords] = useState<DriveBackupRecordPreview[] | null>(null);
+  const [driveBackupCheckedAt, setDriveBackupCheckedAt] = useState("");
+  const initialDriveImportDoneRef = useRef(false);
 
   async function reloadRecords(preferredId?: string) {
     const nextRecords = await loadAllRecords();
@@ -761,6 +780,58 @@ export default function Page() {
       }
     } finally {
       setBackupProcessing(false);
+    }
+  }
+
+  async function loadDriveBackupList() {
+    setDriveBackupLoading(true);
+    try {
+      const response = await fetch("/api/backup/restore");
+      const payload = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        records?: DriveBackupRecordPreview[];
+        error?: string;
+      };
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.error || "バックアップ一覧の取得に失敗しました");
+      }
+      setDriveBackupRecords(Array.isArray(payload.records) ? payload.records : []);
+      setDriveBackupCheckedAt(new Date().toISOString());
+      setNotice({ kind: "info", text: "Drive上のバックアップ一覧を取得しました。" });
+    } catch (error) {
+      setNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : "バックアップ一覧の取得に失敗しました",
+      });
+    } finally {
+      setDriveBackupLoading(false);
+    }
+  }
+
+  async function importMissingFromDrive(showNotice = false) {
+    if (driveImporting) return;
+    setDriveImporting(true);
+    try {
+      const result = await importMissingRecordsFromDrive();
+      await Promise.all([reloadRecords(), reloadBackupSummary()]);
+      if (showNotice || result.imported.length > 0) {
+        setNotice({
+          kind: "info",
+          text:
+            result.imported.length > 0
+              ? `Driveから未取り込みメモを${result.imported.length}件追加しました。`
+              : "Driveから追加する未取り込みメモはありません。",
+        });
+      }
+    } catch (error) {
+      if (showNotice) {
+        setNotice({
+          kind: "error",
+          text: error instanceof Error ? error.message : "Driveからの取り込みに失敗しました",
+        });
+      }
+    } finally {
+      setDriveImporting(false);
     }
   }
 
@@ -838,6 +909,10 @@ export default function Page() {
 
   useEffect(() => {
     if (!isReady) return;
+    if (!initialDriveImportDoneRef.current) {
+      initialDriveImportDoneRef.current = true;
+      void importMissingFromDrive(false);
+    }
     void runBackupQueue(false);
 
     const handleVisible = () => {
@@ -1394,11 +1469,61 @@ export default function Page() {
                     <button type="button" onClick={() => runBackupQueue(true)} disabled={backupProcessing} className={primaryButtonClass}>
                       {backupProcessing ? "処理中..." : "今すぐバックアップ"}
                     </button>
+                    <button type="button" onClick={loadDriveBackupList} disabled={driveBackupLoading} className={secondaryButtonClass}>
+                      {driveBackupLoading ? "確認中..." : "Drive上の一覧を確認"}
+                    </button>
+                    <button type="button" onClick={() => importMissingFromDrive(true)} disabled={driveImporting} className={secondaryButtonClass}>
+                      {driveImporting ? "取り込み中..." : "未取り込みを追加"}
+                    </button>
                     <a href="/api/auth/google/start" className={secondaryButtonClass}>
                       Google Driveを認可
                     </a>
                   </div>
                 </div>
+                {driveBackupRecords ? (
+                  <div className={softPanelClass}>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="text-sm font-medium text-zinc-100">Drive上に実在するバックアップ</div>
+                        <p className="mt-1 text-xs text-zinc-500">
+                          {driveBackupCheckedAt ? `${formatJstDateTime(driveBackupCheckedAt)} に確認` : ""}
+                        </p>
+                      </div>
+                      <Badge tone="emerald">{driveBackupRecords.length}件</Badge>
+                    </div>
+                    <div className="mt-4 max-h-80 space-y-2 overflow-auto pr-1">
+                      {driveBackupRecords.length > 0 ? (
+                        driveBackupRecords.map((backup) => (
+                          <div
+                            key={`${backup.id}:${backup.file_id}`}
+                            className={`rounded-2xl border p-3 ${
+                              backup.error ? "border-rose-400/20 bg-rose-400/10" : "border-white/10 bg-black/20"
+                            }`}
+                          >
+                            <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
+                              <Badge tone={backup.error ? "rose" : "emerald"}>{backup.error ? "読込失敗" : "実在確認済み"}</Badge>
+                              <span>{backup.action || "note"}</span>
+                              <span>{backup.domain || "other"}</span>
+                              <span>{backup.para || "area"}</span>
+                            </div>
+                            <div className="mt-2 text-sm font-semibold text-zinc-50">{backup.title || "（無題）"}</div>
+                            {backup.summary ? (
+                              <p className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-400">{backup.summary}</p>
+                            ) : null}
+                            <div className="mt-3 grid gap-1 text-[11px] text-zinc-500">
+                              <span>backup: {backup.backed_up_at ? formatJstDateTime(backup.backed_up_at) : "不明"}</span>
+                              <span>record: {backup.id}</span>
+                              <span>file: {backup.file_id}</span>
+                              <span>checksum: {backup.checksum.slice(0, 16)}...</span>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-sm text-zinc-400">Drive上のバックアップはまだありません。</p>
+                      )}
+                    </div>
+                  </div>
+                ) : null}
                 <div className="flex flex-wrap gap-2">
                   <button type="button" onClick={handleSaveSettings} disabled={settingsSaving} className={primaryButtonClass}>
                     {settingsSaving ? "保存中..." : "設定を保存"}

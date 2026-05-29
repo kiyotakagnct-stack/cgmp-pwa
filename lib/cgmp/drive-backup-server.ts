@@ -286,3 +286,48 @@ export async function listBackedUpRecords() {
   const { manifest } = await loadManifest();
   return manifest;
 }
+
+export async function listBackedUpRecordDetails() {
+  const { manifest } = await loadManifest();
+  const records = [];
+
+  for (const [recordId, entry] of Object.entries(manifest.records)) {
+    try {
+      const text = await readTextFile(entry.file_id);
+      const parsed = JSON.parse(text || "{}") as { record?: Partial<CGMPRecord> };
+      const record = parsed.record || {};
+      records.push({
+        id: recordId,
+        title: String(record.title || "（無題）"),
+        summary: String(record.summary || record.body || record.raw_input || ""),
+        action: String(record.action || "note"),
+        domain: String(record.domain || "other"),
+        para: String(record.para || "area"),
+        updated_at: String(record.updated_at || entry.updated_at || ""),
+        backed_up_at: entry.backed_up_at,
+        checksum: entry.checksum,
+        file_id: entry.file_id,
+        record,
+      });
+    } catch (error) {
+      records.push({
+        id: recordId,
+        title: "読み込み失敗",
+        summary: error instanceof Error ? error.message : "GOOGLE_DRIVE_RECORD_READ_FAILED",
+        action: "",
+        domain: "",
+        para: "",
+        updated_at: entry.updated_at,
+        backed_up_at: entry.backed_up_at,
+        checksum: entry.checksum,
+        file_id: entry.file_id,
+        error: true,
+      });
+    }
+  }
+
+  return {
+    manifest,
+    records: records.sort((a, b) => String(b.backed_up_at).localeCompare(String(a.backed_up_at))),
+  };
+}

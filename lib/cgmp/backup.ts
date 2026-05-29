@@ -1,6 +1,7 @@
 import {
   loadAllRecords,
   loadBackupQueue,
+  putRecordWithoutBackup,
   removeBackupQueueItem,
   updateBackupQueueItem,
   updateRecordBackupState,
@@ -19,6 +20,23 @@ type BackupProcessItemResult = {
 type BackupProcessResponse = {
   ok: boolean;
   results?: BackupProcessItemResult[];
+  error?: string;
+};
+
+type DriveBackupRecord = {
+  id: string;
+  title: string;
+  summary: string;
+  backed_up_at: string;
+  checksum: string;
+  file_id: string;
+  record?: Partial<CGMPRecord>;
+  error?: boolean;
+};
+
+type RestoreResponse = {
+  ok?: boolean;
+  records?: DriveBackupRecord[];
   error?: string;
 };
 
@@ -152,4 +170,47 @@ export async function restoreFromDrive() {
     throw new Error(typeof payload?.error === "string" ? payload.error : "RESTORE_FAILED");
   }
   return payload;
+}
+
+function isRestorableRecord(value: Partial<CGMPRecord> | undefined): value is CGMPRecord {
+  return Boolean(value?.id && value?.created_at && value?.updated_at);
+}
+
+export async function importMissingRecordsFromDrive() {
+  const [localRecords, response] = await Promise.all([loadAllRecords(), fetch("/api/backup/restore")]);
+  const payload = (await response.json().catch(() => ({}))) as RestoreResponse;
+  if (!response.ok || !payload.ok) {
+    throw new Error(payload.error || "RESTORE_FAILED");
+  }
+
+  const localIds = new Set(localRecords.map((record) => record.id));
+  const imported: CGMPRecord[] = [];
+  const skipped: DriveBackupRecord[] = [];
+
+  for (const item of payload.records || []) {
+    if (item.error || localIds.has(item.id) || !isRestorableRecord(item.record)) {
+      skipped.push(item);
+      continue;
+    }
+
+    const record: CGMPRecord = {
+      ...item.record,
+      backup_status: "backed_up",
+      backup_retry_count: 0,
+      backup_last_error: "",
+      backup_next_retry_at: "",
+      drive_file_id: item.file_id,
+      last_backup_at: item.backed_up_at,
+      backup_checksum: item.checksum,
+    };
+    await putRecordWithoutBackup(record);
+    imported.push(record);
+    localIds.add(record.id);
+  }
+
+  return {
+    imported,
+    skipped,
+    totalRemote: payload.records?.length || 0,
+  };
 }

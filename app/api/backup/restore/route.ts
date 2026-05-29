@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { listBackedUpRecords } from "@/lib/cgmp/drive-backup-server";
+import { listBackedUpRecordDetails } from "@/lib/cgmp/drive-backup-server";
 
 export const runtime = "nodejs";
 
@@ -8,7 +8,7 @@ export async function GET() {
   try {
     return NextResponse.json({
       ok: true,
-      manifest: await listBackedUpRecords(),
+      ...(await listBackedUpRecordDetails()),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "RESTORE_FAILED";
