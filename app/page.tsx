@@ -303,6 +303,20 @@ function getBackupTone(record: CGMPRecord): "slate" | "cyan" | "emerald" | "ambe
   return "slate";
 }
 
+function getPhotoBackupBadge(record: CGMPRecord): { label: string; tone: "slate" | "cyan" | "emerald" | "amber" | "rose" } | null {
+  const attachments = record.attachments || [];
+  if (attachments.length === 0) return null;
+  const backedUp = attachments.filter((attachment) => attachment.backup_status === "backed_up").length;
+  const backingUp = attachments.filter((attachment) => attachment.backup_status === "backing_up").length;
+  const failed = attachments.filter(
+    (attachment) => attachment.backup_status === "backup_failed" || attachment.backup_status === "conflicted"
+  ).length;
+  if (failed > 0) return { label: `写真同期失敗 ${failed}/${attachments.length}`, tone: "rose" };
+  if (backingUp > 0) return { label: `写真同期中 ${backedUp}/${attachments.length}`, tone: "cyan" };
+  if (backedUp === attachments.length) return { label: `写真同期済み ${backedUp}/${attachments.length}`, tone: "emerald" };
+  return { label: `写真バックアップ未 ${backedUp}/${attachments.length}`, tone: "amber" };
+}
+
 function Badge({
   children,
   tone = "slate",
@@ -614,6 +628,8 @@ function RecordCard({
   onOpenImage,
   onReanalyzeAttachment,
   onDeleteAttachment,
+  onAddPhotos,
+  isPhotoProcessing = false,
   isChecked = false,
   onToggleCheck,
   isSelected = false,
@@ -625,6 +641,8 @@ function RecordCard({
   onOpenImage: (attachment: ImageAttachment, imageUrl: string) => void;
   onReanalyzeAttachment: (recordId: string, attachmentId: string) => void;
   onDeleteAttachment: (recordId: string, attachmentId: string) => void;
+  onAddPhotos: (recordId: string, files: File[]) => void;
+  isPhotoProcessing?: boolean;
   isChecked?: boolean;
   onToggleCheck: (id: string) => void;
   isSelected?: boolean;
@@ -633,6 +651,14 @@ function RecordCard({
   const rawText = record.raw_input || record.summary || record.body || "（原文なし）";
   const bodyText = record.body && record.body !== record.raw_input ? record.body : "";
   const intentText = record.user_intent_summary || record.confirmation || "";
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
+  const photoBackupBadge = getPhotoBackupBadge(record);
+
+  function handlePhotoFiles(files: File[]) {
+    if (files.length === 0) return;
+    onAddPhotos(record.id, files);
+  }
+
   return (
     <div
       role="button"
@@ -687,7 +713,36 @@ function RecordCard({
             <Badge tone="slate">{record.domain || "other"}</Badge>
             <Badge tone="slate">{para}</Badge>
             <Badge tone={getBackupTone(record)}>{getBackupLabel(record)}</Badge>
+            {photoBackupBadge ? <Badge tone={photoBackupBadge.tone}>{photoBackupBadge.label}</Badge> : null}
             <span className="text-xs text-slate-400">{formatJstDateTime(record.updated_at)}</span>
+          </div>
+          <div className="shrink-0">
+            <input
+              ref={photoInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onClick={(event) => event.stopPropagation()}
+              onChange={(event) => {
+                event.stopPropagation();
+                const files = Array.from(event.target.files || []);
+                event.target.value = "";
+                handlePhotoFiles(files);
+              }}
+            />
+            <button
+              type="button"
+              disabled={isPhotoProcessing}
+              onClick={(event) => {
+                event.stopPropagation();
+                photoInputRef.current?.click();
+              }}
+              onKeyDown={(event) => event.stopPropagation()}
+              className="rounded-xl border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 shadow-[0_6px_16px_rgba(37,99,235,0.08)] transition hover:border-blue-300 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              写真追加
+            </button>
           </div>
         </div>
 
@@ -724,6 +779,18 @@ function RecordCard({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="text-[11px] uppercase tracking-[0.28em] text-blue-500">Detail</div>
               <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    photoInputRef.current?.click();
+                  }}
+                  onKeyDown={(event) => event.stopPropagation()}
+                  className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-700 transition hover:border-orange-300 hover:bg-orange-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={isPhotoProcessing}
+                >
+                  写真追加
+                </button>
                 <button
                   type="button"
                   onClick={(event) => {
@@ -1619,6 +1686,8 @@ export default function Page() {
                       onOpenImage={(attachment, imageUrl) => setLightbox({ imageUrl, title: attachment.summary_80 || "添付画像" })}
                       onReanalyzeAttachment={handleReanalyzeAttachment}
                       onDeleteAttachment={handleDeleteAttachment}
+                      onAddPhotos={handleAddPhotos}
+                      isPhotoProcessing={photoProcessingCount > 0}
                       isChecked={checkedRecordIds.includes(record.id)}
                       onToggleCheck={toggleCheckedRecord}
                       isSelected={record.id === selectedId}

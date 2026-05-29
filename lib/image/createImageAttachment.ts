@@ -91,6 +91,14 @@ export async function createImageAttachmentFromFile(
     visible_text: fallback.visible_text,
     confidence: fallback.confidence,
     analysis_status: "pending",
+    backup_status: "pending_backup",
+    backup_retry_count: 0,
+    backup_last_error: "",
+    backup_next_retry_at: "",
+    previewDriveFileId: "",
+    thumbnailDriveFileId: "",
+    last_backup_at: "",
+    backup_checksum: "",
   };
 
   console.debug("[cgmp:image] attachment built", {

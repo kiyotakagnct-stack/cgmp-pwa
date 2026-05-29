@@ -4,6 +4,14 @@ export type ImageType = "screenshot" | "document" | "whiteboard" | "object" | "s
 
 export type ImageConfidence = "high" | "medium" | "low";
 
+export type ImageBackupStatus =
+  | "local_only"
+  | "pending_backup"
+  | "backing_up"
+  | "backed_up"
+  | "backup_failed"
+  | "conflicted";
+
 export type ImageVisionResult = {
   image_type: ImageType;
   summary_80: string;
@@ -33,5 +41,13 @@ export type ImageAttachment = {
   visible_text: string;
   confidence: ImageConfidence;
   analysis_status: ImageAnalysisStatus;
+  backup_status?: ImageBackupStatus;
+  backup_retry_count?: number;
+  backup_last_error?: string;
+  backup_next_retry_at?: string;
+  previewDriveFileId?: string;
+  thumbnailDriveFileId?: string;
+  last_backup_at?: string;
+  backup_checksum?: string;
   error?: string;
 };

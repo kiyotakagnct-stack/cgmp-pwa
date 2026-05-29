@@ -33,6 +33,23 @@ function statusClass(status: ImageAttachment["analysis_status"]) {
   return "border-slate-200 bg-slate-100 text-slate-600";
 }
 
+function backupLabel(status: ImageAttachment["backup_status"]) {
+  if (status === "backed_up") return "写真同期済み";
+  if (status === "backing_up") return "写真同期中";
+  if (status === "pending_backup") return "写真同期待ち";
+  if (status === "backup_failed") return "写真同期失敗";
+  if (status === "conflicted") return "写真競合";
+  return "写真未同期";
+}
+
+function backupClass(status: ImageAttachment["backup_status"]) {
+  if (status === "backed_up") return "border-teal-200 bg-teal-50 text-teal-700";
+  if (status === "backing_up") return "border-blue-200 bg-blue-50 text-blue-700";
+  if (status === "pending_backup") return "border-orange-200 bg-orange-50 text-orange-700";
+  if (status === "backup_failed" || status === "conflicted") return "border-rose-200 bg-rose-50 text-rose-700";
+  return "border-slate-200 bg-slate-100 text-slate-600";
+}
+
 export function ImageAttachmentCard({
   attachment,
   compact = false,
@@ -105,6 +122,9 @@ export function ImageAttachmentCard({
         <span className={`rounded-full border px-2.5 py-1 text-xs ${statusClass(attachment.analysis_status)}`}>
           {statusLabel(attachment.analysis_status)}
         </span>
+        <span className={`rounded-full border px-2.5 py-1 text-xs ${backupClass(attachment.backup_status)}`}>
+          {backupLabel(attachment.backup_status)}
+        </span>
         <span className="rounded-full border border-slate-200 bg-slate-100 px-2.5 py-1 text-xs text-slate-600">
           {attachment.image_type}
         </span>
@@ -133,6 +153,9 @@ export function ImageAttachmentCard({
 
       {attachment.error && attachment.analysis_status === "failed" ? (
         <p className="mt-2 line-clamp-2 text-xs leading-5 text-rose-600">{attachment.error}</p>
+      ) : null}
+      {attachment.backup_last_error && attachment.backup_status === "backup_failed" ? (
+        <p className="mt-2 line-clamp-2 text-xs leading-5 text-rose-600">{attachment.backup_last_error}</p>
       ) : null}
 
       <div className="mt-3 flex flex-wrap gap-2">

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 
 import type { CGMPRecord } from "./types";
+import type { ImageAttachment } from "@/types/image";
 
 const DRIVE_API_BASE = "https://www.googleapis.com/drive/v3";
 const DRIVE_UPLOAD_BASE = "https://www.googleapis.com/upload/drive/v3";
@@ -20,6 +21,18 @@ type DriveManifest = {
     string,
     {
       file_id: string;
+      checksum: string;
+      updated_at: string;
+      backed_up_at: string;
+    }
+  >;
+  attachments?: Record<
+    string,
+    {
+      record_id: string;
+      attachment_id: string;
+      preview_file_id: string;
+      thumbnail_file_id: string;
       checksum: string;
       updated_at: string;
       backed_up_at: string;
@@ -149,6 +162,45 @@ async function driveUpload<T>(path: string, metadata: Record<string, unknown>, b
   return payload as T;
 }
 
+async function driveUploadBuffer<T>(
+  path: string,
+  metadata: Record<string, unknown>,
+  body: Buffer,
+  mimeType: string,
+  method = "POST"
+) {
+  const accessToken = await getAccessToken();
+  const boundary = `cgmp_${crypto.randomUUID().replace(/-/g, "")}`;
+  const head = Buffer.from(
+    [
+      `--${boundary}`,
+      "Content-Type: application/json; charset=UTF-8",
+      "",
+      JSON.stringify(metadata),
+      `--${boundary}`,
+      `Content-Type: ${mimeType}`,
+      "",
+    ].join("\r\n") + "\r\n"
+  );
+  const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
+
+  const response = await fetch(`${DRIVE_UPLOAD_BASE}${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": `multipart/related; boundary=${boundary}`,
+    },
+    body: Buffer.concat([head, body, tail]),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(typeof payload?.error?.message === "string" ? payload.error.message : "GOOGLE_DRIVE_UPLOAD_FAILED");
+  }
+
+  return payload as T;
+}
+
 function escapeDriveQuery(value: string) {
   return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 }
@@ -205,6 +257,10 @@ function checksum(value: string) {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 
+function checksumBuffer(value: Buffer) {
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
+
 async function upsertJsonFile(name: string, content: string) {
   const existing = await findAppDataFile(name);
   const metadata = existing
@@ -232,6 +288,33 @@ async function upsertJsonFile(name: string, content: string) {
   );
 }
 
+async function upsertBinaryFile(name: string, content: Buffer, mimeType: string) {
+  const existing = await findAppDataFile(name);
+  const metadata = existing
+    ? { name }
+    : {
+        name,
+        parents: [APP_DATA_SPACE],
+      };
+
+  if (existing) {
+    return driveUploadBuffer<DriveFile>(
+      `/files/${encodeURIComponent(existing.id)}?uploadType=multipart&fields=id,name,modifiedTime`,
+      metadata,
+      content,
+      mimeType,
+      "PATCH"
+    );
+  }
+
+  return driveUploadBuffer<DriveFile>(
+    "/files?uploadType=multipart&fields=id,name,modifiedTime",
+    metadata,
+    content,
+    mimeType
+  );
+}
+
 async function loadManifest(): Promise<{ file: DriveFile | null; manifest: DriveManifest }> {
   const file = await findAppDataFile("manifest.json");
   if (!file) {
@@ -241,6 +324,7 @@ async function loadManifest(): Promise<{ file: DriveFile | null; manifest: Drive
         schema_version: 1,
         updated_at: new Date().toISOString(),
         records: {},
+        attachments: {},
       },
     };
   }
@@ -253,6 +337,7 @@ async function loadManifest(): Promise<{ file: DriveFile | null; manifest: Drive
       schema_version: 1,
       updated_at: String(parsed.updated_at || new Date().toISOString()),
       records: parsed.records && typeof parsed.records === "object" ? parsed.records : {},
+      attachments: parsed.attachments && typeof parsed.attachments === "object" ? parsed.attachments : {},
     },
   };
 }
@@ -278,6 +363,62 @@ export async function backupRecordToDrive(record: CGMPRecord) {
   return {
     driveFileId: recordFile.id,
     checksum: recordChecksum,
+    backedUpAt,
+  };
+}
+
+function sanitizeFileComponent(value: string) {
+  return String(value || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "attachment";
+}
+
+export async function backupAttachmentToDrive({
+  recordId,
+  attachment,
+  preview,
+  thumbnail,
+}: {
+  recordId: string;
+  attachment: ImageAttachment;
+  preview: Buffer;
+  thumbnail?: Buffer | null;
+}) {
+  const safeRecordId = sanitizeFileComponent(recordId);
+  const safeAttachmentId = sanitizeFileComponent(attachment.id);
+  const previewFileName = `attachment_${safeRecordId}_${safeAttachmentId}_preview.jpg`;
+  const previewFile = await upsertBinaryFile(previewFileName, preview, "image/jpeg");
+  let thumbnailFileId = "";
+  let attachmentChecksum = checksumBuffer(preview);
+
+  if (thumbnail && thumbnail.length > 0) {
+    const thumbnailFileName = `attachment_${safeRecordId}_${safeAttachmentId}_thumbnail.jpg`;
+    const thumbnailFile = await upsertBinaryFile(thumbnailFileName, thumbnail, "image/jpeg");
+    thumbnailFileId = thumbnailFile.id;
+    attachmentChecksum = checksumBuffer(Buffer.concat([preview, thumbnail]));
+  }
+
+  const backedUpAt = new Date().toISOString();
+  const { manifest } = await loadManifest();
+  manifest.updated_at = backedUpAt;
+  manifest.attachments = manifest.attachments || {};
+  manifest.attachments[`${recordId}:${attachment.id}`] = {
+    record_id: recordId,
+    attachment_id: attachment.id,
+    preview_file_id: previewFile.id,
+    thumbnail_file_id: thumbnailFileId,
+    checksum: attachmentChecksum,
+    updated_at: backedUpAt,
+    backed_up_at: backedUpAt,
+  };
+
+  await upsertJsonFile("manifest.json", JSON.stringify(manifest, null, 2));
+
+  return {
+    previewDriveFileId: previewFile.id,
+    thumbnailDriveFileId: thumbnailFileId,
+    checksum: attachmentChecksum,
     backedUpAt,
   };
 }

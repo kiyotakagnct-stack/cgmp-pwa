@@ -1,17 +1,24 @@
 import {
+  enqueueBackup,
   loadAllRecords,
   loadBackupQueue,
   putRecordWithoutBackup,
   removeBackupQueueItem,
+  updateAttachmentBackupState,
   updateBackupQueueItem,
   updateRecordBackupState,
 } from "./storage";
+import { getImageBlob } from "@/lib/db/imageBlobStore";
 import type { CGMPBackupSummary, CGMPRecord } from "./types";
+import type { ImageAttachment } from "@/types/image";
 
 type BackupProcessItemResult = {
   ok: boolean;
   recordId: string;
+  attachmentId?: string;
   driveFileId?: string;
+  previewDriveFileId?: string;
+  thumbnailDriveFileId?: string;
   checksum?: string;
   backedUpAt?: string;
   error?: string;
@@ -74,23 +81,129 @@ async function backupRecord(record: CGMPRecord): Promise<BackupProcessItemResult
   };
 }
 
-export async function backupAttachment(_attachmentId: string) {
+export async function backupAttachment(record: CGMPRecord, attachment: ImageAttachment): Promise<BackupProcessItemResult> {
+  const previewBlob = await getImageBlob(attachment.previewBlobKey);
+  if (!previewBlob) {
+    return {
+      ok: false,
+      recordId: record.id,
+      attachmentId: attachment.id,
+      error: "PREVIEW_BLOB_NOT_FOUND",
+    };
+  }
+
+  const thumbnailBlob = attachment.thumbnailBlobKey ? await getImageBlob(attachment.thumbnailBlobKey) : null;
+  const formData = new FormData();
+  formData.append("recordId", record.id);
+  formData.append("attachment", JSON.stringify(attachment));
+  formData.append("preview", previewBlob, "preview.jpg");
+  if (thumbnailBlob) {
+    formData.append("thumbnail", thumbnailBlob, "thumbnail.jpg");
+  }
+
+  const response = await fetch("/api/backup/attachment", {
+    method: "POST",
+    body: formData,
+  });
+  const payload = (await response.json().catch(() => ({}))) as BackupProcessItemResult & {
+    ok?: boolean;
+    detail?: string;
+  };
+  if (!response.ok || !payload.ok) {
+    return {
+      ok: false,
+      recordId: record.id,
+      attachmentId: attachment.id,
+      error: payload.detail || payload.error || "ATTACHMENT_BACKUP_REQUEST_FAILED",
+    };
+  }
   return {
-    ok: false,
-    error: "ATTACHMENT_BACKUP_NOT_IMPLEMENTED",
+    ok: true,
+    recordId: record.id,
+    attachmentId: attachment.id,
+    previewDriveFileId: payload.previewDriveFileId,
+    thumbnailDriveFileId: payload.thumbnailDriveFileId,
+    checksum: payload.checksum,
+    backedUpAt: payload.backedUpAt,
   };
 }
 
 export async function processBackupQueue() {
   const [records, queue] = await Promise.all([loadAllRecords(), loadBackupQueue()]);
   const recordById = new Map(records.map((record) => [record.id, record]));
-  const dueItems = queue.filter((item) => item.item_type === "record" && isRetryDue(item.next_retry_at));
+  const queuedIds = new Set(queue.map((item) => item.id));
+  const syntheticAttachmentItems = records.flatMap((record) =>
+    (record.attachments || [])
+      .filter((attachment) => attachment.backup_status !== "backed_up")
+      .filter((attachment) => isRetryDue(attachment.backup_next_retry_at || ""))
+      .filter((attachment) => !queuedIds.has(`attachment:${record.id}:${attachment.id}`))
+      .map((attachment) => ({
+        id: `attachment:${record.id}:${attachment.id}`,
+        record_id: record.id,
+        item_type: "attachment" as const,
+        attachment_id: attachment.id,
+        status: "pending_backup" as const,
+        retry_count: attachment.backup_retry_count || 0,
+        last_error: attachment.backup_last_error || "",
+        next_retry_at: attachment.backup_next_retry_at || "",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }))
+  );
+  const dueItems = [...queue, ...syntheticAttachmentItems].filter((item) => isRetryDue(item.next_retry_at));
   const results: BackupProcessItemResult[] = [];
 
   for (const item of dueItems) {
     const record = recordById.get(item.record_id);
     if (!record) {
       await removeBackupQueueItem(item.id);
+      continue;
+    }
+
+    if (item.item_type === "attachment") {
+      const attachment = (record.attachments || []).find((candidate) => candidate.id === item.attachment_id);
+      if (!attachment) {
+        await removeBackupQueueItem(item.id);
+        continue;
+      }
+
+      await updateAttachmentBackupState(record.id, attachment.id, { backup_status: "backing_up" });
+      await updateBackupQueueItem({ ...item, status: "backing_up" });
+
+      const result = await backupAttachment(record, attachment);
+      results.push(result);
+
+      if (result.ok) {
+        await updateAttachmentBackupState(record.id, attachment.id, {
+          backup_status: "backed_up",
+          backup_retry_count: 0,
+          backup_last_error: "",
+          backup_next_retry_at: "",
+          previewDriveFileId: result.previewDriveFileId || attachment.previewDriveFileId || "",
+          thumbnailDriveFileId: result.thumbnailDriveFileId || attachment.thumbnailDriveFileId || "",
+          last_backup_at: result.backedUpAt || new Date().toISOString(),
+          backup_checksum: result.checksum || attachment.backup_checksum || "",
+        });
+        await removeBackupQueueItem(item.id);
+        await enqueueBackup(record.id);
+        continue;
+      }
+
+      const retryCount = item.retry_count + 1;
+      const retryAt = nextRetryAt(retryCount);
+      await updateAttachmentBackupState(record.id, attachment.id, {
+        backup_status: "backup_failed",
+        backup_retry_count: retryCount,
+        backup_last_error: result.error || "ATTACHMENT_BACKUP_FAILED",
+        backup_next_retry_at: retryAt,
+      });
+      await updateBackupQueueItem({
+        ...item,
+        status: "backup_failed",
+        retry_count: retryCount,
+        last_error: result.error || "ATTACHMENT_BACKUP_FAILED",
+        next_retry_at: retryAt,
+      });
       continue;
     }
 

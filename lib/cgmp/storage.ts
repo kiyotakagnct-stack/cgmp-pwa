@@ -75,6 +75,14 @@ function normalizeAttachments(value: unknown): ImageAttachment[] {
       visible_text: String(source.visible_text || "").slice(0, 180),
       confidence: source.confidence || "low",
       analysis_status: source.analysis_status || "pending",
+      backup_status: source.backup_status || "local_only",
+      backup_retry_count: Number.isFinite(Number(source.backup_retry_count)) ? Number(source.backup_retry_count) : 0,
+      backup_last_error: source.backup_last_error || "",
+      backup_next_retry_at: source.backup_next_retry_at || "",
+      previewDriveFileId: source.previewDriveFileId || "",
+      thumbnailDriveFileId: source.thumbnailDriveFileId || "",
+      last_backup_at: source.last_backup_at || "",
+      backup_checksum: source.backup_checksum || "",
     });
   }
   return attachments;
@@ -213,12 +221,28 @@ export async function upsertRecord(record: CGMPRecord) {
     created_at: now,
     updated_at: now,
   };
+  const attachmentQueueItems: CGMPBackupQueueItem[] = (nextRecord.attachments || [])
+    .filter((attachment) => attachment.backup_status !== "backed_up")
+    .map((attachment) => ({
+      id: `attachment:${nextRecord.id}:${attachment.id}`,
+      record_id: nextRecord.id,
+      item_type: "attachment",
+      attachment_id: attachment.id,
+      status: "pending_backup",
+      retry_count: attachment.backup_retry_count || 0,
+      last_error: "",
+      next_retry_at: attachment.backup_next_retry_at || "",
+      created_at: now,
+      updated_at: now,
+    }));
 
   const db = await openDatabase();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction([RECORDS_STORE, BACKUP_QUEUE_STORE], "readwrite");
     tx.objectStore(RECORDS_STORE).put(nextRecord);
-    tx.objectStore(BACKUP_QUEUE_STORE).put(queueItem);
+    const queueStore = tx.objectStore(BACKUP_QUEUE_STORE);
+    queueStore.put(queueItem);
+    attachmentQueueItems.forEach((item) => queueStore.put(item));
     tx.oncomplete = () => {
       db.close();
       resolve();
@@ -255,7 +279,9 @@ export async function deleteRecord(id: string) {
       const record = getRequest.result ? normalizeRecord(getRequest.result as CGMPRecord) : null;
       blobKeys = record ? getAttachmentBlobKeys(record) : [];
       recordsStore.delete(id);
-      tx.objectStore(BACKUP_QUEUE_STORE).delete(`record:${id}`);
+      const queueStore = tx.objectStore(BACKUP_QUEUE_STORE);
+      queueStore.delete(`record:${id}`);
+      record?.attachments?.forEach((attachment) => queueStore.delete(`attachment:${id}:${attachment.id}`));
     };
     getRequest.onerror = () => {
       reject(getRequest.error || new Error("IndexedDB request failed"));
@@ -374,6 +400,37 @@ export async function updateRecordBackupState(
       ...patch,
       backup_status: (patch.backup_status || current.backup_status || "local_only") as CGMPBackupStatus,
     });
+    store.put(next);
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error("IndexedDB transaction failed"));
+    });
+    return next;
+  } finally {
+    db.close();
+  }
+}
+
+export async function updateAttachmentBackupState(
+  recordId: string,
+  attachmentId: string,
+  patch: Partial<ImageAttachment>
+) {
+  if (!hasWindow()) return null;
+
+  const db = await openDatabase();
+  try {
+    const tx = db.transaction(RECORDS_STORE, "readwrite");
+    const store = tx.objectStore(RECORDS_STORE);
+    const current = await requestToPromise<CGMPRecord | undefined>(store.get(recordId));
+    if (!current) return null;
+    const normalized = normalizeRecord(current);
+    const next: CGMPRecord = {
+      ...normalized,
+      attachments: (normalized.attachments || []).map((attachment) =>
+        attachment.id === attachmentId ? { ...attachment, ...patch } : attachment
+      ),
+    };
     store.put(next);
     await new Promise<void>((resolve, reject) => {
       tx.oncomplete = () => resolve();
