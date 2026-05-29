@@ -71,18 +71,18 @@ type RecordFormState = {
 };
 
 const fieldClass =
-  "mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-cyan-400/60 focus:ring-2 focus:ring-cyan-400/15";
+  "mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-blue-400/80 focus:ring-4 focus:ring-blue-200/55";
 const textareaClass = `${fieldClass} min-h-[120px] resize-y`;
 const panelClass =
-  "rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(5,13,24,0.96),rgba(3,8,16,0.96))] p-5 shadow-[0_0_0_1px_rgba(148,163,184,0.05),0_28px_80px_rgba(0,0,0,0.35)]";
+  "rounded-[28px] border border-sky-100 bg-white/95 p-5 shadow-[0_18px_55px_rgba(37,99,235,0.10),0_2px_10px_rgba(15,23,42,0.04)]";
 const softPanelClass =
-  "rounded-[24px] border border-white/10 bg-white/5 p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.02)]";
+  "rounded-[24px] border border-slate-200 bg-slate-50/90 p-4 shadow-[0_10px_30px_rgba(15,23,42,0.04)]";
 const primaryButtonClass =
-  "rounded-2xl border border-cyan-400/30 bg-cyan-400/15 px-4 py-2.5 text-sm font-medium text-cyan-50 transition hover:border-cyan-300/60 hover:bg-cyan-400/25";
+  "rounded-2xl border border-blue-500 bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(37,99,235,0.22)] transition hover:border-blue-600 hover:bg-blue-700";
 const secondaryButtonClass =
-  "rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/10";
+  "rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-[0_8px_18px_rgba(15,23,42,0.04)] transition hover:border-blue-200 hover:bg-blue-50";
 const dangerButtonClass =
-  "rounded-2xl border border-rose-400/30 bg-rose-400/15 px-4 py-2.5 text-sm font-medium text-rose-50 transition hover:border-rose-300/60 hover:bg-rose-400/25";
+  "rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-100";
 
 function blankForm(text = ""): RecordFormState {
   return {
@@ -293,14 +293,14 @@ function Badge({
 }) {
   const toneClass =
     tone === "cyan"
-      ? "border-cyan-400/30 bg-cyan-400/10 text-cyan-100"
+      ? "border-blue-200 bg-blue-50 text-blue-700"
       : tone === "emerald"
-        ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-100"
+        ? "border-teal-200 bg-teal-50 text-teal-700"
         : tone === "amber"
-          ? "border-amber-400/30 bg-amber-400/10 text-amber-100"
+          ? "border-orange-200 bg-orange-50 text-orange-700"
           : tone === "rose"
-            ? "border-rose-400/30 bg-rose-400/10 text-rose-100"
-            : "border-white/10 bg-white/5 text-zinc-100";
+            ? "border-rose-200 bg-rose-50 text-rose-700"
+            : "border-slate-200 bg-slate-100 text-slate-700";
   return (
     <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs ${toneClass}`}>
       {children}
@@ -319,9 +319,9 @@ function SectionHeading({
 }) {
   return (
     <div className="mb-4">
-      <div className="text-[11px] uppercase tracking-[0.3em] text-cyan-200/80">{eyebrow}</div>
-      <h2 className="mt-2 text-xl font-semibold text-white">{title}</h2>
-      {description ? <p className="mt-1 text-sm leading-6 text-zinc-400">{description}</p> : null}
+      <div className="text-[11px] uppercase tracking-[0.3em] text-blue-500/80">{eyebrow}</div>
+      <h2 className="mt-2 text-xl font-semibold text-slate-950">{title}</h2>
+      {description ? <p className="mt-1 text-sm leading-6 text-slate-500">{description}</p> : null}
     </div>
   );
 }
@@ -340,7 +340,7 @@ function LabeledInput({
   type?: string;
 }) {
   return (
-    <label className="block text-sm font-medium text-zinc-200">
+    <label className="block text-sm font-medium text-slate-700">
       {label}
       <input
         type={type}
@@ -363,7 +363,7 @@ function LabeledNumber({
   onChange: (value: number) => void;
 }) {
   return (
-    <label className="block text-sm font-medium text-zinc-200">
+    <label className="block text-sm font-medium text-slate-700">
       {label}
       <input
         type="number"
@@ -392,7 +392,7 @@ function LabeledTextarea({
   inputRef?: RefObject<HTMLTextAreaElement | null>;
 }) {
   return (
-    <label className="block text-sm font-medium text-zinc-200">
+    <label className="block text-sm font-medium text-slate-700">
       {label}
       <textarea
         value={value}
@@ -418,7 +418,7 @@ function LabeledSelect({
   options: { value: string; label: string }[];
 }) {
   return (
-    <label className="block text-sm font-medium text-zinc-200">
+    <label className="block text-sm font-medium text-slate-700">
       {label}
       <select value={value} onChange={(event) => onChange(event.target.value)} className={fieldClass}>
         {options.map((option) => (
@@ -441,13 +441,13 @@ function LabeledToggle({
   onChange: (value: boolean) => void;
 }) {
   return (
-    <label className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-zinc-200">
+    <label className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
       <span>{label}</span>
       <button
         type="button"
         onClick={() => onChange(!value)}
         className={`relative h-6 w-11 rounded-full border transition ${
-          value ? "border-cyan-400/60 bg-cyan-400/30" : "border-white/10 bg-white/10"
+          value ? "border-blue-500 bg-blue-500" : "border-slate-200 bg-slate-100"
         }`}
       >
         <span
@@ -607,8 +607,8 @@ function RecordCard({
       <div
         className={`rounded-[24px] border p-4 transition duration-300 ${
           isSelected
-            ? "border-cyan-400/60 bg-cyan-400/10 shadow-[0_0_0_1px_rgba(34,211,238,0.15)]"
-            : "border-white/10 bg-white/5 group-hover:border-cyan-400/30 group-hover:bg-white/[0.08]"
+            ? "border-blue-500 bg-blue-50 shadow-[0_0_0_1px_rgba(37,99,235,0.10),0_16px_42px_rgba(37,99,235,0.14)]"
+            : "border-slate-200 bg-white group-hover:border-blue-200 group-hover:bg-blue-50/50"
         }`}
       >
         <div className="flex flex-wrap items-center gap-2">
@@ -618,12 +618,12 @@ function RecordCard({
           <Badge tone="slate">{record.domain || "other"}</Badge>
           <Badge tone="slate">{para}</Badge>
           <Badge tone={getBackupTone(record)}>{getBackupLabel(record)}</Badge>
-          <span className="text-xs text-zinc-500">{formatJstDateTime(record.updated_at)}</span>
+          <span className="text-xs text-slate-400">{formatJstDateTime(record.updated_at)}</span>
         </div>
 
         <div className="mt-3">
-          <h3 className="text-base font-semibold text-white">{record.title || "（無題）"}</h3>
-          <p className="mt-1 line-clamp-2 text-sm leading-6 text-zinc-300">
+          <h3 className="text-base font-semibold text-slate-950">{record.title || "（無題）"}</h3>
+          <p className="mt-1 line-clamp-2 text-sm leading-6 text-slate-600">
             {record.summary || record.body || record.raw_input}
           </p>
         </div>
@@ -634,7 +634,7 @@ function RecordCard({
           ))}
         </div>
 
-        <div className="mt-4 flex flex-wrap gap-2 text-xs text-zinc-500">
+        <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-400">
           <span>{record.date || "未設定日付"}</span>
           <span>{record.time || "未設定時刻"}</span>
           <span>{record.external_action_status}</span>
@@ -648,10 +648,10 @@ function RecordCard({
               : "mt-0 h-0 opacity-0 group-focus-visible:mt-4 group-focus-visible:h-52 group-focus-visible:opacity-100 sm:group-focus-visible:h-56"
           }`}
         >
-          <div className="h-full rounded-2xl border border-cyan-400/20 bg-black/30 px-4 py-3">
-            <div className="text-[11px] uppercase tracking-[0.28em] text-cyan-200/70">原文</div>
+          <div className="h-full rounded-2xl border border-blue-100 bg-white px-4 py-3">
+            <div className="text-[11px] uppercase tracking-[0.28em] text-blue-500">原文</div>
             <div className="mt-2 h-[calc(100%-1.5rem)] overflow-auto overscroll-contain pr-1">
-              <pre className="m-0 whitespace-pre-wrap break-words text-sm leading-6 text-zinc-100">
+              <pre className="m-0 whitespace-pre-wrap break-words text-sm leading-6 text-slate-800">
                 {record.raw_input || record.summary || record.body || "（原文なし）"}
               </pre>
             </div>
@@ -675,16 +675,16 @@ function MiniRecordCard({
       onClick={() => onOpen(record.id)}
       className="group w-full text-left"
     >
-      <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 transition hover:border-cyan-400/30 hover:bg-white/[0.08]">
-        <div className="flex items-center gap-2 text-[11px] text-zinc-500">
+      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 transition hover:border-blue-200 hover:bg-blue-50/50">
+        <div className="flex items-center gap-2 text-[11px] text-slate-400">
           <span>{record.updated_at ? formatJstDateTime(record.updated_at) : "未設定"}</span>
           <span>/</span>
           <span>{record.action || "note"}</span>
         </div>
-        <div className="mt-1 line-clamp-2 text-sm font-semibold leading-6 text-zinc-50">
+        <div className="mt-1 line-clamp-2 text-sm font-semibold leading-6 text-slate-950">
           {record.title || "（無題）"}
         </div>
-        <p className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-400">
+        <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">
           {record.summary || record.raw_input || ""}
         </p>
       </div>
@@ -1125,12 +1125,12 @@ export default function Page() {
 
   if (!isReady) {
     return (
-      <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(34,211,238,0.14),_transparent_36%),linear-gradient(180deg,#020617_0%,#040b17_40%,#020617_100%)] px-6 py-10 text-zinc-100">
+      <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(191,219,254,0.7),_transparent_42%),linear-gradient(180deg,#f8fbff_0%,#eef5ff_52%,#f7fafc_100%)] px-6 py-10 text-slate-800">
         <div className="mx-auto flex min-h-[60vh] max-w-5xl items-center justify-center">
           <div className={panelClass}>
-            <p className="text-sm uppercase tracking-[0.4em] text-cyan-200/80">CGMP PWA</p>
-            <h1 className="mt-3 text-3xl font-semibold text-white">読み込み中...</h1>
-            <p className="mt-2 text-zinc-400">IndexedDB と設定を確認しています。</p>
+            <p className="text-sm uppercase tracking-[0.4em] text-blue-500">CGMP PWA</p>
+            <h1 className="mt-3 text-3xl font-semibold text-slate-950">読み込み中...</h1>
+            <p className="mt-2 text-slate-500">IndexedDB と設定を確認しています。</p>
           </div>
         </div>
       </main>
@@ -1138,14 +1138,14 @@ export default function Page() {
   }
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(34,211,238,0.14),_transparent_36%),linear-gradient(180deg,#020617_0%,#040b17_40%,#020617_100%)] text-zinc-100">
+    <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(191,219,254,0.75),_transparent_42%),linear-gradient(180deg,#f8fbff_0%,#eef5ff_52%,#f7fafc_100%)] text-slate-800">
       <div className="mx-auto flex min-h-screen max-w-7xl flex-col px-4 py-4 pb-28 sm:px-6 lg:px-8">
         {notice ? (
           <div
             className={`mb-4 rounded-2xl border px-4 py-3 text-sm ${
               notice.kind === "info"
-                ? "border-cyan-400/20 bg-cyan-400/10 text-cyan-50"
-                : "border-rose-400/20 bg-rose-400/10 text-rose-50"
+                ? "border-blue-200 bg-blue-50 text-blue-800"
+                : "border-rose-200 bg-rose-50 text-rose-700"
             }`}
           >
             {notice.text}
@@ -1245,7 +1245,7 @@ export default function Page() {
                     />
                   ))
                 ) : (
-                  <div className={`${softPanelClass} text-sm text-zinc-400`}>
+                  <div className={`${softPanelClass} text-sm text-slate-500`}>
                     条件に一致する記録がありません。まずは Compose で1件保存してみてください。
                   </div>
                 )}
@@ -1267,12 +1267,12 @@ export default function Page() {
                     </Badge>
                     <Badge>{selectedRecord.domain || "other"}</Badge>
                     <Badge>{getEffectivePara(selectedRecord)}</Badge>
-                    <span className="text-xs text-zinc-500">updated {formatJstDateTime(selectedRecord.updated_at)}</span>
+                    <span className="text-xs text-slate-400">updated {formatJstDateTime(selectedRecord.updated_at)}</span>
                   </div>
 
-                  <div className="rounded-[24px] border border-white/10 bg-white/5 p-4">
-                    <p className="text-xs uppercase tracking-[0.28em] text-cyan-200/70">Preview</p>
-                    <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-100">
+                  <div className="rounded-[24px] border border-slate-200 bg-slate-50/80 p-4">
+                    <p className="text-xs uppercase tracking-[0.28em] text-blue-500">Preview</p>
+                    <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
                       {selectedRecord.summary || selectedRecord.body || selectedRecord.raw_input}
                     </p>
                     <div className="mt-4 flex flex-wrap gap-2">
@@ -1302,7 +1302,7 @@ export default function Page() {
                 </div>
               ) : (
                 <div className={softPanelClass}>
-                  <p className="text-sm leading-6 text-zinc-300">
+                  <p className="text-sm leading-6 text-slate-600">
                     一覧のカードを選ぶと、ここで詳細の確認と編集ができます。`Compose` で作った record もすぐここに出ます。
                   </p>
                 </div>
@@ -1352,7 +1352,7 @@ export default function Page() {
                 </div>
 
                 <div className={softPanelClass}>
-                  <div className="text-sm font-medium text-zinc-100">AI状態</div>
+                  <div className="text-sm font-medium text-slate-800">AI状態</div>
                   <div className="mt-2 flex flex-wrap gap-2 text-xs">
                     <Badge tone={composeAiStatus === "done" ? "emerald" : composeAiStatus === "error" ? "rose" : "slate"}>
                       {composeAiStatus}
@@ -1414,28 +1414,28 @@ export default function Page() {
                   placeholder="Asia/Tokyo"
                 />
                 <div className={softPanelClass}>
-                  <p className="text-sm leading-6 text-zinc-300">
+                  <p className="text-sm leading-6 text-slate-600">
                     Vercel では `OPENAI_API_KEY` と Google Drive 用の環境変数を設定してください。クライアント側には渡しません。
                   </p>
                 </div>
                 <div className={softPanelClass}>
-                  <div className="text-sm font-medium text-zinc-100">Google Drive バックアップ</div>
-                  <dl className="mt-3 grid grid-cols-2 gap-3 text-xs text-zinc-300">
+                  <div className="text-sm font-medium text-slate-800">Google Drive バックアップ</div>
+                  <dl className="mt-3 grid grid-cols-2 gap-3 text-xs text-slate-600">
                     <div>
-                      <dt className="text-zinc-500">未バックアップ</dt>
-                      <dd className="mt-1 text-lg font-semibold text-amber-100">{backupSummary ? backupSummary.localOnly + backupSummary.pending : "-"}</dd>
+                      <dt className="text-slate-400">未バックアップ</dt>
+                      <dd className="mt-1 text-lg font-semibold text-orange-700">{backupSummary ? backupSummary.localOnly + backupSummary.pending : "-"}</dd>
                     </div>
                     <div>
-                      <dt className="text-zinc-500">バックアップ中</dt>
-                      <dd className="mt-1 text-lg font-semibold text-cyan-100">{backupSummary?.backingUp ?? "-"}</dd>
+                      <dt className="text-slate-400">バックアップ中</dt>
+                      <dd className="mt-1 text-lg font-semibold text-blue-700">{backupSummary?.backingUp ?? "-"}</dd>
                     </div>
                     <div>
-                      <dt className="text-zinc-500">失敗</dt>
+                      <dt className="text-slate-400">失敗</dt>
                       <dd className="mt-1 text-lg font-semibold text-rose-100">{backupSummary?.failed ?? "-"}</dd>
                     </div>
                     <div>
-                      <dt className="text-zinc-500">最終バックアップ</dt>
-                      <dd className="mt-1 text-sm text-zinc-100">
+                      <dt className="text-slate-400">最終バックアップ</dt>
+                      <dd className="mt-1 text-sm text-slate-700">
                         {backupSummary?.lastBackupAt ? formatJstDateTime(backupSummary.lastBackupAt) : "未実行"}
                       </dd>
                     </div>
@@ -1459,8 +1459,8 @@ export default function Page() {
                   <div className={softPanelClass}>
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
-                        <div className="text-sm font-medium text-zinc-100">Drive上に実在するバックアップ</div>
-                        <p className="mt-1 text-xs text-zinc-500">
+                        <div className="text-sm font-medium text-slate-800">Drive上に実在するバックアップ</div>
+                        <p className="mt-1 text-xs text-slate-400">
                           {driveBackupCheckedAt ? `${formatJstDateTime(driveBackupCheckedAt)} に確認` : ""}
                         </p>
                       </div>
@@ -1472,20 +1472,20 @@ export default function Page() {
                           <div
                             key={`${backup.id}:${backup.file_id}`}
                             className={`rounded-2xl border p-3 ${
-                              backup.error ? "border-rose-400/20 bg-rose-400/10" : "border-white/10 bg-black/20"
+                              backup.error ? "border-rose-200 bg-rose-50" : "border-slate-200 bg-white"
                             }`}
                           >
-                            <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
+                            <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
                               <Badge tone={backup.error ? "rose" : "emerald"}>{backup.error ? "読込失敗" : "実在確認済み"}</Badge>
                               <span>{backup.action || "note"}</span>
                               <span>{backup.domain || "other"}</span>
                               <span>{backup.para || "area"}</span>
                             </div>
-                            <div className="mt-2 text-sm font-semibold text-zinc-50">{backup.title || "（無題）"}</div>
+                            <div className="mt-2 text-sm font-semibold text-slate-950">{backup.title || "（無題）"}</div>
                             {backup.summary ? (
-                              <p className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-400">{backup.summary}</p>
+                              <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{backup.summary}</p>
                             ) : null}
-                            <div className="mt-3 grid gap-1 text-[11px] text-zinc-500">
+                            <div className="mt-3 grid gap-1 text-[11px] text-slate-400">
                               <span>backup: {backup.backed_up_at ? formatJstDateTime(backup.backed_up_at) : "不明"}</span>
                               <span>record: {backup.id}</span>
                               <span>file: {backup.file_id}</span>
@@ -1494,7 +1494,7 @@ export default function Page() {
                           </div>
                         ))
                       ) : (
-                        <p className="text-sm text-zinc-400">Drive上のバックアップはまだありません。</p>
+                        <p className="text-sm text-slate-500">Drive上のバックアップはまだありません。</p>
                       )}
                     </div>
                   </div>
@@ -1516,7 +1516,7 @@ export default function Page() {
             <aside className={panelClass}>
               <SectionHeading eyebrow="Manifest" title="PWA 対応の状態" description="manifest を置いて standalone 起動を有効化しています。" />
               <div className={softPanelClass}>
-                <ul className="space-y-2 text-sm leading-6 text-zinc-300">
+                <ul className="space-y-2 text-sm leading-6 text-slate-600">
                   <li>・Home / Compose / Settings の3画面構成</li>
                   <li>・IndexedDB に record を保存</li>
                   <li>・/api/analyze で OpenAI 解析</li>
@@ -1539,7 +1539,7 @@ export default function Page() {
             setComposeAiMeta(null);
             setComposeFocusTick((value) => value + 1);
           }}
-          className="flex h-14 w-14 items-center justify-center rounded-full border border-cyan-300/30 bg-cyan-400/20 text-2xl font-semibold text-cyan-50 shadow-[0_24px_60px_rgba(34,211,238,0.22)] backdrop-blur-xl transition hover:-translate-y-0.5 hover:bg-cyan-400/30 hover:shadow-[0_28px_70px_rgba(34,211,238,0.28)] sm:h-16 sm:w-16"
+          className="flex h-14 w-14 items-center justify-center rounded-full border border-orange-200 bg-orange-500 text-2xl font-semibold text-white shadow-[0_24px_60px_rgba(249,115,22,0.26)] backdrop-blur-xl transition hover:-translate-y-0.5 hover:bg-orange-600 hover:shadow-[0_28px_70px_rgba(249,115,22,0.32)] sm:h-16 sm:w-16"
           aria-label="新規メモを作成"
           title="新規メモを作成"
         >
@@ -1548,7 +1548,7 @@ export default function Page() {
         <button
           type="button"
           onClick={() => setIsMiniListOpen((value) => !value)}
-          className="flex h-14 w-14 items-center justify-center rounded-full border border-white/15 bg-white/10 text-[26px] font-semibold text-white shadow-[0_20px_48px_rgba(0,0,0,0.28)] backdrop-blur-xl transition hover:-translate-y-0.5 hover:bg-white/15 sm:h-16 sm:w-16"
+          className="flex h-14 w-14 items-center justify-center rounded-full border border-slate-200 bg-white text-[26px] font-semibold text-slate-700 shadow-[0_20px_48px_rgba(15,23,42,0.12)] backdrop-blur-xl transition hover:-translate-y-0.5 hover:bg-blue-50 sm:h-16 sm:w-16"
           aria-label="縮小メモ一覧を開く"
           title="縮小メモ一覧"
         >
@@ -1559,15 +1559,15 @@ export default function Page() {
       {isMiniListOpen ? (
         <>
           <div
-            className="fixed inset-0 z-40 bg-black/45 backdrop-blur-[1px]"
+            className="fixed inset-0 z-40 bg-slate-900/25 backdrop-blur-[1px]"
             onClick={() => setIsMiniListOpen(false)}
             aria-hidden="true"
           />
-          <aside className="fixed inset-y-0 right-0 z-50 flex w-[min(92vw,420px)] flex-col border-l border-white/10 bg-[rgba(6,13,24,0.98)] shadow-[0_0_0_1px_rgba(255,255,255,0.02),-24px_0_80px_rgba(0,0,0,0.5)]">
-            <div className="flex items-center justify-between gap-3 border-b border-white/10 px-5 py-4">
+          <aside className="fixed inset-y-0 right-0 z-50 flex w-[min(92vw,420px)] flex-col border-l border-slate-200 bg-white/98 shadow-[0_0_0_1px_rgba(255,255,255,0.7),-24px_0_80px_rgba(15,23,42,0.16)]">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
               <div>
-                <div className="text-[11px] uppercase tracking-[0.34em] text-cyan-200/70">Mini List</div>
-                <h2 className="mt-1 text-lg font-semibold text-white">縮小メモ一覧</h2>
+                <div className="text-[11px] uppercase tracking-[0.34em] text-blue-500">Mini List</div>
+                <h2 className="mt-1 text-lg font-semibold text-slate-950">縮小メモ一覧</h2>
               </div>
               <button
                 type="button"
@@ -1578,8 +1578,8 @@ export default function Page() {
               </button>
             </div>
 
-            <div className="border-b border-white/10 px-5 py-4">
-              <label className="block text-sm font-medium text-zinc-200">
+            <div className="border-b border-slate-200 px-5 py-4">
+              <label className="block text-sm font-medium text-slate-700">
                 全文検索
                 <input
                   value={miniListQuery}
@@ -1588,7 +1588,7 @@ export default function Page() {
                   className={fieldClass}
                 />
               </label>
-              <div className="mt-3 text-xs text-zinc-500">
+              <div className="mt-3 text-xs text-slate-400">
                 {miniFilteredRecords.length} / {records.length}
               </div>
             </div>
@@ -1610,7 +1610,7 @@ export default function Page() {
                   ))
                 ) : (
                   <div className={softPanelClass}>
-                    <p className="text-sm leading-6 text-zinc-400">
+                    <p className="text-sm leading-6 text-slate-500">
                       条件に一致する記録がありません。
                     </p>
                   </div>
@@ -1621,7 +1621,7 @@ export default function Page() {
         </>
       ) : null}
 
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-[rgba(2,6,23,0.82)] px-4 py-3 backdrop-blur-xl">
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/90 px-4 py-3 backdrop-blur-xl">
         <div className="mx-auto grid max-w-3xl grid-cols-3 gap-2">
           {[
             { key: "home", label: "Home" },
@@ -1634,8 +1634,8 @@ export default function Page() {
               onClick={() => setTab(item.key as AppTab)}
               className={`rounded-2xl px-4 py-3 text-sm font-medium transition ${
                 tab === item.key
-                  ? "bg-cyan-400/15 text-cyan-50"
-                  : "bg-white/5 text-zinc-300 hover:bg-white/10 hover:text-white"
+                  ? "bg-blue-600 text-white shadow-[0_10px_24px_rgba(37,99,235,0.18)]"
+                  : "bg-slate-100 text-slate-600 hover:bg-blue-50 hover:text-blue-700"
               }`}
             >
               {item.label}
