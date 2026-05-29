@@ -1123,14 +1123,6 @@ export default function Page() {
     setNotice({ kind: "info", text: "全件削除しました。" });
   }
 
-  const counts = {
-    total: records.length,
-    filtered: filteredRecords.length,
-    notes: records.filter((record) => record.action === "note").length,
-    reminders: records.filter((record) => record.action === "reminder").length,
-    calendars: records.filter((record) => record.action === "calendar").length,
-  };
-
   if (!isReady) {
     return (
       <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(34,211,238,0.14),_transparent_36%),linear-gradient(180deg,#020617_0%,#040b17_40%,#020617_100%)] px-6 py-10 text-zinc-100">
@@ -1148,29 +1140,6 @@ export default function Page() {
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(34,211,238,0.14),_transparent_36%),linear-gradient(180deg,#020617_0%,#040b17_40%,#020617_100%)] text-zinc-100">
       <div className="mx-auto flex min-h-screen max-w-7xl flex-col px-4 py-4 pb-28 sm:px-6 lg:px-8">
-        <header className="mb-4 rounded-[30px] border border-white/10 bg-black/25 px-5 py-4 shadow-[0_0_0_1px_rgba(255,255,255,0.03)] backdrop-blur-xl">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2 text-xs sm:gap-3">
-              <Badge tone="cyan">All {counts.total}</Badge>
-              <Badge tone="slate">Filtered {counts.filtered}</Badge>
-              <Badge tone="slate">Note {counts.notes}</Badge>
-              <Badge tone="amber">Cal {counts.calendars}</Badge>
-              <Badge tone="rose">Rem {counts.reminders}</Badge>
-              <Badge tone={backupSummary?.failed ? "rose" : backupSummary?.pending ? "amber" : "emerald"}>
-                Backup {backupSummary ? `${backupSummary.backedUp}/${counts.total}` : "-"}
-              </Badge>
-            </div>
-            <button
-              type="button"
-              onClick={() => runBackupQueue(true)}
-              disabled={backupProcessing}
-              className="rounded-2xl border border-emerald-400/25 bg-emerald-400/10 px-3 py-2 text-xs font-medium text-emerald-50 transition hover:border-emerald-300/50 hover:bg-emerald-400/20 disabled:opacity-60"
-            >
-              {backupProcessing ? "バックアップ中..." : "今すぐバックアップ"}
-            </button>
-          </div>
-        </header>
-
         {notice ? (
           <div
             className={`mb-4 rounded-2xl border px-4 py-3 text-sm ${
