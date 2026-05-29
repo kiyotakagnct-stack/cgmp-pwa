@@ -1670,7 +1670,7 @@ export default function Page() {
             onClick={() => setIsEditPanelOpen(false)}
             aria-hidden="true"
           />
-          <aside className="fixed inset-x-0 bottom-0 z-[70] flex max-h-[88vh] animate-[editSheetUp_180ms_ease-out] flex-col rounded-t-[30px] border-t border-slate-200 bg-white shadow-[0_-24px_80px_rgba(15,23,42,0.18)] sm:inset-x-auto sm:inset-y-0 sm:left-0 sm:h-full sm:max-h-none sm:w-[min(600px,48vw)] sm:animate-[editPanelIn_220ms_ease-out] sm:rounded-r-[32px] sm:rounded-tl-none sm:border-r sm:border-t-0 sm:shadow-[24px_0_80px_rgba(15,23,42,0.16)]">
+          <aside className="fixed inset-x-0 bottom-0 z-[70] flex max-h-[88vh] animate-[editSheetUp_300ms_cubic-bezier(0.22,1,0.36,1)] flex-col rounded-t-[30px] border-t border-slate-200 bg-white shadow-[0_-24px_80px_rgba(15,23,42,0.18)] sm:inset-x-auto sm:inset-y-0 sm:left-0 sm:h-full sm:max-h-none sm:w-[min(600px,48vw)] sm:animate-[editPanelIn_300ms_cubic-bezier(0.22,1,0.36,1)] sm:rounded-r-[32px] sm:rounded-tl-none sm:border-r sm:border-t-0 sm:shadow-[24px_0_80px_rgba(15,23,42,0.16)]">
             <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 sm:px-6">
               <div className="min-w-0">
                 <div className="text-[11px] uppercase tracking-[0.34em] text-blue-500">Edit</div>
@@ -1730,7 +1730,7 @@ export default function Page() {
             onClick={() => setIsMiniListOpen(false)}
             aria-hidden="true"
           />
-          <aside className="fixed inset-y-0 right-0 z-50 flex w-[min(92vw,420px)] animate-[miniListIn_220ms_ease-out] flex-col border-l border-slate-200 bg-white/98 shadow-[0_0_0_1px_rgba(255,255,255,0.7),-24px_0_80px_rgba(15,23,42,0.16)]">
+          <aside className="fixed inset-y-0 right-0 z-50 flex w-[min(92vw,420px)] animate-[miniListIn_300ms_cubic-bezier(0.22,1,0.36,1)] flex-col border-l border-slate-200 bg-white/98 shadow-[0_0_0_1px_rgba(255,255,255,0.7),-24px_0_80px_rgba(15,23,42,0.16)]">
             <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
               <div>
                 <div className="text-[11px] uppercase tracking-[0.34em] text-blue-500">Mini List</div>

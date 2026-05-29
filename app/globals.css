@@ -65,7 +65,7 @@ body {
 @keyframes editPanelIn {
   from {
     opacity: 0;
-    transform: translateX(-28px);
+    transform: translateX(-56px);
   }
 
   to {
@@ -77,7 +77,7 @@ body {
 @keyframes editSheetUp {
   from {
     opacity: 0;
-    transform: translateY(28px);
+    transform: translateY(44px);
   }
 
   to {
@@ -89,7 +89,7 @@ body {
 @keyframes miniListIn {
   from {
     opacity: 0;
-    transform: translateX(28px);
+    transform: translateX(56px);
   }
 
   to {
