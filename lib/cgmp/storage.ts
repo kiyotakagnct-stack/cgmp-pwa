@@ -1,10 +1,13 @@
 import type { CGMPBackupQueueItem, CGMPBackupStatus, CGMPRecord, CGMPSettings } from "./types";
+import { clearImageBlobs, deleteImageBlobs } from "@/lib/db/imageBlobStore";
+import type { ImageAttachment } from "@/types/image";
 
 const DB_NAME = "cgmp-pwa";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const RECORDS_STORE = "records";
 const SETTINGS_STORE = "settings";
 const BACKUP_QUEUE_STORE = "backup_queue";
+const IMAGE_BLOBS_STORE = "image_blobs";
 const SETTINGS_KEY = "settings";
 
 function hasWindow() {
@@ -42,11 +45,45 @@ function openDatabase() {
         store.createIndex("status", "status", { unique: false });
         store.createIndex("next_retry_at", "next_retry_at", { unique: false });
       }
+      if (!db.objectStoreNames.contains(IMAGE_BLOBS_STORE)) {
+        db.createObjectStore(IMAGE_BLOBS_STORE, { keyPath: "key" });
+      }
     };
 
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error || new Error("Failed to open IndexedDB"));
   });
+}
+
+function normalizeAttachments(value: unknown): ImageAttachment[] {
+  if (!Array.isArray(value)) return [];
+  const attachments: ImageAttachment[] = [];
+  for (const item of value) {
+    const source = item && typeof item === "object" ? (item as Partial<ImageAttachment>) : {};
+    if (!source.id || source.type !== "image" || !source.previewBlobKey) continue;
+    attachments.push({
+      ...source,
+      id: String(source.id),
+      type: "image",
+      previewBlobKey: String(source.previewBlobKey),
+      thumbnailBlobKey: source.thumbnailBlobKey ? String(source.thumbnailBlobKey) : undefined,
+      mimeType: "image/jpeg",
+      created_at: String(source.created_at || new Date().toISOString()),
+      image_type: source.image_type || "other",
+      summary_80: String(source.summary_80 || "画像を添付しました。").slice(0, 120),
+      image_tags: Array.isArray(source.image_tags) ? source.image_tags.map((tag) => String(tag)).slice(0, 5) : [],
+      visible_text: String(source.visible_text || "").slice(0, 180),
+      confidence: source.confidence || "low",
+      analysis_status: source.analysis_status || "pending",
+    });
+  }
+  return attachments;
+}
+
+function getAttachmentBlobKeys(record: Pick<CGMPRecord, "attachments">) {
+  return (record.attachments || []).flatMap((attachment) =>
+    [attachment.previewBlobKey, attachment.thumbnailBlobKey].filter(Boolean) as string[]
+  );
 }
 
 function normalizeRecord(record: CGMPRecord): CGMPRecord {
@@ -59,6 +96,7 @@ function normalizeRecord(record: CGMPRecord): CGMPRecord {
     drive_file_id: record.drive_file_id || "",
     last_backup_at: record.last_backup_at || "",
     backup_checksum: record.backup_checksum || "",
+    attachments: normalizeAttachments(record.attachments),
   };
 }
 
@@ -208,10 +246,20 @@ export async function deleteRecord(id: string) {
   if (!hasWindow()) return;
 
   const db = await openDatabase();
+  let blobKeys: string[] = [];
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction([RECORDS_STORE, BACKUP_QUEUE_STORE], "readwrite");
-    tx.objectStore(RECORDS_STORE).delete(id);
-    tx.objectStore(BACKUP_QUEUE_STORE).delete(`record:${id}`);
+    const recordsStore = tx.objectStore(RECORDS_STORE);
+    const getRequest = recordsStore.get(id);
+    getRequest.onsuccess = () => {
+      const record = getRequest.result ? normalizeRecord(getRequest.result as CGMPRecord) : null;
+      blobKeys = record ? getAttachmentBlobKeys(record) : [];
+      recordsStore.delete(id);
+      tx.objectStore(BACKUP_QUEUE_STORE).delete(`record:${id}`);
+    };
+    getRequest.onerror = () => {
+      reject(getRequest.error || new Error("IndexedDB request failed"));
+    };
     tx.oncomplete = () => {
       db.close();
       resolve();
@@ -221,6 +269,7 @@ export async function deleteRecord(id: string) {
       reject(tx.error || new Error("IndexedDB transaction failed"));
     };
   });
+  await deleteImageBlobs(blobKeys);
 }
 
 export async function clearAllRecords() {
@@ -240,6 +289,7 @@ export async function clearAllRecords() {
       reject(tx.error || new Error("IndexedDB transaction failed"));
     };
   });
+  await clearImageBlobs();
 }
 
 export async function enqueueBackup(recordId: string) {

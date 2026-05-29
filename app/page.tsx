@@ -2,6 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { ImageAttachmentGrid } from "@/components/ImageAttachmentGrid";
+import { ImageLightbox } from "@/components/ImageLightbox";
+import { ImageUploader } from "@/components/ImageUploader";
+import { deleteImageBlobs, getImageBlob, putImageBlob } from "@/lib/db/imageBlobStore";
+import { analyzeImageWithVision, fallbackImageAnalysis } from "@/lib/image/analyzeImageWithVision";
+import { createImageAttachmentFromFile } from "@/lib/image/createImageAttachment";
 import {
   clearAllRecords,
   deleteRecord,
@@ -31,10 +37,12 @@ import {
   tagsToHashtags,
 } from "@/lib/cgmp/utils";
 import type { ReactNode, RefObject } from "react";
+import type { ImageAttachment, ImageVisionResult } from "@/types/image";
 
 type AppTab = "home" | "compose" | "settings";
 type SortKey = "updated_at" | "datetime";
 type Notice = { kind: "info" | "error"; text: string } | null;
+type LightboxState = { imageUrl: string; title: string } | null;
 type DriveBackupRecordPreview = {
   id: string;
   title: string;
@@ -179,6 +187,7 @@ function formToRecord(
     drive_file_id: existing?.drive_file_id ?? "",
     last_backup_at: existing?.last_backup_at ?? "",
     backup_checksum: existing?.backup_checksum ?? "",
+    attachments: existing?.attachments ?? [],
     ai: {
       model: aiMeta?.model ?? existing?.ai?.model ?? "",
       generated_at: aiMeta?.generated_at ?? existing?.ai?.generated_at ?? stamp,
@@ -210,6 +219,11 @@ function getRecordText(record: CGMPRecord) {
     record.para,
     record.domain,
     ...(record.tags || []),
+    ...(record.attachments || []).flatMap((attachment) => [
+      attachment.summary_80,
+      attachment.visible_text,
+      ...(attachment.image_tags || []),
+    ]),
   ]
     .map((value) => String(value || "").toLowerCase())
     .join("\n");
@@ -221,6 +235,11 @@ function getMiniListText(record: CGMPRecord) {
     record.summary,
     record.raw_input,
     ...(record.tags || []),
+    ...(record.attachments || []).flatMap((attachment) => [
+      attachment.summary_80,
+      attachment.visible_text,
+      ...(attachment.image_tags || []),
+    ]),
   ]
     .map((value) => String(value || "").toLowerCase())
     .join("\n");
@@ -592,6 +611,9 @@ function RecordCard({
   onOpen,
   onEdit,
   onDelete,
+  onOpenImage,
+  onReanalyzeAttachment,
+  onDeleteAttachment,
   isChecked = false,
   onToggleCheck,
   isSelected = false,
@@ -600,6 +622,9 @@ function RecordCard({
   onOpen: (id: string) => void;
   onEdit: (id: string) => void;
   onDelete: (id: string) => void;
+  onOpenImage: (attachment: ImageAttachment, imageUrl: string) => void;
+  onReanalyzeAttachment: (recordId: string, attachmentId: string) => void;
+  onDeleteAttachment: (recordId: string, attachmentId: string) => void;
   isChecked?: boolean;
   onToggleCheck: (id: string) => void;
   isSelected?: boolean;
@@ -686,6 +711,8 @@ function RecordCard({
           {record.last_backup_at ? <span>backup {formatJstDateTime(record.last_backup_at)}</span> : null}
         </div>
 
+        <ImageAttachmentGrid attachments={record.attachments} compact maxItems={3} onOpen={onOpenImage} />
+
         <div
           className={`overflow-hidden transition-[height,opacity,margin-top] duration-300 ease-out ${
             isSelected
@@ -742,6 +769,19 @@ function RecordCard({
                 <div className="text-[11px] uppercase tracking-[0.24em] text-slate-400">原文</div>
                 <pre className="mt-1 m-0 whitespace-pre-wrap break-words font-sans">{rawText}</pre>
               </section>
+              {(record.attachments || []).length > 0 ? (
+                <section>
+                  <div className="text-[11px] uppercase tracking-[0.24em] text-slate-400">写真</div>
+                  <div className="mt-2" onClick={(event) => event.stopPropagation()}>
+                    <ImageAttachmentGrid
+                      attachments={record.attachments}
+                      onOpen={onOpenImage}
+                      onReanalyze={(attachmentId) => onReanalyzeAttachment(record.id, attachmentId)}
+                      onDelete={(attachmentId) => onDeleteAttachment(record.id, attachmentId)}
+                    />
+                  </div>
+                </section>
+              ) : null}
               <section>
                 <div className="text-[11px] uppercase tracking-[0.24em] text-slate-400">メタ情報</div>
                 <div className="mt-1 grid gap-1 text-xs text-slate-500 sm:grid-cols-2">
@@ -828,6 +868,8 @@ export default function Page() {
   const [driveBackupRecords, setDriveBackupRecords] = useState<DriveBackupRecordPreview[] | null>(null);
   const [driveBackupCheckedAt, setDriveBackupCheckedAt] = useState("");
   const [checkedRecordIds, setCheckedRecordIds] = useState<string[]>([]);
+  const [lightbox, setLightbox] = useState<LightboxState>(null);
+  const [photoProcessingCount, setPhotoProcessingCount] = useState(0);
   const initialDriveImportDoneRef = useRef(false);
 
   async function reloadRecords(preferredId?: string) {
@@ -1080,6 +1122,174 @@ export default function Page() {
       }
       return Array.from(new Set([...current, ...filteredIds]));
     });
+  }
+
+  function applyVisionResultToAttachment(
+    attachment: ImageAttachment,
+    result: ImageVisionResult,
+    status: ImageAttachment["analysis_status"]
+  ): ImageAttachment {
+    return {
+      ...attachment,
+      image_type: result.image_type,
+      summary_80: result.summary_80 || "画像を添付しました。",
+      image_tags: result.image_tags,
+      visible_text: result.visible_text,
+      confidence: result.confidence,
+      analysis_status: status,
+      error: status === "failed" ? result.error || "vision_failed" : undefined,
+    };
+  }
+
+  async function saveRecordWithAttachments(record: CGMPRecord, attachments: ImageAttachment[]) {
+    const nextRecord: CGMPRecord = {
+      ...record,
+      attachments,
+      updated_at: new Date().toISOString(),
+    };
+    await upsertRecord(nextRecord);
+    await reloadRecords(nextRecord.id);
+    await reloadBackupSummary();
+    window.setTimeout(() => {
+      void runBackupQueue(false);
+    }, 0);
+    return nextRecord;
+  }
+
+  async function patchAttachment(
+    recordId: string,
+    attachmentId: string,
+    patcher: (attachment: ImageAttachment) => ImageAttachment
+  ) {
+    const latestRecords = await loadAllRecords();
+    const record = latestRecords.find((item) => item.id === recordId);
+    if (!record) return null;
+    const attachments = (record.attachments || []).map((attachment) =>
+      attachment.id === attachmentId ? patcher(attachment) : attachment
+    );
+    return saveRecordWithAttachments(record, attachments);
+  }
+
+  async function analyzeAndUpdateAttachment(recordId: string, attachmentId: string, previewBlob: Blob) {
+    const startedAt = performance.now();
+    try {
+      console.debug("[cgmp:image] reanalyze started", { recordId, attachmentId, size: previewBlob.size });
+      const result = await analyzeImageWithVision(previewBlob);
+      await patchAttachment(recordId, attachmentId, (attachment) => applyVisionResultToAttachment(attachment, result, "done"));
+      console.debug("[cgmp:image] reanalyze completed", {
+        recordId,
+        attachmentId,
+        elapsedMs: Math.round(performance.now() - startedAt),
+      });
+    } catch (error) {
+      const fallback = fallbackImageAnalysis(error);
+      await patchAttachment(recordId, attachmentId, (attachment) => applyVisionResultToAttachment(attachment, fallback, "failed"));
+      console.debug("[cgmp:image] reanalyze failed", {
+        recordId,
+        attachmentId,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        error,
+      });
+    }
+  }
+
+  async function handleAddPhotos(recordId: string, files: File[]) {
+    const targetRecord = records.find((record) => record.id === recordId);
+    if (!targetRecord || files.length === 0) return;
+
+    setPhotoProcessingCount((count) => count + files.length);
+    for (const file of files) {
+      try {
+        const prepared = await createImageAttachmentFromFile(recordId, file, { createThumbnail: true });
+        await putImageBlob(prepared.attachment.previewBlobKey, prepared.previewBlob);
+        if (prepared.thumbnailBlob && prepared.attachment.thumbnailBlobKey) {
+          await putImageBlob(prepared.attachment.thumbnailBlobKey, prepared.thumbnailBlob);
+        }
+
+        const shouldAnalyze = typeof navigator === "undefined" ? true : navigator.onLine;
+        const initialAttachment: ImageAttachment = {
+          ...prepared.attachment,
+          analysis_status: shouldAnalyze ? "analyzing" : "pending",
+        };
+        const latestRecords = await loadAllRecords();
+        const latestRecord = latestRecords.find((record) => record.id === recordId) || targetRecord;
+        await saveRecordWithAttachments(latestRecord, [...(latestRecord.attachments || []), initialAttachment]);
+        console.debug("[cgmp:image] attachment saved", {
+          recordId,
+          attachmentId: initialAttachment.id,
+          status: initialAttachment.analysis_status,
+        });
+
+        if (shouldAnalyze) {
+          await analyzeAndUpdateAttachment(recordId, initialAttachment.id, prepared.previewBlob);
+        }
+      } catch (error) {
+        console.debug("[cgmp:image] photo add failed", { recordId, fileName: file.name, error });
+        setNotice({
+          kind: "error",
+          text: error instanceof Error ? `写真追加に失敗しました: ${error.message}` : "写真追加に失敗しました",
+        });
+      } finally {
+        setPhotoProcessingCount((count) => Math.max(0, count - 1));
+      }
+    }
+  }
+
+  async function handleReanalyzeAttachment(recordId: string, attachmentId: string) {
+    const record = records.find((item) => item.id === recordId);
+    const attachment = record?.attachments?.find((item) => item.id === attachmentId);
+    if (!attachment) return;
+
+    const blob = await getImageBlob(attachment.previewBlobKey);
+    if (!blob) {
+      await patchAttachment(recordId, attachmentId, (current) => ({
+        ...current,
+        analysis_status: "failed",
+        error: "PREVIEW_BLOB_NOT_FOUND",
+      }));
+      return;
+    }
+
+    await patchAttachment(recordId, attachmentId, (current) => ({
+      ...current,
+      analysis_status: "analyzing",
+      error: undefined,
+    }));
+    await analyzeAndUpdateAttachment(recordId, attachmentId, blob);
+  }
+
+  async function handleDeleteAttachment(recordId: string, attachmentId: string) {
+    const record = records.find((item) => item.id === recordId);
+    const attachment = record?.attachments?.find((item) => item.id === attachmentId);
+    if (!record || !attachment) return;
+    const confirmed = window.confirm("この写真を削除しますか？");
+    if (!confirmed) return;
+
+    const blobKeys = [attachment.previewBlobKey, attachment.thumbnailBlobKey].filter(Boolean) as string[];
+    await deleteImageBlobs(blobKeys);
+    const attachments = (record.attachments || []).filter((item) => item.id !== attachmentId);
+    await saveRecordWithAttachments(record, attachments);
+    setNotice({ kind: "info", text: "写真を削除しました。" });
+  }
+
+  async function handleUpdateAttachmentMetadata(
+    recordId: string,
+    attachmentId: string,
+    patch: Pick<ImageAttachment, "summary_80" | "image_tags" | "visible_text">
+  ) {
+    await patchAttachment(recordId, attachmentId, (attachment) => ({
+      ...attachment,
+      summary_80: String(patch.summary_80 || "").trim().slice(0, 120),
+      image_tags: Array.from(
+        new Set(
+          (patch.image_tags || [])
+            .map((tag) => String(tag || "").trim().replace(/^#+/, ""))
+            .filter(Boolean)
+            .map((tag) => tag.slice(0, 40))
+        )
+      ).slice(0, 5),
+      visible_text: String(patch.visible_text || "").trim().slice(0, 180),
+    }));
   }
 
   async function handleAnalyze() {
@@ -1406,6 +1616,9 @@ export default function Page() {
                       onOpen={(id) => setSelectedId((current) => (current === id ? null : id))}
                       onEdit={openEditPanel}
                       onDelete={deleteRecordById}
+                      onOpenImage={(attachment, imageUrl) => setLightbox({ imageUrl, title: attachment.summary_80 || "添付画像" })}
+                      onReanalyzeAttachment={handleReanalyzeAttachment}
+                      onDeleteAttachment={handleDeleteAttachment}
                       isChecked={checkedRecordIds.includes(record.id)}
                       onToggleCheck={toggleCheckedRecord}
                       isSelected={record.id === selectedId}
@@ -1696,11 +1909,32 @@ export default function Page() {
             </div>
 
             <div className="flex-1 overflow-auto px-5 py-5 sm:px-6">
-              <RecordEditor
-                draft={detailDraft}
-                onChange={(patch) => setDetailDraft((prev) => (prev ? { ...prev, ...patch } : prev))}
-                showRawInput
-              />
+              <div className="space-y-5">
+                <ImageUploader
+                  processingCount={photoProcessingCount}
+                  disabled={photoProcessingCount > 0}
+                  onFilesSelected={(files) => handleAddPhotos(selectedRecord.id, files)}
+                />
+                {(selectedRecord.attachments || []).length > 0 ? (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
+                    <div className="mb-3 text-[11px] uppercase tracking-[0.28em] text-blue-500">Photos</div>
+                    <ImageAttachmentGrid
+                      attachments={selectedRecord.attachments}
+                      onOpen={(attachment, imageUrl) => setLightbox({ imageUrl, title: attachment.summary_80 || "添付画像" })}
+                      onReanalyze={(attachmentId) => handleReanalyzeAttachment(selectedRecord.id, attachmentId)}
+                      onDelete={(attachmentId) => handleDeleteAttachment(selectedRecord.id, attachmentId)}
+                      onUpdateMetadata={(attachmentId, patch) =>
+                        handleUpdateAttachmentMetadata(selectedRecord.id, attachmentId, patch)
+                      }
+                    />
+                  </div>
+                ) : null}
+                <RecordEditor
+                  draft={detailDraft}
+                  onChange={(patch) => setDetailDraft((prev) => (prev ? { ...prev, ...patch } : prev))}
+                  showRawInput
+                />
+              </div>
             </div>
 
             <div className="border-t border-slate-200 bg-white/95 px-5 py-4 backdrop-blur sm:px-6">
@@ -1803,6 +2037,14 @@ export default function Page() {
             </button>
           </div>
         </div>
+      ) : null}
+
+      {lightbox ? (
+        <ImageLightbox
+          imageUrl={lightbox.imageUrl}
+          title={lightbox.title}
+          onClose={() => setLightbox(null)}
+        />
       ) : null}
 
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/90 px-4 py-3 backdrop-blur-xl">

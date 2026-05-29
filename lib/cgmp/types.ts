@@ -1,3 +1,5 @@
+import type { ImageAttachment } from "@/types/image";
+
 export type CGMPAction = "note" | "reminder" | "calendar" | "unclear";
 
 export type CGMPPara = "project" | "area" | "resource" | "archive" | "";
@@ -95,6 +97,7 @@ export type CGMPRecord = {
   drive_file_id: string;
   last_backup_at: string;
   backup_checksum: string;
+  attachments?: ImageAttachment[];
   ai: {
     model: string;
     generated_at: string;
