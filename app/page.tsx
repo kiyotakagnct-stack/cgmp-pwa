@@ -590,10 +590,14 @@ function RecordEditor({
 function RecordCard({
   record,
   onOpen,
+  isChecked = false,
+  onToggleCheck,
   isSelected = false,
 }: {
   record: CGMPRecord;
   onOpen: (id: string) => void;
+  isChecked?: boolean;
+  onToggleCheck: (id: string) => void;
   isSelected?: boolean;
 }) {
   const para = getEffectivePara(record);
@@ -606,19 +610,46 @@ function RecordCard({
     >
       <div
         className={`rounded-[24px] border p-4 transition duration-300 ${
-          isSelected
+          isChecked
+            ? "border-orange-300 bg-orange-50/70 shadow-[0_0_0_1px_rgba(249,115,22,0.12),0_16px_42px_rgba(249,115,22,0.12)]"
+            : isSelected
             ? "border-blue-500 bg-blue-50 shadow-[0_0_0_1px_rgba(37,99,235,0.10),0_16px_42px_rgba(37,99,235,0.14)]"
             : "border-slate-200 bg-white group-hover:border-blue-200 group-hover:bg-blue-50/50"
         }`}
       >
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge tone={record.action === "calendar" ? "amber" : record.action === "reminder" ? "rose" : record.action === "unclear" ? "slate" : "cyan"}>
-            {record.action}
-          </Badge>
-          <Badge tone="slate">{record.domain || "other"}</Badge>
-          <Badge tone="slate">{para}</Badge>
-          <Badge tone={getBackupTone(record)}>{getBackupLabel(record)}</Badge>
-          <span className="text-xs text-slate-400">{formatJstDateTime(record.updated_at)}</span>
+        <div className="flex items-start gap-3">
+          <span
+            role="checkbox"
+            aria-checked={isChecked}
+            tabIndex={0}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleCheck(record.id);
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== " " && event.key !== "Enter") return;
+              event.preventDefault();
+              event.stopPropagation();
+              onToggleCheck(record.id);
+            }}
+            className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-xl border text-sm font-bold transition ${
+              isChecked
+                ? "border-orange-400 bg-orange-500 text-white shadow-[0_8px_18px_rgba(249,115,22,0.22)]"
+                : "border-slate-300 bg-white text-transparent group-hover:border-blue-300"
+            }`}
+            aria-label={`${record.title || "メモ"}を選択`}
+          >
+            ✓
+          </span>
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+            <Badge tone={record.action === "calendar" ? "amber" : record.action === "reminder" ? "rose" : record.action === "unclear" ? "slate" : "cyan"}>
+              {record.action}
+            </Badge>
+            <Badge tone="slate">{record.domain || "other"}</Badge>
+            <Badge tone="slate">{para}</Badge>
+            <Badge tone={getBackupTone(record)}>{getBackupLabel(record)}</Badge>
+            <span className="text-xs text-slate-400">{formatJstDateTime(record.updated_at)}</span>
+          </div>
         </div>
 
         <div className="mt-3">
@@ -727,6 +758,7 @@ export default function Page() {
   const [driveImporting, setDriveImporting] = useState(false);
   const [driveBackupRecords, setDriveBackupRecords] = useState<DriveBackupRecordPreview[] | null>(null);
   const [driveBackupCheckedAt, setDriveBackupCheckedAt] = useState("");
+  const [checkedRecordIds, setCheckedRecordIds] = useState<string[]>([]);
   const initialDriveImportDoneRef = useRef(false);
 
   async function reloadRecords(preferredId?: string) {
@@ -957,6 +989,26 @@ export default function Page() {
   const miniFilteredRecords = useMemo(() => {
     return records.filter((record) => matchesMiniQuery(record, miniListQuery));
   }, [records, miniListQuery]);
+  const checkedCount = checkedRecordIds.length;
+  const allFilteredChecked =
+    filteredRecords.length > 0 && filteredRecords.every((record) => checkedRecordIds.includes(record.id));
+
+  function toggleCheckedRecord(id: string) {
+    setCheckedRecordIds((current) =>
+      current.includes(id) ? current.filter((recordId) => recordId !== id) : [...current, id]
+    );
+  }
+
+  function toggleAllFilteredRecords() {
+    setCheckedRecordIds((current) => {
+      const filteredIds = filteredRecords.map((record) => record.id);
+      if (filteredIds.length === 0) return current;
+      if (filteredIds.every((id) => current.includes(id))) {
+        return current.filter((id) => !filteredIds.includes(id));
+      }
+      return Array.from(new Set([...current, ...filteredIds]));
+    });
+  }
 
   async function handleAnalyze() {
     const rawInput = composeDraft.raw_input.trim();
@@ -1093,6 +1145,27 @@ export default function Page() {
       });
     } finally {
       setDetailDeleting(false);
+    }
+  }
+
+  async function deleteCheckedRecords() {
+    if (checkedRecordIds.length === 0) return;
+    const confirmed = window.confirm(`選択した${checkedRecordIds.length}件のメモを削除しますか？ この操作は戻せません。`);
+    if (!confirmed) return;
+
+    try {
+      await Promise.all(checkedRecordIds.map((id) => deleteRecord(id)));
+      const deletedIds = new Set(checkedRecordIds);
+      setCheckedRecordIds([]);
+      setSelectedId((current) => (current && deletedIds.has(current) ? null : current));
+      await reloadRecords();
+      await reloadBackupSummary();
+      setNotice({ kind: "info", text: `選択した${deletedIds.size}件を削除しました。` });
+    } catch (error) {
+      setNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : "選択削除に失敗しました",
+      });
     }
   }
 
@@ -1241,6 +1314,8 @@ export default function Page() {
                       key={record.id}
                       record={record}
                       onOpen={(id) => setSelectedId((current) => (current === id ? null : id))}
+                      isChecked={checkedRecordIds.includes(record.id)}
+                      onToggleCheck={toggleCheckedRecord}
                       isSelected={record.id === selectedId}
                     />
                   ))
@@ -1619,6 +1694,23 @@ export default function Page() {
             </div>
           </aside>
         </>
+      ) : null}
+
+      {checkedCount > 0 ? (
+        <div className="fixed inset-x-0 bottom-24 z-50 flex justify-center px-4">
+          <div className="flex max-w-[calc(100vw-2rem)] flex-wrap items-center justify-center gap-2 rounded-[24px] border border-slate-200 bg-white/95 px-3 py-3 shadow-[0_18px_55px_rgba(15,23,42,0.16)] backdrop-blur-xl">
+            <span className="px-2 text-sm font-semibold text-slate-700">{checkedCount}件選択中</span>
+            <button type="button" onClick={toggleAllFilteredRecords} className={secondaryButtonClass}>
+              {allFilteredChecked ? "表示分を解除" : "全て選択"}
+            </button>
+            <button type="button" onClick={deleteCheckedRecords} className={dangerButtonClass}>
+              選択削除
+            </button>
+            <button type="button" onClick={() => setCheckedRecordIds([])} className={secondaryButtonClass}>
+              解除
+            </button>
+          </div>
+        </div>
       ) : null}
 
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/90 px-4 py-3 backdrop-blur-xl">
