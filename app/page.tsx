@@ -590,23 +590,37 @@ function RecordEditor({
 function RecordCard({
   record,
   onOpen,
+  onEdit,
+  onDelete,
   isChecked = false,
   onToggleCheck,
   isSelected = false,
 }: {
   record: CGMPRecord;
   onOpen: (id: string) => void;
+  onEdit: (id: string) => void;
+  onDelete: (id: string) => void;
   isChecked?: boolean;
   onToggleCheck: (id: string) => void;
   isSelected?: boolean;
 }) {
   const para = getEffectivePara(record);
+  const rawText = record.raw_input || record.summary || record.body || "（原文なし）";
+  const bodyText = record.body && record.body !== record.raw_input ? record.body : "";
+  const intentText = record.user_intent_summary || record.confirmation || "";
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={() => onOpen(record.id)}
+      onKeyDown={(event) => {
+        if (event.key !== " " && event.key !== "Enter") return;
+        event.preventDefault();
+        onOpen(record.id);
+      }}
       id={`record-card-${record.id}`}
       className="group w-full scroll-mt-24 text-left"
+      aria-expanded={isSelected}
     >
       <div
         className={`rounded-[24px] border p-4 transition duration-300 ${
@@ -675,21 +689,75 @@ function RecordCard({
         <div
           className={`overflow-hidden transition-[height,opacity,margin-top] duration-300 ease-out ${
             isSelected
-              ? "mt-4 h-52 opacity-100 sm:h-56"
-              : "mt-0 h-0 opacity-0 group-focus-visible:mt-4 group-focus-visible:h-52 group-focus-visible:opacity-100 sm:group-focus-visible:h-56"
+              ? "mt-4 h-[28rem] opacity-100 sm:h-[30rem]"
+              : "mt-0 h-0 opacity-0 group-focus-visible:mt-4 group-focus-visible:h-[28rem] group-focus-visible:opacity-100 sm:group-focus-visible:h-[30rem]"
           }`}
         >
-          <div className="h-full rounded-2xl border border-blue-100 bg-white px-4 py-3">
-            <div className="text-[11px] uppercase tracking-[0.28em] text-blue-500">原文</div>
-            <div className="mt-2 h-[calc(100%-1.5rem)] overflow-auto overscroll-contain pr-1">
-              <pre className="m-0 whitespace-pre-wrap break-words text-sm leading-6 text-slate-800">
-                {record.raw_input || record.summary || record.body || "（原文なし）"}
-              </pre>
+          <div className="flex h-full flex-col rounded-2xl border border-blue-100 bg-white px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="text-[11px] uppercase tracking-[0.28em] text-blue-500">Detail</div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onEdit(record.id);
+                  }}
+                  onKeyDown={(event) => event.stopPropagation()}
+                  className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 transition hover:border-blue-300 hover:bg-blue-100"
+                >
+                  編集
+                </button>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDelete(record.id);
+                  }}
+                  onKeyDown={(event) => event.stopPropagation()}
+                  className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-100"
+                >
+                  削除
+                </button>
+              </div>
+            </div>
+            <div className="mt-3 flex-1 space-y-4 overflow-auto overscroll-contain pr-1 text-sm leading-6 text-slate-700">
+              <section>
+                <div className="text-[11px] uppercase tracking-[0.24em] text-slate-400">AI要約</div>
+                <p className="mt-1 whitespace-pre-wrap break-words">{record.summary || "（要約なし）"}</p>
+              </section>
+              {intentText ? (
+                <section>
+                  <div className="text-[11px] uppercase tracking-[0.24em] text-slate-400">Intent / Confirmation</div>
+                  <p className="mt-1 whitespace-pre-wrap break-words">{intentText}</p>
+                </section>
+              ) : null}
+              {bodyText ? (
+                <section>
+                  <div className="text-[11px] uppercase tracking-[0.24em] text-slate-400">本文</div>
+                  <pre className="mt-1 m-0 whitespace-pre-wrap break-words font-sans">{bodyText}</pre>
+                </section>
+              ) : null}
+              <section>
+                <div className="text-[11px] uppercase tracking-[0.24em] text-slate-400">原文</div>
+                <pre className="mt-1 m-0 whitespace-pre-wrap break-words font-sans">{rawText}</pre>
+              </section>
+              <section>
+                <div className="text-[11px] uppercase tracking-[0.24em] text-slate-400">メタ情報</div>
+                <div className="mt-1 grid gap-1 text-xs text-slate-500 sm:grid-cols-2">
+                  <span>作成: {formatJstDateTime(record.created_at)}</span>
+                  <span>更新: {formatJstDateTime(record.updated_at)}</span>
+                  <span>日付: {record.date || "未設定"}</span>
+                  <span>時刻: {record.time || "未設定"}</span>
+                  <span>場所: {record.location || "未設定"}</span>
+                  <span>AI: {record.ai_status || "none"}</span>
+                </div>
+              </section>
             </div>
           </div>
         </div>
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -745,6 +813,7 @@ export default function Page() {
   const [detailDraft, setDetailDraft] = useState<RecordFormState | null>(null);
   const [detailSaving, setDetailSaving] = useState(false);
   const [detailDeleting, setDetailDeleting] = useState(false);
+  const [isEditPanelOpen, setIsEditPanelOpen] = useState(false);
   const [reloadTick, setReloadTick] = useState(0);
   const composeRawInputRef = useRef<HTMLTextAreaElement | null>(null);
   const confirmSectionRef = useRef<HTMLElement | null>(null);
@@ -900,6 +969,9 @@ export default function Page() {
   useEffect(() => {
     const selected = records.find((record) => record.id === selectedId) ?? null;
     setDetailDraft(selected ? formFromRecord(selected) : null);
+    if (!selected) {
+      setIsEditPanelOpen(false);
+    }
   }, [records, selectedId, reloadTick]);
 
   useEffect(() => {
@@ -1100,7 +1172,15 @@ export default function Page() {
     }
   }
 
-  async function saveDetail() {
+  function openEditPanel(id: string) {
+    const record = records.find((item) => item.id === id);
+    if (!record) return;
+    setSelectedId(id);
+    setDetailDraft(formFromRecord(record));
+    setIsEditPanelOpen(true);
+  }
+
+  async function saveDetail(closePanel = false) {
     if (!selectedRecord || !detailDraft) return;
     setDetailSaving(true);
     try {
@@ -1113,6 +1193,9 @@ export default function Page() {
         void runBackupQueue(false);
       }, 0);
       setReloadTick((value) => value + 1);
+      if (closePanel) {
+        setIsEditPanelOpen(false);
+      }
     } catch (error) {
       setNotice({
         kind: "error",
@@ -1123,18 +1206,20 @@ export default function Page() {
     }
   }
 
-  async function deleteSelected() {
-    if (!selectedRecord) return;
-    const confirmed = window.confirm(`「${selectedRecord.title || "（無題）"}」を削除しますか？`);
+  async function deleteRecordById(id: string) {
+    const targetRecord = records.find((record) => record.id === id);
+    if (!targetRecord) return;
+    const confirmed = window.confirm(`「${targetRecord.title || "（無題）"}」を削除しますか？`);
     if (!confirmed) return;
 
     setDetailDeleting(true);
     try {
-      await deleteRecord(selectedRecord.id);
+      await deleteRecord(targetRecord.id);
       await reloadRecords();
       await reloadBackupSummary();
+      setIsEditPanelOpen(false);
       setSelectedId((current) => {
-        const remaining = records.filter((record) => record.id !== selectedRecord.id);
+        const remaining = records.filter((record) => record.id !== targetRecord.id);
         return remaining.find((record) => record.id === current)?.id ?? remaining[0]?.id ?? null;
       });
       setNotice({ kind: "info", text: "削除しました。" });
@@ -1148,6 +1233,11 @@ export default function Page() {
     }
   }
 
+  async function deleteSelected() {
+    if (!selectedRecord) return;
+    await deleteRecordById(selectedRecord.id);
+  }
+
   async function deleteCheckedRecords() {
     if (checkedRecordIds.length === 0) return;
     const confirmed = window.confirm(`選択した${checkedRecordIds.length}件のメモを削除しますか？ この操作は戻せません。`);
@@ -1157,6 +1247,7 @@ export default function Page() {
       await Promise.all(checkedRecordIds.map((id) => deleteRecord(id)));
       const deletedIds = new Set(checkedRecordIds);
       setCheckedRecordIds([]);
+      setIsEditPanelOpen((open) => (selectedId && deletedIds.has(selectedId) ? false : open));
       setSelectedId((current) => (current && deletedIds.has(current) ? null : current));
       await reloadRecords();
       await reloadBackupSummary();
@@ -1226,12 +1317,11 @@ export default function Page() {
         ) : null}
 
         {tab === "home" ? (
-          <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
+          <div className="grid gap-5">
             <section className={panelClass}>
               <SectionHeading
                 eyebrow="Home"
                 title="一覧・検索・フィルター"
-                description="CGMP の核になる検索面です。テキスト、タグ、action, domain, PARA で絞り込めます。"
               />
 
               <div className="grid grid-cols-2 gap-3">
@@ -1314,6 +1404,8 @@ export default function Page() {
                       key={record.id}
                       record={record}
                       onOpen={(id) => setSelectedId((current) => (current === id ? null : id))}
+                      onEdit={openEditPanel}
+                      onDelete={deleteRecordById}
                       isChecked={checkedRecordIds.includes(record.id)}
                       onToggleCheck={toggleCheckedRecord}
                       isSelected={record.id === selectedId}
@@ -1326,63 +1418,6 @@ export default function Page() {
                 )}
               </div>
             </section>
-
-            <aside className={panelClass}>
-              <SectionHeading
-                eyebrow="Detail"
-                title={selectedRecord ? selectedRecord.title || "（無題）" : "記録を選択"}
-                description="選択した record を確認・修正します。"
-              />
-
-              {selectedRecord && detailDraft ? (
-                <div className="space-y-4">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge tone={selectedRecord.action === "calendar" ? "amber" : selectedRecord.action === "reminder" ? "rose" : "cyan"}>
-                      {selectedRecord.action}
-                    </Badge>
-                    <Badge>{selectedRecord.domain || "other"}</Badge>
-                    <Badge>{getEffectivePara(selectedRecord)}</Badge>
-                    <span className="text-xs text-slate-400">updated {formatJstDateTime(selectedRecord.updated_at)}</span>
-                  </div>
-
-                  <div className="rounded-[24px] border border-slate-200 bg-slate-50/80 p-4">
-                    <p className="text-xs uppercase tracking-[0.28em] text-blue-500">Preview</p>
-                    <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                      {selectedRecord.summary || selectedRecord.body || selectedRecord.raw_input}
-                    </p>
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      {(selectedRecord.tags || []).map((tag) => (
-                        <Badge key={tag}>#{tag}</Badge>
-                      ))}
-                    </div>
-                  </div>
-
-                  <RecordEditor
-                    draft={detailDraft}
-                    onChange={(patch) => setDetailDraft((prev) => (prev ? { ...prev, ...patch } : prev))}
-                    showRawInput
-                  />
-
-                  <div className="flex flex-wrap gap-2">
-                    <button type="button" onClick={saveDetail} disabled={detailSaving} className={primaryButtonClass}>
-                      {detailSaving ? "保存中..." : "保存"}
-                    </button>
-                    <button type="button" onClick={() => setSelectedId(null)} className={secondaryButtonClass}>
-                      閉じる
-                    </button>
-                    <button type="button" onClick={deleteSelected} disabled={detailDeleting} className={dangerButtonClass}>
-                      {detailDeleting ? "削除中..." : "削除"}
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className={softPanelClass}>
-                  <p className="text-sm leading-6 text-slate-600">
-                    一覧のカードを選ぶと、ここで詳細の確認と編集ができます。`Compose` で作った record もすぐここに出ます。
-                  </p>
-                </div>
-              )}
-            </aside>
           </div>
         ) : null}
 
@@ -1392,7 +1427,6 @@ export default function Page() {
               <SectionHeading
                 eyebrow="Compose"
                 title="入力 → AI解析 → 確認"
-                description="MVP の中核。まずは雑に入れて、AIが構造化した結果を手で直して保存します。"
               />
 
               <div className="space-y-4">
@@ -1443,7 +1477,6 @@ export default function Page() {
               <SectionHeading
                 eyebrow="Confirm"
                 title="AI結果の確認・修正"
-                description="保存前にここで action, date, title, tags などを微調整します。"
               />
 
               <div className="max-h-[74vh] overflow-auto pr-1">
@@ -1472,7 +1505,6 @@ export default function Page() {
               <SectionHeading
                 eyebrow="Settings"
                 title="PWA と AI の設定"
-                description="MVP では最小限。OpenAI モデルとタイムゾーンだけをまず持たせます。"
               />
 
               <div className="space-y-4">
@@ -1589,7 +1621,7 @@ export default function Page() {
             </section>
 
             <aside className={panelClass}>
-              <SectionHeading eyebrow="Manifest" title="PWA 対応の状態" description="manifest を置いて standalone 起動を有効化しています。" />
+              <SectionHeading eyebrow="Status" title="状態" />
               <div className={softPanelClass}>
                 <ul className="space-y-2 text-sm leading-6 text-slate-600">
                   <li>・Home / Compose / Settings の3画面構成</li>
@@ -1630,6 +1662,66 @@ export default function Page() {
           {isMiniListOpen ? "×" : "☰"}
         </button>
       </div>
+
+      {isEditPanelOpen && selectedRecord && detailDraft ? (
+        <>
+          <div
+            className="fixed inset-0 z-[60] bg-slate-950/25 backdrop-blur-[2px]"
+            onClick={() => setIsEditPanelOpen(false)}
+            aria-hidden="true"
+          />
+          <aside className="fixed inset-x-0 bottom-0 z-[70] flex max-h-[88vh] flex-col rounded-t-[30px] border-t border-slate-200 bg-white shadow-[0_-24px_80px_rgba(15,23,42,0.18)] sm:inset-x-auto sm:inset-y-0 sm:right-0 sm:h-full sm:max-h-none sm:w-[min(600px,48vw)] sm:rounded-l-[32px] sm:rounded-tr-none sm:border-l sm:border-t-0 sm:shadow-[-24px_0_80px_rgba(15,23,42,0.16)]">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 sm:px-6">
+              <div className="min-w-0">
+                <div className="text-[11px] uppercase tracking-[0.34em] text-blue-500">Edit</div>
+                <h2 className="mt-1 truncate text-xl font-semibold text-slate-950">
+                  {selectedRecord.title || "（無題）"}
+                </h2>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <Badge tone={selectedRecord.action === "calendar" ? "amber" : selectedRecord.action === "reminder" ? "rose" : "cyan"}>
+                    {selectedRecord.action}
+                  </Badge>
+                  <Badge>{selectedRecord.domain || "other"}</Badge>
+                  <Badge>{getEffectivePara(selectedRecord)}</Badge>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsEditPanelOpen(false)}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-xl text-slate-600 transition hover:bg-slate-50"
+                aria-label="編集パネルを閉じる"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-auto px-5 py-5 sm:px-6">
+              <RecordEditor
+                draft={detailDraft}
+                onChange={(patch) => setDetailDraft((prev) => (prev ? { ...prev, ...patch } : prev))}
+                showRawInput
+              />
+            </div>
+
+            <div className="border-t border-slate-200 bg-white/95 px-5 py-4 backdrop-blur sm:px-6">
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={() => saveDetail(true)} disabled={detailSaving} className={primaryButtonClass}>
+                  {detailSaving ? "保存中..." : "保存して閉じる"}
+                </button>
+                <button type="button" onClick={() => saveDetail(false)} disabled={detailSaving} className={secondaryButtonClass}>
+                  保存
+                </button>
+                <button type="button" onClick={() => setIsEditPanelOpen(false)} className={secondaryButtonClass}>
+                  キャンセル
+                </button>
+                <button type="button" onClick={deleteSelected} disabled={detailDeleting} className={dangerButtonClass}>
+                  {detailDeleting ? "削除中..." : "削除"}
+                </button>
+              </div>
+            </div>
+          </aside>
+        </>
+      ) : null}
 
       {isMiniListOpen ? (
         <>
