@@ -1032,6 +1032,9 @@ export default function Page() {
       await reloadRecords(nextRecord.id);
       await reloadBackupSummary();
       setNotice({ kind: "info", text: "保存しました。" });
+      window.setTimeout(() => {
+        void runBackupQueue(false);
+      }, 0);
       setComposeDraft(blankForm(""));
       setComposeAiStatus("none");
       setComposeAiError("");
@@ -1054,6 +1057,9 @@ export default function Page() {
       await reloadRecords(nextRecord.id);
       await reloadBackupSummary();
       setNotice({ kind: "info", text: "更新しました。" });
+      window.setTimeout(() => {
+        void runBackupQueue(false);
+      }, 0);
       setReloadTick((value) => value + 1);
     } catch (error) {
       setNotice({
