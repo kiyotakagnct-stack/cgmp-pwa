@@ -1,9 +1,36 @@
 import { NextResponse } from "next/server";
 
-import { backupAttachmentToDrive } from "@/lib/cgmp/drive-backup-server";
+import { backupAttachmentToDrive, downloadDriveFileBuffer } from "@/lib/cgmp/drive-backup-server";
 import type { ImageAttachment } from "@/types/image";
 
 export const runtime = "nodejs";
+
+export async function GET(request: Request) {
+  try {
+    const url = new URL(request.url);
+    const fileId = String(url.searchParams.get("fileId") || "").trim();
+    if (!fileId) {
+      return NextResponse.json({ ok: false, error: "FILE_ID_REQUIRED" }, { status: 400 });
+    }
+
+    const { buffer, contentType } = await downloadDriveFileBuffer(fileId);
+    return new Response(buffer, {
+      headers: {
+        "Content-Type": contentType || "image/jpeg",
+        "Cache-Control": "no-store",
+      },
+    });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "ATTACHMENT_DOWNLOAD_FAILED",
+        detail: error instanceof Error ? error.message : String(error),
+      },
+      { status: 500 }
+    );
+  }
+}
 
 export async function POST(request: Request) {
   try {

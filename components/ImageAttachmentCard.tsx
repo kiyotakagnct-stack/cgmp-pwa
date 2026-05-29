@@ -75,7 +75,7 @@ export function ImageAttachmentCard({
       revoked = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [attachment.previewBlobKey, attachment.thumbnailBlobKey]);
+  }, [attachment, compact]);
 
   if (compact) {
     return (

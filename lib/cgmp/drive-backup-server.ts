@@ -229,6 +229,22 @@ async function readTextFile(fileId: string) {
   return response.text();
 }
 
+export async function downloadDriveFileBuffer(fileId: string) {
+  const accessToken = await getAccessToken();
+  const response = await fetch(`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?alt=media`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (!response.ok) {
+    throw new Error("GOOGLE_DRIVE_DOWNLOAD_FAILED");
+  }
+
+  return {
+    buffer: Buffer.from(await response.arrayBuffer()),
+    contentType: response.headers.get("content-type") || "application/octet-stream",
+  };
+}
+
 function stableRecordPayload(record: CGMPRecord) {
   const {
     backup_status: _backupStatus,

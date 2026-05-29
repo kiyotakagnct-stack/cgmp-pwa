@@ -16,7 +16,7 @@ import {
   saveSettings,
   upsertRecord,
 } from "@/lib/cgmp/storage";
-import { getBackupStatus, importMissingRecordsFromDrive, processBackupQueue } from "@/lib/cgmp/backup";
+import { getBackupStatus, hydrateMissingAttachmentBlobs, importMissingRecordsFromDrive, processBackupQueue } from "@/lib/cgmp/backup";
 import type {
   CGMPAction,
   CGMPAnalysisResponse,
@@ -1028,8 +1028,8 @@ export default function Page() {
         setNotice({
           kind: "info",
           text:
-            result.imported.length > 0
-              ? `Driveから未取り込みメモを${result.imported.length}件追加しました。`
+            result.imported.length > 0 || result.merged.length > 0 || result.hydratedAttachments > 0
+              ? `Drive同期: メモ追加${result.imported.length}件 / 写真メタ更新${result.merged.length}件 / 画像復元${result.hydratedAttachments}件`
               : "Driveから追加する未取り込みメモはありません。",
         });
       }
@@ -1127,10 +1127,16 @@ export default function Page() {
       void importMissingFromDrive(false);
     }
     void runBackupQueue(false);
+    void hydrateMissingAttachmentBlobs().then((result) => {
+      if (result.hydrated > 0) {
+        void reloadRecords();
+      }
+    });
 
     const handleVisible = () => {
       if (document.visibilityState === "visible") {
         void runBackupQueue(false);
+        void importMissingFromDrive(false);
       }
     };
 

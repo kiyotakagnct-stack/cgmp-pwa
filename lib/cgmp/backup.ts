@@ -8,7 +8,7 @@ import {
   updateBackupQueueItem,
   updateRecordBackupState,
 } from "./storage";
-import { getImageBlob } from "@/lib/db/imageBlobStore";
+import { getImageBlob, putImageBlob } from "@/lib/db/imageBlobStore";
 import type { CGMPBackupSummary, CGMPRecord } from "./types";
 import type { ImageAttachment } from "@/types/image";
 
@@ -41,9 +41,24 @@ type DriveBackupRecord = {
   error?: boolean;
 };
 
+type DriveManifest = {
+  attachments?: Record<
+    string,
+    {
+      record_id?: string;
+      attachment_id?: string;
+      preview_file_id?: string;
+      thumbnail_file_id?: string;
+      checksum?: string;
+      backed_up_at?: string;
+    }
+  >;
+};
+
 type RestoreResponse = {
   ok?: boolean;
   records?: DriveBackupRecord[];
+  manifest?: DriveManifest;
   error?: string;
 };
 
@@ -289,6 +304,123 @@ function isRestorableRecord(value: Partial<CGMPRecord> | undefined): value is CG
   return Boolean(value?.id && value?.created_at && value?.updated_at);
 }
 
+function enrichRemoteRecordAttachments(record: CGMPRecord, manifest?: DriveManifest): CGMPRecord {
+  const manifestAttachments = manifest?.attachments || {};
+  return {
+    ...record,
+    attachments: (record.attachments || []).map((attachment) => {
+      const manifestEntry = manifestAttachments[`${record.id}:${attachment.id}`];
+      const previewDriveFileId = attachment.previewDriveFileId || manifestEntry?.preview_file_id || "";
+      const thumbnailDriveFileId = attachment.thumbnailDriveFileId || manifestEntry?.thumbnail_file_id || "";
+      const backedUpAt = attachment.last_backup_at || manifestEntry?.backed_up_at || "";
+      return {
+        ...attachment,
+        previewDriveFileId,
+        thumbnailDriveFileId,
+        backup_status: previewDriveFileId ? "backed_up" : attachment.backup_status || "local_only",
+        backup_retry_count: attachment.backup_retry_count || 0,
+        backup_last_error: attachment.backup_last_error || "",
+        backup_next_retry_at: attachment.backup_next_retry_at || "",
+        last_backup_at: backedUpAt,
+        backup_checksum: attachment.backup_checksum || manifestEntry?.checksum || "",
+      };
+    }),
+  };
+}
+
+async function downloadDriveImageBlob(fileId: string) {
+  const response = await fetch(`/api/backup/attachment?fileId=${encodeURIComponent(fileId)}`);
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(typeof payload?.detail === "string" ? payload.detail : "ATTACHMENT_DOWNLOAD_FAILED");
+  }
+  return response.blob();
+}
+
+async function hydrateAttachmentBlobsForRecord(record: CGMPRecord) {
+  let hydrated = 0;
+  const failed: { attachmentId: string; error: string }[] = [];
+
+  for (const attachment of record.attachments || []) {
+    try {
+      const hasPreview = await getImageBlob(attachment.previewBlobKey);
+      if (!hasPreview && attachment.previewDriveFileId) {
+        const blob = await downloadDriveImageBlob(attachment.previewDriveFileId);
+        await putImageBlob(attachment.previewBlobKey, blob);
+        hydrated += 1;
+      }
+
+      if (attachment.thumbnailBlobKey && attachment.thumbnailDriveFileId) {
+        const hasThumbnail = await getImageBlob(attachment.thumbnailBlobKey);
+        if (!hasThumbnail) {
+          const blob = await downloadDriveImageBlob(attachment.thumbnailDriveFileId);
+          await putImageBlob(attachment.thumbnailBlobKey, blob);
+          hydrated += 1;
+        }
+      }
+    } catch (error) {
+      failed.push({
+        attachmentId: attachment.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return { hydrated, failed };
+}
+
+function mergeRemoteAttachments(localRecord: CGMPRecord, remoteRecord: CGMPRecord) {
+  const localById = new Map((localRecord.attachments || []).map((attachment) => [attachment.id, attachment]));
+  let changed = false;
+  const merged = [...(localRecord.attachments || [])];
+
+  for (const remoteAttachment of remoteRecord.attachments || []) {
+    const localAttachment = localById.get(remoteAttachment.id);
+    if (!localAttachment) {
+      merged.push(remoteAttachment);
+      changed = true;
+      continue;
+    }
+
+    const nextAttachment: ImageAttachment = {
+      ...localAttachment,
+      previewDriveFileId: localAttachment.previewDriveFileId || remoteAttachment.previewDriveFileId || "",
+      thumbnailDriveFileId: localAttachment.thumbnailDriveFileId || remoteAttachment.thumbnailDriveFileId || "",
+      backup_status:
+        localAttachment.backup_status === "backed_up" || remoteAttachment.backup_status === "backed_up"
+          ? "backed_up"
+          : localAttachment.backup_status || remoteAttachment.backup_status,
+      last_backup_at: localAttachment.last_backup_at || remoteAttachment.last_backup_at || "",
+      backup_checksum: localAttachment.backup_checksum || remoteAttachment.backup_checksum || "",
+      backup_last_error: localAttachment.backup_last_error || "",
+      backup_next_retry_at: localAttachment.backup_next_retry_at || "",
+      backup_retry_count: localAttachment.backup_retry_count || 0,
+    };
+
+    if (JSON.stringify(nextAttachment) !== JSON.stringify(localAttachment)) {
+      const index = merged.findIndex((attachment) => attachment.id === localAttachment.id);
+      if (index >= 0) merged[index] = nextAttachment;
+      changed = true;
+    }
+  }
+
+  return changed ? { ...localRecord, attachments: merged } : localRecord;
+}
+
+export async function hydrateMissingAttachmentBlobs() {
+  const records = await loadAllRecords();
+  let hydrated = 0;
+  const failed: { recordId: string; attachmentId: string; error: string }[] = [];
+
+  for (const record of records) {
+    const result = await hydrateAttachmentBlobsForRecord(record);
+    hydrated += result.hydrated;
+    failed.push(...result.failed.map((item) => ({ recordId: record.id, ...item })));
+  }
+
+  return { hydrated, failed };
+}
+
 export async function importMissingRecordsFromDrive() {
   const [localRecords, response] = await Promise.all([loadAllRecords(), fetch("/api/backup/restore")]);
   const payload = (await response.json().catch(() => ({}))) as RestoreResponse;
@@ -297,16 +429,18 @@ export async function importMissingRecordsFromDrive() {
   }
 
   const localIds = new Set(localRecords.map((record) => record.id));
+  const localById = new Map(localRecords.map((record) => [record.id, record]));
   const imported: CGMPRecord[] = [];
+  const merged: CGMPRecord[] = [];
   const skipped: DriveBackupRecord[] = [];
 
   for (const item of payload.records || []) {
-    if (item.error || localIds.has(item.id) || !isRestorableRecord(item.record)) {
+    if (item.error || !isRestorableRecord(item.record)) {
       skipped.push(item);
       continue;
     }
 
-    const record: CGMPRecord = {
+    const remoteRecord: CGMPRecord = enrichRemoteRecordAttachments({
       ...item.record,
       backup_status: "backed_up",
       backup_retry_count: 0,
@@ -315,15 +449,37 @@ export async function importMissingRecordsFromDrive() {
       drive_file_id: item.file_id,
       last_backup_at: item.backed_up_at,
       backup_checksum: item.checksum,
-    };
-    await putRecordWithoutBackup(record);
-    imported.push(record);
-    localIds.add(record.id);
+    }, payload.manifest);
+
+    if (localIds.has(item.id)) {
+      const localRecord = localById.get(item.id);
+      if (!localRecord) {
+        skipped.push(item);
+        continue;
+      }
+      const mergedRecord = mergeRemoteAttachments(localRecord, remoteRecord);
+      if (mergedRecord !== localRecord) {
+        await putRecordWithoutBackup(mergedRecord);
+        merged.push(mergedRecord);
+      } else {
+        skipped.push(item);
+      }
+      continue;
+    }
+
+    await putRecordWithoutBackup(remoteRecord);
+    imported.push(remoteRecord);
+    localIds.add(remoteRecord.id);
   }
+
+  const hydration = await hydrateMissingAttachmentBlobs();
 
   return {
     imported,
+    merged,
     skipped,
+    hydratedAttachments: hydration.hydrated,
+    failedAttachments: hydration.failed,
     totalRemote: payload.records?.length || 0,
   };
 }
