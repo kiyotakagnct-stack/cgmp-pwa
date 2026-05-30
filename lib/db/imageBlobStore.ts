@@ -1,9 +1,10 @@
 const DB_NAME = "cgmp-pwa";
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const RECORDS_STORE = "records";
 const SETTINGS_STORE = "settings";
 const BACKUP_QUEUE_STORE = "backup_queue";
 const IMAGE_BLOBS_STORE = "image_blobs";
+const DELETED_RECORDS_STORE = "deleted_records";
 
 type ImageBlobEntry = {
   key: string;
@@ -49,6 +50,10 @@ function openDatabase() {
       }
       if (!db.objectStoreNames.contains(IMAGE_BLOBS_STORE)) {
         db.createObjectStore(IMAGE_BLOBS_STORE, { keyPath: "key" });
+      }
+      if (!db.objectStoreNames.contains(DELETED_RECORDS_STORE)) {
+        const store = db.createObjectStore(DELETED_RECORDS_STORE, { keyPath: "record_id" });
+        store.createIndex("deleted_at", "deleted_at", { unique: false });
       }
     };
     request.onsuccess = () => resolve(request.result);
