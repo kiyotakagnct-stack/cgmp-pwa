@@ -17,6 +17,7 @@ import {
   upsertRecord,
 } from "@/lib/cgmp/storage";
 import { getBackupStatus, hydrateMissingAttachmentBlobs, importMissingRecordsFromDrive, processBackupQueue } from "@/lib/cgmp/backup";
+import { importScriptableCgmpZip, type ScriptableImportResult } from "@/lib/cgmp/scriptable-import";
 import type {
   CGMPAction,
   CGMPAnalysisResponse,
@@ -1020,9 +1021,12 @@ export default function Page() {
   const [photoProcessingCount, setPhotoProcessingCount] = useState(0);
   const [aiProcessingOverlay, setAiProcessingOverlay] = useState<AiProcessingOverlayState | null>(null);
   const [aiProcessingElapsedMs, setAiProcessingElapsedMs] = useState(0);
+  const [scriptableImporting, setScriptableImporting] = useState(false);
+  const [scriptableImportResult, setScriptableImportResult] = useState<ScriptableImportResult | null>(null);
   const initialDriveImportDoneRef = useRef(false);
   const aiProcessingIdRef = useRef(0);
   const aiProcessingHideTimerRef = useRef<number | null>(null);
+  const scriptableImportInputRef = useRef<HTMLInputElement | null>(null);
 
   async function reloadRecords(preferredId?: string) {
     const nextRecords = await loadAllRecords();
@@ -1727,6 +1731,31 @@ export default function Page() {
     setNotice({ kind: "info", text: "全件削除しました。" });
   }
 
+  async function handleScriptableImportFile(file: File | undefined) {
+    if (!file) return;
+    setScriptableImporting(true);
+    setScriptableImportResult(null);
+    try {
+      const result = await importScriptableCgmpZip(file);
+      setScriptableImportResult(result);
+      await Promise.all([reloadRecords(), reloadBackupSummary()]);
+      setNotice({
+        kind: result.errors.length > 0 ? "error" : "info",
+        text: `Scriptable移行: 追加${result.imported}件 / 上書き${result.overwritten}件 / 画像${result.imagesImported}枚`,
+      });
+      window.setTimeout(() => {
+        void runBackupQueue(false);
+      }, 0);
+    } catch (error) {
+      setNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : "Scriptableデータのインポートに失敗しました",
+      });
+    } finally {
+      setScriptableImporting(false);
+    }
+  }
+
   if (!isReady) {
     return (
       <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(191,219,254,0.7),_transparent_42%),linear-gradient(180deg,#f8fbff_0%,#eef5ff_52%,#f7fafc_100%)] px-6 py-10 text-slate-800">
@@ -1990,6 +2019,59 @@ export default function Page() {
                   <p className="text-sm leading-6 text-slate-600">
                     Vercel では `OPENAI_API_KEY` と Google Drive 用の環境変数を設定してください。クライアント側には渡しません。
                   </p>
+                </div>
+                <div className={softPanelClass}>
+                  <div className="text-sm font-medium text-slate-800">Scriptableデータ移行</div>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">
+                    `ChatGPTMagic` フォルダ、または移行用ZIPを選択して、records と preview画像をIndexedDBへ取り込みます。
+                    original画像とlogsは取り込みません。
+                  </p>
+                  <input
+                    ref={scriptableImportInputRef}
+                    type="file"
+                    accept=".zip,application/zip,application/x-zip-compressed"
+                    className="hidden"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      event.target.value = "";
+                      void handleScriptableImportFile(file);
+                    }}
+                  />
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => scriptableImportInputRef.current?.click()}
+                      disabled={scriptableImporting}
+                      className={primaryButtonClass}
+                    >
+                      {scriptableImporting ? "インポート中..." : "Scriptable ZIPをインポート"}
+                    </button>
+                  </div>
+                  {scriptableImportResult ? (
+                    <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-3 text-xs leading-6 text-slate-600">
+                      <div className="grid gap-2 sm:grid-cols-4">
+                        <span>追加: {scriptableImportResult.imported}</span>
+                        <span>上書き: {scriptableImportResult.overwritten}</span>
+                        <span>画像: {scriptableImportResult.imagesImported}</span>
+                        <span>スキップ: {scriptableImportResult.skipped}</span>
+                      </div>
+                      {scriptableImportResult.errors.length > 0 ? (
+                        <details className="mt-3">
+                          <summary className="cursor-pointer font-semibold text-rose-600">
+                            エラー/警告 {scriptableImportResult.errors.length}件
+                          </summary>
+                          <ul className="mt-2 max-h-36 space-y-1 overflow-auto text-rose-600">
+                            {scriptableImportResult.errors.slice(0, 20).map((error, index) => (
+                              <li key={`${error}:${index}`}>{error}</li>
+                            ))}
+                            {scriptableImportResult.errors.length > 20 ? (
+                              <li>...ほか {scriptableImportResult.errors.length - 20}件</li>
+                            ) : null}
+                          </ul>
+                        </details>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
                 <div className={softPanelClass}>
                   <div className="text-sm font-medium text-slate-800">Google Drive バックアップ</div>
