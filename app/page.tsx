@@ -16,13 +16,20 @@ import {
   saveSettings,
   upsertRecord,
 } from "@/lib/cgmp/storage";
-import { getBackupStatus, hydrateMissingAttachmentBlobs, importMissingRecordsFromDrive, processBackupQueue } from "@/lib/cgmp/backup";
+import {
+  enqueueAllRecordsForBackup,
+  getBackupStatus,
+  hydrateMissingAttachmentBlobs,
+  importMissingRecordsFromDrive,
+  processBackupQueue,
+} from "@/lib/cgmp/backup";
 import { importScriptableCgmpZip, type ScriptableImportResult } from "@/lib/cgmp/scriptable-import";
 import type {
   CGMPAction,
   CGMPAnalysisResponse,
   CGMPBackupSummary,
   CGMPDomain,
+  CGMPGoogleTaskStatus,
   CGMPPara,
   CGMPRecord,
   CGMPSettings,
@@ -64,6 +71,21 @@ type DriveBackupRecordPreview = {
   file_id: string;
   record?: Partial<CGMPRecord>;
   error?: boolean;
+};
+type GoogleTaskPayload = {
+  ok?: boolean;
+  taskListId?: string;
+  taskId?: string;
+  status?: CGMPGoogleTaskStatus;
+  updatedAt?: string;
+  error?: string;
+};
+type GoogleCalendarPayload = {
+  ok?: boolean;
+  calendarId?: string;
+  eventId?: string;
+  updatedAt?: string;
+  error?: string;
 };
 
 type RecordFormState = {
@@ -188,6 +210,14 @@ function formToRecord(
     external_action_status: existing?.external_action_status ?? "none",
     external_target: existing?.external_target ?? "",
     external_registered_at: existing?.external_registered_at ?? "",
+    external_error: existing?.external_error ?? "",
+    google_task_id: existing?.google_task_id ?? "",
+    google_task_list_id: existing?.google_task_list_id ?? "",
+    google_task_status: existing?.google_task_status ?? "",
+    google_task_updated_at: existing?.google_task_updated_at ?? "",
+    google_calendar_event_id: existing?.google_calendar_event_id ?? "",
+    google_calendar_id: existing?.google_calendar_id ?? "",
+    google_calendar_updated_at: existing?.google_calendar_updated_at ?? "",
     backup_status: existing?.backup_status ?? "pending_backup",
     backup_retry_count: existing?.backup_retry_count ?? 0,
     backup_last_error: existing?.backup_last_error ?? "",
@@ -708,10 +738,14 @@ function RecordCard({
   onOpen,
   onEdit,
   onDelete,
+  onRegisterGoogleTask,
+  onToggleGoogleTaskStatus,
+  onRegisterGoogleCalendarEvent,
   onOpenImage,
   onReanalyzeAttachment,
   onDeleteAttachment,
   onAddPhotos,
+  externalProcessingKey = "",
   isPhotoProcessing = false,
   isChecked = false,
   onToggleCheck,
@@ -721,10 +755,14 @@ function RecordCard({
   onOpen: (id: string) => void;
   onEdit: (id: string) => void;
   onDelete: (id: string) => void;
+  onRegisterGoogleTask: (id: string) => void;
+  onToggleGoogleTaskStatus: (id: string) => void;
+  onRegisterGoogleCalendarEvent: (id: string) => void;
   onOpenImage: (attachment: ImageAttachment, imageUrl: string) => void;
   onReanalyzeAttachment: (recordId: string, attachmentId: string) => void;
   onDeleteAttachment: (recordId: string, attachmentId: string) => void;
   onAddPhotos: (recordId: string, files: File[]) => void;
+  externalProcessingKey?: string;
   isPhotoProcessing?: boolean;
   isChecked?: boolean;
   onToggleCheck: (id: string) => void;
@@ -736,6 +774,10 @@ function RecordCard({
   const intentText = record.user_intent_summary || record.confirmation || "";
   const photoInputRef = useRef<HTMLInputElement | null>(null);
   const photoBackupBadge = getPhotoBackupBadge(record);
+  const taskProcessing = externalProcessingKey === `task:${record.id}` || externalProcessingKey === `task-status:${record.id}`;
+  const calendarProcessing = externalProcessingKey === `calendar:${record.id}`;
+  const isTaskRegistered = Boolean(record.google_task_id && record.google_task_list_id);
+  const isCalendarRegistered = Boolean(record.google_calendar_event_id);
 
   function handlePhotoFiles(files: File[]) {
     if (files.length === 0) return;
@@ -796,6 +838,13 @@ function RecordCard({
           <Badge compact tone="slate">{getParaLabel(para)}</Badge>
           <Badge compact tone={getBackupTone(record)}>{getBackupLabel(record)}</Badge>
           {photoBackupBadge ? <Badge compact tone={photoBackupBadge.tone}>{photoBackupBadge.label}</Badge> : null}
+          {isTaskRegistered ? (
+            <Badge compact tone={record.google_task_status === "completed" ? "emerald" : "amber"}>
+              {record.google_task_status === "completed" ? "Task完" : "Task未"}
+            </Badge>
+          ) : null}
+          {isCalendarRegistered ? <Badge compact tone="amber">GCal</Badge> : null}
+          {record.external_action_status === "failed" ? <Badge compact tone="rose">外部失敗</Badge> : null}
           <span className="text-[11px] text-slate-400">{formatJstDateTime(record.updated_at)}</span>
           <div className="ml-auto shrink-0">
             <input
@@ -860,6 +909,49 @@ function RecordCard({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="text-[11px] uppercase tracking-[0.28em] text-blue-500">Detail</div>
               <div className="flex flex-wrap gap-2">
+                {record.action === "reminder" ? (
+                  isTaskRegistered ? (
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onToggleGoogleTaskStatus(record.id);
+                      }}
+                      onKeyDown={(event) => event.stopPropagation()}
+                      className="rounded-xl border border-teal-200 bg-teal-50 px-3 py-1.5 text-xs font-semibold text-teal-700 transition hover:border-teal-300 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={taskProcessing}
+                    >
+                      {taskProcessing ? "同期中..." : record.google_task_status === "completed" ? "未完了に戻す" : "完了にする"}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onRegisterGoogleTask(record.id);
+                      }}
+                      onKeyDown={(event) => event.stopPropagation()}
+                      className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={taskProcessing}
+                    >
+                      {taskProcessing ? "登録中..." : "Tasks登録"}
+                    </button>
+                  )
+                ) : null}
+                {record.action === "calendar" ? (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onRegisterGoogleCalendarEvent(record.id);
+                    }}
+                    onKeyDown={(event) => event.stopPropagation()}
+                    className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-700 transition hover:border-orange-300 hover:bg-orange-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={calendarProcessing || isCalendarRegistered}
+                  >
+                    {calendarProcessing ? "登録中..." : isCalendarRegistered ? "Cal登録済" : "Calendar登録"}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={(event) => {
@@ -939,6 +1031,9 @@ function RecordCard({
                   <span>時刻: {record.time || "未設定"}</span>
                   <span>場所: {record.location || "未設定"}</span>
                   <span>AI: {record.ai_status || "none"}</span>
+                  {record.google_task_id ? <span>Task: {record.google_task_status || "needsAction"}</span> : null}
+                  {record.google_calendar_event_id ? <span>Calendar: registered</span> : null}
+                  {record.external_error ? <span className="text-rose-500">外部連携: {record.external_error}</span> : null}
                 </div>
               </section>
             </div>
@@ -1019,6 +1114,7 @@ export default function Page() {
   const [checkedRecordIds, setCheckedRecordIds] = useState<string[]>([]);
   const [lightbox, setLightbox] = useState<LightboxState>(null);
   const [photoProcessingCount, setPhotoProcessingCount] = useState(0);
+  const [externalProcessingKey, setExternalProcessingKey] = useState("");
   const [aiProcessingOverlay, setAiProcessingOverlay] = useState<AiProcessingOverlayState | null>(null);
   const [aiProcessingElapsedMs, setAiProcessingElapsedMs] = useState(0);
   const [scriptableImporting, setScriptableImporting] = useState(false);
@@ -1107,6 +1203,174 @@ export default function Page() {
           text: error instanceof Error ? error.message : "バックアップに失敗しました",
         });
       }
+    } finally {
+      setBackupProcessing(false);
+    }
+  }
+
+  async function saveExternalRecordUpdate(nextRecord: CGMPRecord) {
+    const saved = await upsertRecord(nextRecord);
+    setRecords((current) => current.map((record) => (record.id === saved.id ? saved : record)));
+    if (selectedId === saved.id) {
+      setDetailDraft(formFromRecord(saved));
+    }
+    await Promise.all([reloadRecords(), reloadBackupSummary()]);
+    void runBackupQueue(false);
+    return saved;
+  }
+
+  async function registerGoogleTask(recordId: string) {
+    const record = records.find((candidate) => candidate.id === recordId);
+    if (!record) return;
+    const processingKey = `task:${recordId}`;
+    setExternalProcessingKey(processingKey);
+    try {
+      const response = await fetch("/api/external/google/task", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ record }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as GoogleTaskPayload;
+      if (!response.ok || !payload.ok || !payload.taskId || !payload.taskListId) {
+        throw new Error(payload.error || "GOOGLE_TASK_CREATE_FAILED");
+      }
+      await saveExternalRecordUpdate({
+        ...record,
+        updated_at: new Date().toISOString(),
+        external_action_status: "registered",
+        external_target: "reminder",
+        external_registered_at: payload.updatedAt || new Date().toISOString(),
+        external_error: "",
+        google_task_id: payload.taskId,
+        google_task_list_id: payload.taskListId,
+        google_task_status: payload.status || "needsAction",
+        google_task_updated_at: payload.updatedAt || new Date().toISOString(),
+      });
+      setNotice({ kind: "info", text: "Google Tasksへ登録しました。" });
+    } catch (error) {
+      await saveExternalRecordUpdate({
+        ...record,
+        external_action_status: "failed",
+        external_target: "reminder",
+        external_error: error instanceof Error ? error.message : "Google Tasks登録に失敗しました",
+      });
+      setNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : "Google Tasks登録に失敗しました",
+      });
+    } finally {
+      setExternalProcessingKey("");
+    }
+  }
+
+  async function toggleGoogleTaskStatus(recordId: string) {
+    const record = records.find((candidate) => candidate.id === recordId);
+    if (!record?.google_task_id || !record.google_task_list_id) return;
+    const nextStatus: Exclude<CGMPGoogleTaskStatus, ""> =
+      record.google_task_status === "completed" ? "needsAction" : "completed";
+    const processingKey = `task-status:${recordId}`;
+    setExternalProcessingKey(processingKey);
+    try {
+      const response = await fetch("/api/external/google/task", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          taskListId: record.google_task_list_id,
+          taskId: record.google_task_id,
+          status: nextStatus,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as GoogleTaskPayload;
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.error || "GOOGLE_TASK_UPDATE_FAILED");
+      }
+      await saveExternalRecordUpdate({
+        ...record,
+        updated_at: new Date().toISOString(),
+        external_action_status: "registered",
+        external_error: "",
+        google_task_status: payload.status || nextStatus,
+        google_task_updated_at: payload.updatedAt || new Date().toISOString(),
+      });
+      setNotice({ kind: "info", text: nextStatus === "completed" ? "Google Tasksを完了にしました。" : "Google Tasksを未完了に戻しました。" });
+    } catch (error) {
+      await saveExternalRecordUpdate({
+        ...record,
+        external_action_status: "failed",
+        external_error: error instanceof Error ? error.message : "Google Tasks更新に失敗しました",
+      });
+      setNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : "Google Tasks更新に失敗しました",
+      });
+    } finally {
+      setExternalProcessingKey("");
+    }
+  }
+
+  async function registerGoogleCalendarEvent(recordId: string) {
+    const record = records.find((candidate) => candidate.id === recordId);
+    if (!record) return;
+    const processingKey = `calendar:${recordId}`;
+    setExternalProcessingKey(processingKey);
+    try {
+      const response = await fetch("/api/external/google/calendar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ record }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as GoogleCalendarPayload;
+      if (!response.ok || !payload.ok || !payload.eventId || !payload.calendarId) {
+        throw new Error(payload.error || "GOOGLE_CALENDAR_CREATE_FAILED");
+      }
+      await saveExternalRecordUpdate({
+        ...record,
+        updated_at: new Date().toISOString(),
+        external_action_status: "registered",
+        external_target: "calendar",
+        external_registered_at: payload.updatedAt || new Date().toISOString(),
+        external_error: "",
+        google_calendar_event_id: payload.eventId,
+        google_calendar_id: payload.calendarId,
+        google_calendar_updated_at: payload.updatedAt || new Date().toISOString(),
+      });
+      setNotice({ kind: "info", text: "Google Calendarへ登録しました。" });
+    } catch (error) {
+      await saveExternalRecordUpdate({
+        ...record,
+        external_action_status: "failed",
+        external_target: "calendar",
+        external_error: error instanceof Error ? error.message : "Google Calendar登録に失敗しました",
+      });
+      setNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : "Google Calendar登録に失敗しました",
+      });
+    } finally {
+      setExternalProcessingKey("");
+    }
+  }
+
+  async function rebackupAllRecords() {
+    if (backupProcessing) return;
+    setBackupProcessing(true);
+    try {
+      const queued = await enqueueAllRecordsForBackup();
+      const results = await processBackupQueue();
+      await Promise.all([reloadRecords(), reloadBackupSummary()]);
+      const failed = results.filter((result) => !result.ok).length;
+      setNotice({
+        kind: failed > 0 ? "error" : "info",
+        text:
+          failed > 0
+            ? `全件再同期で失敗があります（${failed}件）。もう一度実行できます。`
+            : `全件再同期を実行しました（対象${queued}件 / 処理${results.length}件）。`,
+      });
+    } catch (error) {
+      setNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : "全件再同期に失敗しました",
+      });
     } finally {
       setBackupProcessing(false);
     }
@@ -1897,10 +2161,14 @@ export default function Page() {
                     onOpen={(id) => setSelectedId((current) => (current === id ? null : id))}
                     onEdit={openEditPanel}
                     onDelete={deleteRecordById}
+                    onRegisterGoogleTask={registerGoogleTask}
+                    onToggleGoogleTaskStatus={toggleGoogleTaskStatus}
+                    onRegisterGoogleCalendarEvent={registerGoogleCalendarEvent}
                     onOpenImage={(attachment, imageUrl) => setLightbox({ imageUrl, title: attachment.summary_80 || "添付画像" })}
                     onReanalyzeAttachment={handleReanalyzeAttachment}
                     onDeleteAttachment={handleDeleteAttachment}
                     onAddPhotos={handleAddPhotos}
+                    externalProcessingKey={externalProcessingKey}
                     isPhotoProcessing={photoProcessingCount > 0}
                     isChecked={checkedRecordIds.includes(record.id)}
                     onToggleCheck={toggleCheckedRecord}
@@ -2017,7 +2285,7 @@ export default function Page() {
                 />
                 <div className={softPanelClass}>
                   <p className="text-sm leading-6 text-slate-600">
-                    Vercel では `OPENAI_API_KEY` と Google Drive 用の環境変数を設定してください。クライアント側には渡しません。
+                    Vercel では `OPENAI_API_KEY` と Google連携用の環境変数を設定してください。クライアント側には渡しません。
                   </p>
                 </div>
                 <div className={softPanelClass}>
@@ -2099,6 +2367,9 @@ export default function Page() {
                     <button type="button" onClick={() => runBackupQueue(true)} disabled={backupProcessing} className={primaryButtonClass}>
                       {backupProcessing ? "処理中..." : "今すぐバックアップ"}
                     </button>
+                    <button type="button" onClick={rebackupAllRecords} disabled={backupProcessing} className={secondaryButtonClass}>
+                      全件を再同期
+                    </button>
                     <button type="button" onClick={loadDriveBackupList} disabled={driveBackupLoading} className={secondaryButtonClass}>
                       {driveBackupLoading ? "確認中..." : "Drive上の一覧を確認"}
                     </button>
@@ -2106,7 +2377,7 @@ export default function Page() {
                       {driveImporting ? "取り込み中..." : "未取り込みを追加"}
                     </button>
                     <a href="/api/auth/google/start" className={secondaryButtonClass}>
-                      Google Driveを認可
+                      Google連携を認可
                     </a>
                   </div>
                 </div>

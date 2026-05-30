@@ -73,6 +73,16 @@ function isRetryDue(value: string) {
   return !Number.isFinite(time) || time <= Date.now();
 }
 
+async function loadLatestRecord(recordId: string) {
+  const records = await loadAllRecords();
+  return records.find((record) => record.id === recordId) || null;
+}
+
+function backupItemPriority(item: { item_type: "record" | "attachment"; created_at?: string }) {
+  // Attachments must be uploaded first so the following record JSON contains Drive file IDs.
+  return item.item_type === "attachment" ? 0 : 1;
+}
+
 async function backupRecord(record: CGMPRecord): Promise<BackupProcessItemResult> {
   const response = await fetch("/api/backup/record", {
     method: "POST",
@@ -145,7 +155,6 @@ export async function backupAttachment(record: CGMPRecord, attachment: ImageAtta
 
 export async function processBackupQueue() {
   const [records, queue] = await Promise.all([loadAllRecords(), loadBackupQueue()]);
-  const recordById = new Map(records.map((record) => [record.id, record]));
   const queuedIds = new Set(queue.map((item) => item.id));
   const syntheticAttachmentItems = records.flatMap((record) =>
     (record.attachments || [])
@@ -165,11 +174,17 @@ export async function processBackupQueue() {
         updated_at: new Date().toISOString(),
       }))
   );
-  const dueItems = [...queue, ...syntheticAttachmentItems].filter((item) => isRetryDue(item.next_retry_at));
+  const dueItems = [...queue, ...syntheticAttachmentItems]
+    .filter((item) => isRetryDue(item.next_retry_at))
+    .sort((left, right) => {
+      const priority = backupItemPriority(left) - backupItemPriority(right);
+      if (priority !== 0) return priority;
+      return (left.created_at || "").localeCompare(right.created_at || "");
+    });
   const results: BackupProcessItemResult[] = [];
 
   for (const item of dueItems) {
-    const record = recordById.get(item.record_id);
+    const record = await loadLatestRecord(item.record_id);
     if (!record) {
       await removeBackupQueueItem(item.id);
       continue;
@@ -260,6 +275,12 @@ export async function processBackupQueue() {
   }
 
   return results;
+}
+
+export async function enqueueAllRecordsForBackup() {
+  const records = await loadAllRecords();
+  await Promise.all(records.map((record) => enqueueBackup(record.id)));
+  return records.length;
 }
 
 export async function getBackupStatus(): Promise<CGMPBackupSummary> {

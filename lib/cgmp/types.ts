@@ -17,6 +17,7 @@ export type CGMPDomain =
   | "";
 
 export type CGMPExtId = "calendar" | "reminder" | "";
+export type CGMPGoogleTaskStatus = "needsAction" | "completed" | "";
 
 export type CGMPExternalActionStatus =
   | "none"
@@ -90,6 +91,14 @@ export type CGMPRecord = {
   external_action_status: CGMPExternalActionStatus;
   external_target: CGMPExtId;
   external_registered_at: string;
+  external_error: string;
+  google_task_id: string;
+  google_task_list_id: string;
+  google_task_status: CGMPGoogleTaskStatus;
+  google_task_updated_at: string;
+  google_calendar_event_id: string;
+  google_calendar_id: string;
+  google_calendar_updated_at: string;
   backup_status: CGMPBackupStatus;
   backup_retry_count: number;
   backup_last_error: string;
@@ -170,4 +179,12 @@ export type CGMPRecordDraft = Pick<
   external_action_status?: CGMPExternalActionStatus;
   external_target?: CGMPExtId;
   external_registered_at?: string;
+  external_error?: string;
+  google_task_id?: string;
+  google_task_list_id?: string;
+  google_task_status?: CGMPGoogleTaskStatus;
+  google_task_updated_at?: string;
+  google_calendar_event_id?: string;
+  google_calendar_id?: string;
+  google_calendar_updated_at?: string;
 };

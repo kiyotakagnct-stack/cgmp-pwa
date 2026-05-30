@@ -97,6 +97,17 @@ function getAttachmentBlobKeys(record: Pick<CGMPRecord, "attachments">) {
 function normalizeRecord(record: CGMPRecord): CGMPRecord {
   return {
     ...record,
+    external_action_status: record.external_action_status || "none",
+    external_target: record.external_target || "",
+    external_registered_at: record.external_registered_at || "",
+    external_error: record.external_error || "",
+    google_task_id: record.google_task_id || "",
+    google_task_list_id: record.google_task_list_id || "",
+    google_task_status: record.google_task_status || "",
+    google_task_updated_at: record.google_task_updated_at || "",
+    google_calendar_event_id: record.google_calendar_event_id || "",
+    google_calendar_id: record.google_calendar_id || "",
+    google_calendar_updated_at: record.google_calendar_updated_at || "",
     backup_status: record.backup_status || "local_only",
     backup_retry_count: Number.isFinite(Number(record.backup_retry_count)) ? Number(record.backup_retry_count) : 0,
     backup_last_error: record.backup_last_error || "",

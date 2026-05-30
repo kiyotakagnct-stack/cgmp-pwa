@@ -7,6 +7,11 @@ const DRIVE_API_BASE = "https://www.googleapis.com/drive/v3";
 const DRIVE_UPLOAD_BASE = "https://www.googleapis.com/upload/drive/v3";
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const APP_DATA_SPACE = "appDataFolder";
+const GOOGLE_OAUTH_SCOPES = [
+  "https://www.googleapis.com/auth/drive.appdata",
+  "https://www.googleapis.com/auth/tasks",
+  "https://www.googleapis.com/auth/calendar.events",
+].join(" ");
 
 type DriveFile = {
   id: string;
@@ -55,7 +60,7 @@ export function getGoogleAuthUrl() {
     response_type: "code",
     access_type: "offline",
     prompt: "consent",
-    scope: "https://www.googleapis.com/auth/drive.appdata",
+    scope: GOOGLE_OAUTH_SCOPES,
   });
 
   return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
@@ -88,7 +93,7 @@ export async function exchangeCodeForTokens(code: string) {
   };
 }
 
-async function getAccessToken() {
+export async function getGoogleAccessToken() {
   const refreshToken = process.env.GOOGLE_REFRESH_TOKEN?.trim();
   if (!refreshToken) throw new Error("GOOGLE_REFRESH_TOKEN_NOT_CONFIGURED");
 
@@ -112,7 +117,7 @@ async function getAccessToken() {
 }
 
 async function driveFetch<T>(path: string, init: RequestInit = {}) {
-  const accessToken = await getAccessToken();
+  const accessToken = await getGoogleAccessToken();
   const response = await fetch(`${DRIVE_API_BASE}${path}`, {
     ...init,
     headers: {
@@ -130,7 +135,7 @@ async function driveFetch<T>(path: string, init: RequestInit = {}) {
 }
 
 async function driveUpload<T>(path: string, metadata: Record<string, unknown>, body: string, mimeType: string, method = "POST") {
-  const accessToken = await getAccessToken();
+  const accessToken = await getGoogleAccessToken();
   const boundary = `cgmp_${crypto.randomUUID().replace(/-/g, "")}`;
   const multipartBody = [
     `--${boundary}`,
@@ -169,7 +174,7 @@ async function driveUploadBuffer<T>(
   mimeType: string,
   method = "POST"
 ) {
-  const accessToken = await getAccessToken();
+  const accessToken = await getGoogleAccessToken();
   const boundary = `cgmp_${crypto.randomUUID().replace(/-/g, "")}`;
   const head = Buffer.from(
     [
@@ -217,7 +222,7 @@ async function findAppDataFile(name: string) {
 }
 
 async function readTextFile(fileId: string) {
-  const accessToken = await getAccessToken();
+  const accessToken = await getGoogleAccessToken();
   const response = await fetch(`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?alt=media`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
@@ -230,7 +235,7 @@ async function readTextFile(fileId: string) {
 }
 
 export async function downloadDriveFileBuffer(fileId: string) {
-  const accessToken = await getAccessToken();
+  const accessToken = await getGoogleAccessToken();
   const response = await fetch(`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?alt=media`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });

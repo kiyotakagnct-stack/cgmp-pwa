@@ -26,7 +26,7 @@ export async function GET(request: Request) {
           <head>
             <meta charset="utf-8" />
             <meta name="viewport" content="width=device-width, initial-scale=1" />
-            <title>CGMP Google Drive Auth</title>
+            <title>CGMP Google Auth</title>
             <style>
               body { margin: 0; background: #020617; color: #e5e7eb; font-family: ui-sans-serif, system-ui, sans-serif; }
               main { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
@@ -39,7 +39,7 @@ export async function GET(request: Request) {
           <body>
             <main>
               <section>
-                <p>CGMP の Google Drive 認可が完了しました。</p>
+                <p>CGMP の Google 連携認可が完了しました。</p>
                 ${
                   refreshToken
                     ? `<p>次に Vercel の Environment Variables に <code>GOOGLE_REFRESH_TOKEN</code> として以下を登録してください。</p><textarea readonly>${refreshToken}</textarea>`
