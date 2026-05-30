@@ -87,6 +87,19 @@ type GoogleCalendarPayload = {
   updatedAt?: string;
   error?: string;
 };
+type GoogleExternalSyncPayload = {
+  ok?: boolean;
+  results?: Array<{
+    recordId: string;
+    ok: boolean;
+    google_task_status?: CGMPGoogleTaskStatus;
+    google_task_updated_at?: string;
+    google_calendar_status?: string;
+    google_calendar_updated_at?: string;
+    error?: string;
+  }>;
+  error?: string;
+};
 
 type RecordFormState = {
   raw_input: string;
@@ -1115,11 +1128,13 @@ export default function Page() {
   const [lightbox, setLightbox] = useState<LightboxState>(null);
   const [photoProcessingCount, setPhotoProcessingCount] = useState(0);
   const [externalProcessingKey, setExternalProcessingKey] = useState("");
+  const [externalSyncing, setExternalSyncing] = useState(false);
   const [aiProcessingOverlay, setAiProcessingOverlay] = useState<AiProcessingOverlayState | null>(null);
   const [aiProcessingElapsedMs, setAiProcessingElapsedMs] = useState(0);
   const [scriptableImporting, setScriptableImporting] = useState(false);
   const [scriptableImportResult, setScriptableImportResult] = useState<ScriptableImportResult | null>(null);
   const initialDriveImportDoneRef = useRef(false);
+  const initialExternalSyncDoneRef = useRef(false);
   const aiProcessingIdRef = useRef(0);
   const aiProcessingHideTimerRef = useRef<number | null>(null);
   const scriptableImportInputRef = useRef<HTMLInputElement | null>(null);
@@ -1217,6 +1232,181 @@ export default function Page() {
     await Promise.all([reloadRecords(), reloadBackupSummary()]);
     void runBackupQueue(false);
     return saved;
+  }
+
+  async function updateRegisteredExternalItems(record: CGMPRecord) {
+    let nextRecord = record;
+    const errors: string[] = [];
+
+    if (record.google_task_id && record.google_task_list_id) {
+      try {
+        const response = await fetch("/api/external/google/task", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ record }),
+        });
+        const payload = (await response.json().catch(() => ({}))) as GoogleTaskPayload;
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error || "GOOGLE_TASK_UPDATE_FAILED");
+        }
+        nextRecord = {
+          ...nextRecord,
+          external_action_status: "registered",
+          external_error: "",
+          google_task_status: payload.status || nextRecord.google_task_status || "needsAction",
+          google_task_updated_at: payload.updatedAt || new Date().toISOString(),
+        };
+      } catch (error) {
+        errors.push(error instanceof Error ? error.message : "Google Tasks更新に失敗しました");
+      }
+    }
+
+    if (record.google_calendar_event_id && record.google_calendar_id) {
+      try {
+        const response = await fetch("/api/external/google/calendar", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ record }),
+        });
+        const payload = (await response.json().catch(() => ({}))) as GoogleCalendarPayload;
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error || "GOOGLE_CALENDAR_UPDATE_FAILED");
+        }
+        nextRecord = {
+          ...nextRecord,
+          external_action_status: "registered",
+          external_error: "",
+          google_calendar_updated_at: payload.updatedAt || new Date().toISOString(),
+        };
+      } catch (error) {
+        errors.push(error instanceof Error ? error.message : "Google Calendar更新に失敗しました");
+      }
+    }
+
+    if (errors.length > 0) {
+      nextRecord = {
+        ...nextRecord,
+        external_action_status: "failed",
+        external_error: errors.join(" / "),
+      };
+    }
+
+    if (nextRecord !== record || errors.length > 0) {
+      return upsertRecord({ ...nextRecord, updated_at: new Date().toISOString() });
+    }
+    return record;
+  }
+
+  async function deleteRegisteredExternalItems(record: CGMPRecord) {
+    const errors: string[] = [];
+    const ignoreNotFound = (error: unknown) => /not\s*found|404/i.test(error instanceof Error ? error.message : String(error));
+
+    if (record.google_task_id && record.google_task_list_id) {
+      try {
+        const response = await fetch("/api/external/google/task", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            taskListId: record.google_task_list_id,
+            taskId: record.google_task_id,
+          }),
+        });
+        const payload = (await response.json().catch(() => ({}))) as GoogleTaskPayload;
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error || "GOOGLE_TASK_DELETE_FAILED");
+        }
+      } catch (error) {
+        if (!ignoreNotFound(error)) {
+          errors.push(error instanceof Error ? error.message : "Google Tasks削除に失敗しました");
+        }
+      }
+    }
+
+    if (record.google_calendar_event_id && record.google_calendar_id) {
+      try {
+        const response = await fetch("/api/external/google/calendar", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            calendarId: record.google_calendar_id,
+            eventId: record.google_calendar_event_id,
+          }),
+        });
+        const payload = (await response.json().catch(() => ({}))) as GoogleCalendarPayload;
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error || "GOOGLE_CALENDAR_DELETE_FAILED");
+        }
+      } catch (error) {
+        if (!ignoreNotFound(error)) {
+          errors.push(error instanceof Error ? error.message : "Google Calendar削除に失敗しました");
+        }
+      }
+    }
+
+    return errors;
+  }
+
+  async function syncExternalStatuses(showNotice = false) {
+    if (externalSyncing) return;
+    const targets = records.filter(
+      (record) => (record.google_task_id && record.google_task_list_id) || (record.google_calendar_event_id && record.google_calendar_id)
+    );
+    if (targets.length === 0) {
+      if (showNotice) setNotice({ kind: "info", text: "Google連携済みの記録はありません。" });
+      return;
+    }
+
+    setExternalSyncing(true);
+    try {
+      const response = await fetch("/api/external/google/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ records: targets }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as GoogleExternalSyncPayload;
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.error || "GOOGLE_EXTERNAL_SYNC_FAILED");
+      }
+
+      const resultById = new Map((payload.results || []).map((result) => [result.recordId, result]));
+      let changed = 0;
+      for (const record of targets) {
+        const result = resultById.get(record.id);
+        if (!result) continue;
+        const nextRecord: CGMPRecord = result.ok
+          ? {
+              ...record,
+              external_action_status: "registered",
+              external_error: "",
+              google_task_status: result.google_task_status || record.google_task_status,
+              google_task_updated_at: result.google_task_updated_at || record.google_task_updated_at,
+              google_calendar_updated_at: result.google_calendar_updated_at || record.google_calendar_updated_at,
+            }
+          : {
+              ...record,
+              external_action_status: "failed",
+              external_error: result.error || "Google状態同期に失敗しました",
+            };
+        if (JSON.stringify(nextRecord) !== JSON.stringify(record)) {
+          await upsertRecord({ ...nextRecord, updated_at: new Date().toISOString() });
+          changed += 1;
+        }
+      }
+      await Promise.all([reloadRecords(), reloadBackupSummary()]);
+      void runBackupQueue(false);
+      if (showNotice) {
+        setNotice({ kind: "info", text: `Google状態を同期しました（更新${changed}件）。` });
+      }
+    } catch (error) {
+      if (showNotice) {
+        setNotice({
+          kind: "error",
+          text: error instanceof Error ? error.message : "Google状態同期に失敗しました",
+        });
+      }
+    } finally {
+      setExternalSyncing(false);
+    }
   }
 
   async function registerGoogleTask(recordId: string) {
@@ -1528,6 +1718,14 @@ export default function Page() {
 
   useEffect(() => {
     if (!isReady) return;
+    if (initialExternalSyncDoneRef.current) return;
+    if (!records.some((record) => record.google_task_id || record.google_calendar_event_id)) return;
+    initialExternalSyncDoneRef.current = true;
+    void syncExternalStatuses(false);
+  }, [isReady, records]);
+
+  useEffect(() => {
+    if (!isReady) return;
     if (!initialDriveImportDoneRef.current) {
       initialDriveImportDoneRef.current = true;
       void importMissingFromDrive(false);
@@ -1543,6 +1741,7 @@ export default function Page() {
       if (document.visibilityState === "visible") {
         void runBackupQueue(false);
         void importMissingFromDrive(false);
+        void syncExternalStatuses(false);
       }
     };
 
@@ -1893,10 +2092,14 @@ export default function Page() {
     setDetailSaving(true);
     try {
       const nextRecord = formToRecord(detailDraft, { existing: selectedRecord });
-      await upsertRecord(nextRecord);
-      await reloadRecords(nextRecord.id);
+      const savedRecord = await upsertRecord(nextRecord);
+      const syncedRecord = await updateRegisteredExternalItems(savedRecord);
+      await reloadRecords(syncedRecord.id);
       await reloadBackupSummary();
-      setNotice({ kind: "info", text: "更新しました。" });
+      setNotice({
+        kind: syncedRecord.external_action_status === "failed" ? "error" : "info",
+        text: syncedRecord.external_action_status === "failed" ? "更新しましたがGoogle側の更新に失敗しました。" : "更新しました。",
+      });
       window.setTimeout(() => {
         void runBackupQueue(false);
       }, 0);
@@ -1922,6 +2125,7 @@ export default function Page() {
 
     setDetailDeleting(true);
     try {
+      const externalErrors = await deleteRegisteredExternalItems(targetRecord);
       await deleteRecord(targetRecord.id);
       await reloadRecords();
       await reloadBackupSummary();
@@ -1930,7 +2134,10 @@ export default function Page() {
         const remaining = records.filter((record) => record.id !== targetRecord.id);
         return remaining.find((record) => record.id === current)?.id ?? remaining[0]?.id ?? null;
       });
-      setNotice({ kind: "info", text: "削除しました。" });
+      setNotice({
+        kind: externalErrors.length > 0 ? "error" : "info",
+        text: externalErrors.length > 0 ? `ローカル削除しました。Google側削除は失敗: ${externalErrors.join(" / ")}` : "削除しました。",
+      });
     } catch (error) {
       setNotice({
         kind: "error",
@@ -1952,6 +2159,8 @@ export default function Page() {
     if (!confirmed) return;
 
     try {
+      const targets = records.filter((record) => checkedRecordIds.includes(record.id));
+      const externalErrors = (await Promise.all(targets.map((record) => deleteRegisteredExternalItems(record)))).flat();
       await Promise.all(checkedRecordIds.map((id) => deleteRecord(id)));
       const deletedIds = new Set(checkedRecordIds);
       setCheckedRecordIds([]);
@@ -1959,7 +2168,13 @@ export default function Page() {
       setSelectedId((current) => (current && deletedIds.has(current) ? null : current));
       await reloadRecords();
       await reloadBackupSummary();
-      setNotice({ kind: "info", text: `選択した${deletedIds.size}件を削除しました。` });
+      setNotice({
+        kind: externalErrors.length > 0 ? "error" : "info",
+        text:
+          externalErrors.length > 0
+            ? `選択${deletedIds.size}件をローカル削除しました。Google側削除の失敗があります。`
+            : `選択した${deletedIds.size}件を削除しました。`,
+      });
     } catch (error) {
       setNotice({
         kind: "error",
@@ -2375,6 +2590,9 @@ export default function Page() {
                     </button>
                     <button type="button" onClick={() => importMissingFromDrive(true)} disabled={driveImporting} className={secondaryButtonClass}>
                       {driveImporting ? "取り込み中..." : "未取り込みを追加"}
+                    </button>
+                    <button type="button" onClick={() => syncExternalStatuses(true)} disabled={externalSyncing} className={secondaryButtonClass}>
+                      {externalSyncing ? "同期中..." : "Google状態を同期"}
                     </button>
                     <a href="/api/auth/google/start" className={secondaryButtonClass}>
                       Google連携を認可

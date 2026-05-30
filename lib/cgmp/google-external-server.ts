@@ -23,6 +23,7 @@ type GoogleCalendarEvent = {
   id: string;
   htmlLink?: string;
   updated?: string;
+  status?: string;
 };
 
 async function googleJsonFetch<T>(url: string, init: RequestInit = {}) {
@@ -125,6 +126,61 @@ export async function updateGoogleTaskStatus({
   };
 }
 
+export async function updateGoogleTaskFromRecord(record: CGMPRecord) {
+  if (!record.google_task_id || !record.google_task_list_id) {
+    throw new Error("GOOGLE_TASK_ID_REQUIRED");
+  }
+  const task = await googleJsonFetch<GoogleTask>(
+    `${TASKS_API_BASE}/lists/${encodeURIComponent(record.google_task_list_id)}/tasks/${encodeURIComponent(record.google_task_id)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        title: normalizeRecordTitle(record),
+        notes: buildExternalNotes(record),
+        due: taskDueDate(record),
+      }),
+    }
+  );
+  return {
+    taskListId: record.google_task_list_id,
+    taskId: task.id || record.google_task_id,
+    status: task.status || record.google_task_status || "needsAction",
+    updatedAt: task.updated || new Date().toISOString(),
+  };
+}
+
+export async function getGoogleTaskStatus({
+  taskListId,
+  taskId,
+}: {
+  taskListId: string;
+  taskId: string;
+}) {
+  const task = await googleJsonFetch<GoogleTask>(
+    `${TASKS_API_BASE}/lists/${encodeURIComponent(taskListId)}/tasks/${encodeURIComponent(taskId)}`
+  );
+  return {
+    taskListId,
+    taskId: task.id || taskId,
+    status: task.status || "needsAction",
+    updatedAt: task.updated || new Date().toISOString(),
+  };
+}
+
+export async function deleteGoogleTask({
+  taskListId,
+  taskId,
+}: {
+  taskListId: string;
+  taskId: string;
+}) {
+  await googleJsonFetch<Record<string, never>>(
+    `${TASKS_API_BASE}/lists/${encodeURIComponent(taskListId)}/tasks/${encodeURIComponent(taskId)}`,
+    { method: "DELETE" }
+  );
+  return { taskListId, taskId };
+}
+
 function addMinutes(date: string, time: string, minutes: number) {
   const [year, month, day] = date.split("-").map((part) => Number(part));
   const [hour, minute] = time.split(":").map((part) => Number(part));
@@ -153,26 +209,11 @@ export async function createGoogleCalendarEventFromRecord(record: CGMPRecord) {
   }
 
   const calendarId = process.env.GOOGLE_CALENDAR_ID?.trim() || "primary";
-  const duration = Number.isFinite(Number(record.duration_minutes)) ? Number(record.duration_minutes) : 60;
-  const isAllDay = record.all_day || !record.time;
-  const start = isAllDay
-    ? { date: record.date }
-    : { dateTime: `${record.date}T${record.time}:00`, timeZone: DEFAULT_TIMEZONE };
-  const end = isAllDay
-    ? { date: addDays(record.date, 1) }
-    : { dateTime: addMinutes(record.date, record.time, duration), timeZone: DEFAULT_TIMEZONE };
-
   const event = await googleJsonFetch<GoogleCalendarEvent>(
     `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events`,
     {
       method: "POST",
-      body: JSON.stringify({
-        summary: normalizeRecordTitle(record),
-        description: buildExternalNotes(record),
-        location: record.location || undefined,
-        start,
-        end,
-      }),
+      body: JSON.stringify(buildCalendarEventBody(record)),
     }
   );
 
@@ -182,4 +223,78 @@ export async function createGoogleCalendarEventFromRecord(record: CGMPRecord) {
     htmlLink: event.htmlLink || "",
     updatedAt: event.updated || new Date().toISOString(),
   };
+}
+
+function buildCalendarEventBody(record: CGMPRecord) {
+  if (!record.date) {
+    throw new Error("CALENDAR_DATE_REQUIRED");
+  }
+
+  const duration = Number.isFinite(Number(record.duration_minutes)) ? Number(record.duration_minutes) : 60;
+  const isAllDay = record.all_day || !record.time;
+  const start = isAllDay
+    ? { date: record.date }
+    : { dateTime: `${record.date}T${record.time}:00`, timeZone: DEFAULT_TIMEZONE };
+  const end = isAllDay
+    ? { date: addDays(record.date, 1) }
+    : { dateTime: addMinutes(record.date, record.time, duration), timeZone: DEFAULT_TIMEZONE };
+
+  return {
+    summary: normalizeRecordTitle(record),
+    description: buildExternalNotes(record),
+    location: record.location || undefined,
+    start,
+    end,
+  };
+}
+
+export async function updateGoogleCalendarEventFromRecord(record: CGMPRecord) {
+  if (!record.google_calendar_event_id || !record.google_calendar_id) {
+    throw new Error("GOOGLE_CALENDAR_EVENT_ID_REQUIRED");
+  }
+  const event = await googleJsonFetch<GoogleCalendarEvent>(
+    `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(record.google_calendar_id)}/events/${encodeURIComponent(record.google_calendar_event_id)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(buildCalendarEventBody(record)),
+    }
+  );
+  return {
+    calendarId: record.google_calendar_id,
+    eventId: event.id || record.google_calendar_event_id,
+    htmlLink: event.htmlLink || "",
+    updatedAt: event.updated || new Date().toISOString(),
+  };
+}
+
+export async function getGoogleCalendarEventStatus({
+  calendarId,
+  eventId,
+}: {
+  calendarId: string;
+  eventId: string;
+}) {
+  const event = await googleJsonFetch<GoogleCalendarEvent>(
+    `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`
+  );
+  return {
+    calendarId,
+    eventId: event.id || eventId,
+    status: event.status || "confirmed",
+    updatedAt: event.updated || new Date().toISOString(),
+  };
+}
+
+export async function deleteGoogleCalendarEvent({
+  calendarId,
+  eventId,
+}: {
+  calendarId: string;
+  eventId: string;
+}) {
+  await googleJsonFetch<Record<string, never>>(
+    `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
+    { method: "DELETE" }
+  );
+  return { calendarId, eventId };
 }
