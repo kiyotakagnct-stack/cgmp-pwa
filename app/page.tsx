@@ -2301,6 +2301,12 @@ export default function Page() {
     setNotice({ kind: "info", text: "全件削除しました。" });
   }
 
+  function handleHardReloadApp() {
+    const url = new URL(window.location.href);
+    url.searchParams.set("reload", Date.now().toString());
+    window.location.replace(url.toString());
+  }
+
   async function handleScriptableImportFile(file: File | undefined) {
     if (!file) return;
     setScriptableImporting(true);
@@ -2615,6 +2621,17 @@ export default function Page() {
                   <p className="text-sm leading-6 text-slate-600">
                     Vercel では `OPENAI_API_KEY` と Google連携用の環境変数を設定してください。クライアント側には渡しません。
                   </p>
+                </div>
+                <div className={softPanelClass}>
+                  <div className="text-sm font-medium text-slate-800">アプリ更新</div>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">
+                    ホーム画面PWAで古い画面が残る場合は、キャッシュ回避つきで再読み込みします。
+                  </p>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button type="button" onClick={handleHardReloadApp} className={secondaryButtonClass}>
+                      アプリを再読み込み
+                    </button>
+                  </div>
                 </div>
                 <div className={softPanelClass}>
                   <div className="text-sm font-medium text-slate-800">Scriptableデータ移行</div>
