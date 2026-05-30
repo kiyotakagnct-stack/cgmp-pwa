@@ -113,6 +113,11 @@ type DeletedRecordsSummary = {
   count: number;
   latestDeletedAt: string;
 };
+type ExternalConfirmState = {
+  recordId: string;
+  action: "reminder" | "calendar";
+  title: string;
+} | null;
 
 type RecordFormState = {
   raw_input: string;
@@ -1142,6 +1147,7 @@ export default function Page() {
   const [lightbox, setLightbox] = useState<LightboxState>(null);
   const [photoProcessingCount, setPhotoProcessingCount] = useState(0);
   const [externalProcessingKey, setExternalProcessingKey] = useState("");
+  const [externalConfirm, setExternalConfirm] = useState<ExternalConfirmState>(null);
   const [externalSyncing, setExternalSyncing] = useState(false);
   const [aiProcessingOverlay, setAiProcessingOverlay] = useState<AiProcessingOverlayState | null>(null);
   const [aiProcessingElapsedMs, setAiProcessingElapsedMs] = useState(0);
@@ -1622,6 +1628,18 @@ export default function Page() {
     } finally {
       setBackupProcessing(false);
     }
+  }
+
+  async function confirmExternalRegistration() {
+    if (!externalConfirm) return;
+    const target = externalConfirm;
+    setExternalConfirm(null);
+    setSelectedId(target.recordId);
+    if (target.action === "reminder") {
+      await registerGoogleTask(target.recordId);
+      return;
+    }
+    await registerGoogleCalendarEvent(target.recordId);
   }
 
   async function loadDriveBackupList() {
@@ -2126,6 +2144,11 @@ export default function Page() {
       await reloadRecords(nextRecord.id);
       await reloadBackupSummary();
       setNotice({ kind: "info", text: "保存しました。" });
+      if (nextRecord.action === "reminder") {
+        setExternalConfirm({ recordId: nextRecord.id, action: "reminder", title: nextRecord.title || "（無題）" });
+      } else if (nextRecord.action === "calendar") {
+        setExternalConfirm({ recordId: nextRecord.id, action: "calendar", title: nextRecord.title || "（無題）" });
+      }
       window.setTimeout(() => {
         void runBackupQueue(false);
       }, 0);
@@ -2329,6 +2352,28 @@ export default function Page() {
             }`}
           >
             {notice.text}
+          </div>
+        ) : null}
+
+        {externalConfirm ? (
+          <div className="fixed inset-0 z-[90] flex items-end justify-center bg-white/65 px-4 py-5 backdrop-blur-sm sm:items-center">
+            <section className="w-full max-w-md rounded-[28px] border border-blue-100 bg-white p-5 shadow-[0_28px_90px_rgba(15,23,42,0.18)]">
+              <div className="text-[11px] uppercase tracking-[0.34em] text-blue-500">Google Sync</div>
+              <h2 className="mt-2 text-xl font-semibold text-slate-950">
+                {externalConfirm.action === "calendar" ? "Google Calendarにも登録しますか？" : "Google Tasksにも登録しますか？"}
+              </h2>
+              <p className="mt-3 text-sm leading-6 text-slate-600">
+                「{externalConfirm.title}」を保存しました。Google側にも作成すると、以後の完了状態や日時変更をCGMPと同期できます。
+              </p>
+              <div className="mt-5 flex flex-wrap gap-2">
+                <button type="button" onClick={confirmExternalRegistration} className={primaryButtonClass}>
+                  登録する
+                </button>
+                <button type="button" onClick={() => setExternalConfirm(null)} className={secondaryButtonClass}>
+                  今はしない
+                </button>
+              </div>
+            </section>
           </div>
         ) : null}
 
