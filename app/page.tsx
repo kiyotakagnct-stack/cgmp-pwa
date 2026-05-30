@@ -12,11 +12,13 @@ import {
   clearAllRecords,
   deleteRecord,
   loadAllRecords,
+  loadDeletedRecords,
   loadSettings,
   saveSettings,
   upsertRecord,
 } from "@/lib/cgmp/storage";
 import {
+  backupDeleteTombstoneNow,
   enqueueAllRecordsForBackup,
   getBackupStatus,
   hydrateMissingAttachmentBlobs,
@@ -28,6 +30,7 @@ import type {
   CGMPAction,
   CGMPAnalysisResponse,
   CGMPBackupSummary,
+  CGMPDeletedRecord,
   CGMPDomain,
   CGMPGoogleTaskStatus,
   CGMPPara,
@@ -96,9 +99,19 @@ type GoogleExternalSyncPayload = {
     google_task_updated_at?: string;
     google_calendar_status?: string;
     google_calendar_updated_at?: string;
+    calendar_title?: string;
+    calendar_location?: string;
+    calendar_date?: string;
+    calendar_time?: string;
+    calendar_all_day?: boolean;
+    calendar_duration_minutes?: number;
     error?: string;
   }>;
   error?: string;
+};
+type DeletedRecordsSummary = {
+  count: number;
+  latestDeletedAt: string;
 };
 
 type RecordFormState = {
@@ -1124,6 +1137,7 @@ export default function Page() {
   const [driveImporting, setDriveImporting] = useState(false);
   const [driveBackupRecords, setDriveBackupRecords] = useState<DriveBackupRecordPreview[] | null>(null);
   const [driveBackupCheckedAt, setDriveBackupCheckedAt] = useState("");
+  const [deletedRecordsSummary, setDeletedRecordsSummary] = useState<DeletedRecordsSummary | null>(null);
   const [checkedRecordIds, setCheckedRecordIds] = useState<string[]>([]);
   const [lightbox, setLightbox] = useState<LightboxState>(null);
   const [photoProcessingCount, setPhotoProcessingCount] = useState(0);
@@ -1161,6 +1175,14 @@ export default function Page() {
   async function reloadBackupSummary() {
     const nextSummary = await getBackupStatus();
     setBackupSummary(nextSummary);
+  }
+
+  async function reloadDeletedRecordsSummary() {
+    const tombstones = await loadDeletedRecords();
+    setDeletedRecordsSummary({
+      count: tombstones.length,
+      latestDeletedAt: tombstones[0]?.deleted_at || "",
+    });
   }
 
   function beginAiProcessing(kind: "text" | "image", label: string) {
@@ -1346,6 +1368,33 @@ export default function Page() {
     return errors;
   }
 
+  async function createDeletionTombstone(record: CGMPRecord, externalErrors: string[]): Promise<CGMPDeletedRecord | null> {
+    const tombstone = await deleteRecord(record.id, {
+      title: record.title || "",
+      drive_file_id: record.drive_file_id || "",
+      attachment_drive_file_ids: (record.attachments || []).flatMap((attachment) =>
+        [attachment.previewDriveFileId, attachment.thumbnailDriveFileId].filter(Boolean) as string[]
+      ),
+      google_task_id: record.google_task_id || "",
+      google_task_list_id: record.google_task_list_id || "",
+      google_calendar_event_id: record.google_calendar_event_id || "",
+      google_calendar_id: record.google_calendar_id || "",
+      external_delete_status: externalErrors.length > 0 ? "failed" : "done",
+      external_delete_error: externalErrors.join(" / "),
+    });
+
+    if (tombstone) {
+      const result = await backupDeleteTombstoneNow(tombstone);
+      if (!result.ok) {
+        setNotice({
+          kind: "error",
+          text: `削除済み情報のDrive同期に失敗しました: ${result.error || "UNKNOWN_ERROR"}`,
+        });
+      }
+    }
+    return tombstone;
+  }
+
   async function syncExternalStatuses(showNotice = false) {
     if (externalSyncing) return;
     const targets = records.filter(
@@ -1381,6 +1430,15 @@ export default function Page() {
               google_task_status: result.google_task_status || record.google_task_status,
               google_task_updated_at: result.google_task_updated_at || record.google_task_updated_at,
               google_calendar_updated_at: result.google_calendar_updated_at || record.google_calendar_updated_at,
+              title: result.calendar_title || record.title,
+              location: result.calendar_location ?? record.location,
+              date: result.calendar_date || record.date,
+              time: typeof result.calendar_time === "string" ? result.calendar_time : record.time,
+              all_day: typeof result.calendar_all_day === "boolean" ? result.calendar_all_day : record.all_day,
+              duration_minutes:
+                typeof result.calendar_duration_minutes === "number" && result.calendar_duration_minutes > 0
+                  ? result.calendar_duration_minutes
+                  : record.duration_minutes,
             }
           : {
               ...record,
@@ -1596,13 +1654,13 @@ export default function Page() {
     setDriveImporting(true);
     try {
       const result = await importMissingRecordsFromDrive();
-      await Promise.all([reloadRecords(), reloadBackupSummary()]);
-      if (showNotice || result.imported.length > 0) {
+      await Promise.all([reloadRecords(), reloadBackupSummary(), reloadDeletedRecordsSummary()]);
+      if (showNotice || result.imported.length > 0 || result.deleted.length > 0) {
         setNotice({
           kind: "info",
           text:
-            result.imported.length > 0 || result.merged.length > 0 || result.hydratedAttachments > 0
-              ? `Drive同期: メモ追加${result.imported.length}件 / 写真メタ更新${result.merged.length}件 / 画像復元${result.hydratedAttachments}件`
+            result.imported.length > 0 || result.merged.length > 0 || result.deleted.length > 0 || result.hydratedAttachments > 0
+              ? `Drive同期: メモ追加${result.imported.length}件 / 削除反映${result.deleted.length}件 / 写真メタ更新${result.merged.length}件 / 画像復元${result.hydratedAttachments}件`
               : "Driveから追加する未取り込みメモはありません。",
         });
       }
@@ -1622,15 +1680,20 @@ export default function Page() {
     let cancelled = false;
     void (async () => {
       try {
-        const [nextRecords, nextSettings, nextBackupSummary] = await Promise.all([
+        const [nextRecords, nextSettings, nextBackupSummary, nextDeletedRecords] = await Promise.all([
           loadAllRecords(),
           loadSettings(),
           getBackupStatus(),
+          loadDeletedRecords(),
         ]);
         if (cancelled) return;
         setRecords(nextRecords);
         setSettingsDraft(nextSettings);
         setBackupSummary(nextBackupSummary);
+        setDeletedRecordsSummary({
+          count: nextDeletedRecords.length,
+          latestDeletedAt: nextDeletedRecords[0]?.deleted_at || "",
+        });
         setSelectedId(null);
         setIsReady(true);
       } catch (error) {
@@ -2126,9 +2189,10 @@ export default function Page() {
     setDetailDeleting(true);
     try {
       const externalErrors = await deleteRegisteredExternalItems(targetRecord);
-      await deleteRecord(targetRecord.id);
+      await createDeletionTombstone(targetRecord, externalErrors);
       await reloadRecords();
       await reloadBackupSummary();
+      await reloadDeletedRecordsSummary();
       setIsEditPanelOpen(false);
       setSelectedId((current) => {
         const remaining = records.filter((record) => record.id !== targetRecord.id);
@@ -2136,7 +2200,10 @@ export default function Page() {
       });
       setNotice({
         kind: externalErrors.length > 0 ? "error" : "info",
-        text: externalErrors.length > 0 ? `ローカル削除しました。Google側削除は失敗: ${externalErrors.join(" / ")}` : "削除しました。",
+        text:
+          externalErrors.length > 0
+            ? `削除しました。Google側削除は失敗: ${externalErrors.join(" / ")}`
+            : "削除しました。Driveにも削除済み情報を同期しました。",
       });
     } catch (error) {
       setNotice({
@@ -2161,13 +2228,14 @@ export default function Page() {
     try {
       const targets = records.filter((record) => checkedRecordIds.includes(record.id));
       const externalErrors = (await Promise.all(targets.map((record) => deleteRegisteredExternalItems(record)))).flat();
-      await Promise.all(checkedRecordIds.map((id) => deleteRecord(id)));
+      await Promise.all(targets.map((record) => createDeletionTombstone(record, externalErrors)));
       const deletedIds = new Set(checkedRecordIds);
       setCheckedRecordIds([]);
       setIsEditPanelOpen((open) => (selectedId && deletedIds.has(selectedId) ? false : open));
       setSelectedId((current) => (current && deletedIds.has(current) ? null : current));
       await reloadRecords();
       await reloadBackupSummary();
+      await reloadDeletedRecordsSummary();
       setNotice({
         kind: externalErrors.length > 0 ? "error" : "info",
         text:
@@ -2575,6 +2643,16 @@ export default function Page() {
                       <dt className="text-slate-400">最終バックアップ</dt>
                       <dd className="mt-1 text-sm text-slate-700">
                         {backupSummary?.lastBackupAt ? formatJstDateTime(backupSummary.lastBackupAt) : "未実行"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-slate-400">削除済み</dt>
+                      <dd className="mt-1 text-lg font-semibold text-slate-700">{deletedRecordsSummary?.count ?? "-"}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-slate-400">最終削除</dt>
+                      <dd className="mt-1 text-sm text-slate-700">
+                        {deletedRecordsSummary?.latestDeletedAt ? formatJstDateTime(deletedRecordsSummary.latestDeletedAt) : "なし"}
                       </dd>
                     </div>
                   </dl>

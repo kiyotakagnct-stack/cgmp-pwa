@@ -36,6 +36,8 @@ export type CGMPBackupStatus =
   | "backup_failed"
   | "conflicted";
 
+export type CGMPExternalDeleteStatus = "none" | "done" | "failed";
+
 export type CGMPAnalysis = {
   action: CGMPAction;
   para: CGMPPara;
@@ -143,6 +145,23 @@ export type CGMPBackupSummary = {
   conflicted: number;
   queue: number;
   lastBackupAt: string;
+};
+
+export type CGMPDeletedRecord = {
+  schema_version: 1;
+  record_id: string;
+  deleted_at: string;
+  source_device_id: string;
+  title: string;
+  updated_at: string;
+  drive_file_id: string;
+  attachment_drive_file_ids: string[];
+  google_task_id: string;
+  google_task_list_id: string;
+  google_calendar_event_id: string;
+  google_calendar_id: string;
+  external_delete_status: CGMPExternalDeleteStatus;
+  external_delete_error: string;
 };
 
 export type CGMPSettings = {

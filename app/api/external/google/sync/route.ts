@@ -12,6 +12,12 @@ type SyncResult = {
   google_task_updated_at?: string;
   google_calendar_updated_at?: string;
   google_calendar_status?: string;
+  calendar_title?: string;
+  calendar_location?: string;
+  calendar_date?: string;
+  calendar_time?: string;
+  calendar_all_day?: boolean;
+  calendar_duration_minutes?: number;
   error?: string;
 };
 
@@ -39,6 +45,12 @@ export async function POST(request: Request) {
           });
           result.google_calendar_status = event.status;
           result.google_calendar_updated_at = event.updatedAt;
+          result.calendar_title = event.event.title;
+          result.calendar_location = event.event.location;
+          result.calendar_date = event.event.date;
+          result.calendar_time = event.event.time;
+          result.calendar_all_day = event.event.allDay;
+          result.calendar_duration_minutes = event.event.durationMinutes;
         }
       } catch (error) {
         result.ok = false;

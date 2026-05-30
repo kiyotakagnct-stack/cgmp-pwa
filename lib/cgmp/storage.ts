@@ -1,14 +1,16 @@
-import type { CGMPBackupQueueItem, CGMPBackupStatus, CGMPRecord, CGMPSettings } from "./types";
+import type { CGMPBackupQueueItem, CGMPBackupStatus, CGMPDeletedRecord, CGMPExternalDeleteStatus, CGMPRecord, CGMPSettings } from "./types";
 import { clearImageBlobs, deleteImageBlobs } from "@/lib/db/imageBlobStore";
 import type { ImageAttachment } from "@/types/image";
 
 const DB_NAME = "cgmp-pwa";
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const RECORDS_STORE = "records";
 const SETTINGS_STORE = "settings";
 const BACKUP_QUEUE_STORE = "backup_queue";
 const IMAGE_BLOBS_STORE = "image_blobs";
+const DELETED_RECORDS_STORE = "deleted_records";
 const SETTINGS_KEY = "settings";
+const DEVICE_ID_KEY = "cgmp-device-id";
 
 function hasWindow() {
   return typeof window !== "undefined";
@@ -48,11 +50,28 @@ function openDatabase() {
       if (!db.objectStoreNames.contains(IMAGE_BLOBS_STORE)) {
         db.createObjectStore(IMAGE_BLOBS_STORE, { keyPath: "key" });
       }
+      if (!db.objectStoreNames.contains(DELETED_RECORDS_STORE)) {
+        const store = db.createObjectStore(DELETED_RECORDS_STORE, { keyPath: "record_id" });
+        store.createIndex("deleted_at", "deleted_at", { unique: false });
+      }
     };
 
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error || new Error("Failed to open IndexedDB"));
   });
+}
+
+function createDeviceId() {
+  if (!hasWindow()) return "server";
+  try {
+    const current = window.localStorage.getItem(DEVICE_ID_KEY);
+    if (current) return current;
+    const next = `device_${crypto.randomUUID()}`;
+    window.localStorage.setItem(DEVICE_ID_KEY, next);
+    return next;
+  } catch {
+    return "device_unknown";
+  }
 }
 
 function normalizeAttachments(value: unknown): ImageAttachment[] {
@@ -86,6 +105,29 @@ function normalizeAttachments(value: unknown): ImageAttachment[] {
     });
   }
   return attachments;
+}
+
+function normalizeDeletedRecord(value: unknown): CGMPDeletedRecord | null {
+  const source = value && typeof value === "object" ? (value as Partial<CGMPDeletedRecord>) : {};
+  if (!source.record_id || !source.deleted_at) return null;
+  return {
+    schema_version: 1,
+    record_id: String(source.record_id),
+    deleted_at: String(source.deleted_at),
+    source_device_id: String(source.source_device_id || createDeviceId()),
+    title: String(source.title || ""),
+    updated_at: String(source.updated_at || source.deleted_at),
+    drive_file_id: String(source.drive_file_id || ""),
+    attachment_drive_file_ids: Array.isArray(source.attachment_drive_file_ids)
+      ? source.attachment_drive_file_ids.map((id) => String(id)).filter(Boolean)
+      : [],
+    google_task_id: String(source.google_task_id || ""),
+    google_task_list_id: String(source.google_task_list_id || ""),
+    google_calendar_event_id: String(source.google_calendar_event_id || ""),
+    google_calendar_id: String(source.google_calendar_id || ""),
+    external_delete_status: (source.external_delete_status || "none") as CGMPExternalDeleteStatus,
+    external_delete_error: String(source.external_delete_error || ""),
+  };
 }
 
 function getAttachmentBlobKeys(record: Pick<CGMPRecord, "attachments">) {
@@ -210,6 +252,33 @@ export async function loadAllRecords() {
   }
 }
 
+export async function loadDeletedRecords() {
+  if (!hasWindow()) return [];
+
+  const db = await openDatabase();
+  try {
+    const tx = db.transaction(DELETED_RECORDS_STORE, "readonly");
+    const store = tx.objectStore(DELETED_RECORDS_STORE);
+    const result = await requestToPromise<CGMPDeletedRecord[]>(store.getAll());
+    return (Array.isArray(result) ? result : [])
+      .map(normalizeDeletedRecord)
+      .filter((item): item is CGMPDeletedRecord => Boolean(item))
+      .sort((a, b) => String(b.deleted_at).localeCompare(String(a.deleted_at)));
+  } finally {
+    db.close();
+  }
+}
+
+export async function upsertDeletedRecord(tombstone: CGMPDeletedRecord) {
+  if (!hasWindow()) return tombstone;
+  const normalized = normalizeDeletedRecord(tombstone);
+  if (!normalized) return tombstone;
+  await withTransaction(DELETED_RECORDS_STORE, "readwrite", async (store) => {
+    store.put(normalized);
+  });
+  return normalized;
+}
+
 export async function upsertRecord(record: CGMPRecord) {
   if (!hasWindow()) return record;
 
@@ -277,22 +346,25 @@ export async function putRecordWithoutBackup(record: CGMPRecord) {
   return record;
 }
 
-export async function deleteRecord(id: string) {
-  if (!hasWindow()) return;
+export async function applyRemoteRecordDeletion(tombstone: CGMPDeletedRecord) {
+  if (!hasWindow()) return null;
+  const normalized = normalizeDeletedRecord(tombstone);
+  if (!normalized) return null;
 
   const db = await openDatabase();
   let blobKeys: string[] = [];
   await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction([RECORDS_STORE, BACKUP_QUEUE_STORE], "readwrite");
+    const tx = db.transaction([RECORDS_STORE, BACKUP_QUEUE_STORE, DELETED_RECORDS_STORE], "readwrite");
     const recordsStore = tx.objectStore(RECORDS_STORE);
-    const getRequest = recordsStore.get(id);
+    const getRequest = recordsStore.get(normalized.record_id);
     getRequest.onsuccess = () => {
       const record = getRequest.result ? normalizeRecord(getRequest.result as CGMPRecord) : null;
       blobKeys = record ? getAttachmentBlobKeys(record) : [];
-      recordsStore.delete(id);
+      recordsStore.delete(normalized.record_id);
       const queueStore = tx.objectStore(BACKUP_QUEUE_STORE);
-      queueStore.delete(`record:${id}`);
-      record?.attachments?.forEach((attachment) => queueStore.delete(`attachment:${id}:${attachment.id}`));
+      queueStore.delete(`record:${normalized.record_id}`);
+      record?.attachments?.forEach((attachment) => queueStore.delete(`attachment:${normalized.record_id}:${attachment.id}`));
+      tx.objectStore(DELETED_RECORDS_STORE).put(normalized);
     };
     getRequest.onerror = () => {
       reject(getRequest.error || new Error("IndexedDB request failed"));
@@ -307,6 +379,63 @@ export async function deleteRecord(id: string) {
     };
   });
   await deleteImageBlobs(blobKeys);
+  return normalized;
+}
+
+export async function deleteRecord(id: string, patch: Partial<CGMPDeletedRecord> = {}) {
+  if (!hasWindow()) return null;
+
+  const db = await openDatabase();
+  let blobKeys: string[] = [];
+  let tombstone: CGMPDeletedRecord | null = null;
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction([RECORDS_STORE, BACKUP_QUEUE_STORE, DELETED_RECORDS_STORE], "readwrite");
+    const recordsStore = tx.objectStore(RECORDS_STORE);
+    const getRequest = recordsStore.get(id);
+    getRequest.onsuccess = () => {
+      const record = getRequest.result ? normalizeRecord(getRequest.result as CGMPRecord) : null;
+      const deletedAt = patch.deleted_at || new Date().toISOString();
+      blobKeys = record ? getAttachmentBlobKeys(record) : [];
+      tombstone = normalizeDeletedRecord({
+        schema_version: 1,
+        record_id: id,
+        deleted_at: deletedAt,
+        source_device_id: patch.source_device_id || createDeviceId(),
+        title: patch.title || record?.title || "",
+        updated_at: patch.updated_at || record?.updated_at || deletedAt,
+        drive_file_id: patch.drive_file_id || record?.drive_file_id || "",
+        attachment_drive_file_ids:
+          patch.attachment_drive_file_ids ||
+          (record?.attachments || []).flatMap((attachment) =>
+            [attachment.previewDriveFileId, attachment.thumbnailDriveFileId].filter(Boolean) as string[]
+          ),
+        google_task_id: patch.google_task_id || record?.google_task_id || "",
+        google_task_list_id: patch.google_task_list_id || record?.google_task_list_id || "",
+        google_calendar_event_id: patch.google_calendar_event_id || record?.google_calendar_event_id || "",
+        google_calendar_id: patch.google_calendar_id || record?.google_calendar_id || "",
+        external_delete_status: patch.external_delete_status || "none",
+        external_delete_error: patch.external_delete_error || "",
+      });
+      recordsStore.delete(id);
+      const queueStore = tx.objectStore(BACKUP_QUEUE_STORE);
+      queueStore.delete(`record:${id}`);
+      record?.attachments?.forEach((attachment) => queueStore.delete(`attachment:${id}:${attachment.id}`));
+      if (tombstone) tx.objectStore(DELETED_RECORDS_STORE).put(tombstone);
+    };
+    getRequest.onerror = () => {
+      reject(getRequest.error || new Error("IndexedDB request failed"));
+    };
+    tx.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+    tx.onerror = () => {
+      db.close();
+      reject(tx.error || new Error("IndexedDB transaction failed"));
+    };
+  });
+  await deleteImageBlobs(blobKeys);
+  return tombstone;
 }
 
 export async function clearAllRecords() {

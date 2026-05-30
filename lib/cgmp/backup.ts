@@ -1,20 +1,24 @@
 import {
+  applyRemoteRecordDeletion,
   enqueueBackup,
   loadAllRecords,
   loadBackupQueue,
+  loadDeletedRecords,
   putRecordWithoutBackup,
   removeBackupQueueItem,
+  upsertDeletedRecord,
   updateAttachmentBackupState,
   updateBackupQueueItem,
   updateRecordBackupState,
 } from "./storage";
 import { getImageBlob, putImageBlob } from "@/lib/db/imageBlobStore";
-import type { CGMPBackupSummary, CGMPRecord } from "./types";
+import type { CGMPBackupSummary, CGMPDeletedRecord, CGMPRecord } from "./types";
 import type { ImageAttachment } from "@/types/image";
 
 type BackupProcessItemResult = {
   ok: boolean;
   recordId: string;
+  itemType?: "record" | "attachment" | "delete";
   attachmentId?: string;
   driveFileId?: string;
   previewDriveFileId?: string;
@@ -42,6 +46,7 @@ type DriveBackupRecord = {
 };
 
 type DriveManifest = {
+  deleted_records?: Record<string, CGMPDeletedRecord>;
   attachments?: Record<
     string,
     {
@@ -59,6 +64,12 @@ type RestoreResponse = {
   ok?: boolean;
   records?: DriveBackupRecord[];
   manifest?: DriveManifest;
+  error?: string;
+};
+
+type TombstoneBackupResponse = {
+  ok?: boolean;
+  backedUpAt?: string;
   error?: string;
 };
 
@@ -100,8 +111,32 @@ async function backupRecord(record: CGMPRecord): Promise<BackupProcessItemResult
   return {
     ok: true,
     recordId: record.id,
+    itemType: "record",
     driveFileId: payload.driveFileId,
     checksum: payload.checksum,
+    backedUpAt: payload.backedUpAt,
+  };
+}
+
+async function backupDeletedRecord(tombstone: CGMPDeletedRecord): Promise<BackupProcessItemResult> {
+  const response = await fetch("/api/backup/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tombstone }),
+  });
+  const payload = (await response.json().catch(() => ({}))) as TombstoneBackupResponse;
+  if (!response.ok || !payload.ok) {
+    return {
+      ok: false,
+      recordId: tombstone.record_id,
+      itemType: "delete",
+      error: payload.error || "DELETE_TOMBSTONE_BACKUP_FAILED",
+    };
+  }
+  return {
+    ok: true,
+    recordId: tombstone.record_id,
+    itemType: "delete",
     backedUpAt: payload.backedUpAt,
   };
 }
@@ -145,6 +180,7 @@ export async function backupAttachment(record: CGMPRecord, attachment: ImageAtta
   return {
     ok: true,
     recordId: record.id,
+    itemType: "attachment",
     attachmentId: attachment.id,
     previewDriveFileId: payload.previewDriveFileId,
     thumbnailDriveFileId: payload.thumbnailDriveFileId,
@@ -154,7 +190,7 @@ export async function backupAttachment(record: CGMPRecord, attachment: ImageAtta
 }
 
 export async function processBackupQueue() {
-  const [records, queue] = await Promise.all([loadAllRecords(), loadBackupQueue()]);
+  const [records, queue, tombstones] = await Promise.all([loadAllRecords(), loadBackupQueue(), loadDeletedRecords()]);
   const queuedIds = new Set(queue.map((item) => item.id));
   const syntheticAttachmentItems = records.flatMap((record) =>
     (record.attachments || [])
@@ -182,6 +218,11 @@ export async function processBackupQueue() {
       return (left.created_at || "").localeCompare(right.created_at || "");
     });
   const results: BackupProcessItemResult[] = [];
+
+  for (const tombstone of tombstones.filter((item) => isRetryDue(""))) {
+    const result = await backupDeletedRecord(tombstone);
+    results.push(result);
+  }
 
   for (const item of dueItems) {
     const record = await loadLatestRecord(item.record_id);
@@ -310,6 +351,11 @@ export async function getBackupStatus(): Promise<CGMPBackupSummary> {
   }
 
   return summary;
+}
+
+export async function backupDeleteTombstoneNow(tombstone: CGMPDeletedRecord) {
+  const saved = await upsertDeletedRecord(tombstone);
+  return backupDeletedRecord(saved);
 }
 
 export async function restoreFromDrive() {
@@ -443,7 +489,11 @@ export async function hydrateMissingAttachmentBlobs() {
 }
 
 export async function importMissingRecordsFromDrive() {
-  const [localRecords, response] = await Promise.all([loadAllRecords(), fetch("/api/backup/restore")]);
+  const [localRecords, localTombstones, response] = await Promise.all([
+    loadAllRecords(),
+    loadDeletedRecords(),
+    fetch("/api/backup/restore"),
+  ]);
   const payload = (await response.json().catch(() => ({}))) as RestoreResponse;
   if (!response.ok || !payload.ok) {
     throw new Error(payload.error || "RESTORE_FAILED");
@@ -451,11 +501,28 @@ export async function importMissingRecordsFromDrive() {
 
   const localIds = new Set(localRecords.map((record) => record.id));
   const localById = new Map(localRecords.map((record) => [record.id, record]));
+  const deletedRecords = payload.manifest?.deleted_records || {};
+  const localDeletedById = new Map(localTombstones.map((tombstone) => [tombstone.record_id, tombstone]));
   const imported: CGMPRecord[] = [];
   const merged: CGMPRecord[] = [];
+  const deleted: CGMPDeletedRecord[] = [];
   const skipped: DriveBackupRecord[] = [];
 
+  for (const tombstone of Object.values(deletedRecords)) {
+    if (!tombstone?.record_id || !tombstone.deleted_at) continue;
+    const localTombstone = localDeletedById.get(tombstone.record_id);
+    if (localTombstone && localTombstone.deleted_at >= tombstone.deleted_at) continue;
+    await applyRemoteRecordDeletion(tombstone);
+    deleted.push(tombstone);
+    localIds.delete(tombstone.record_id);
+  }
+
   for (const item of payload.records || []) {
+    const tombstone = deletedRecords[item.id] || localDeletedById.get(item.id);
+    if (tombstone) {
+      skipped.push(item);
+      continue;
+    }
     if (item.error || !isRestorableRecord(item.record)) {
       skipped.push(item);
       continue;
@@ -498,6 +565,7 @@ export async function importMissingRecordsFromDrive() {
   return {
     imported,
     merged,
+    deleted,
     skipped,
     hydratedAttachments: hydration.hydrated,
     failedAttachments: hydration.failed,

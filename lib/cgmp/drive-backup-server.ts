@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-import type { CGMPRecord } from "./types";
+import type { CGMPDeletedRecord, CGMPRecord } from "./types";
 import type { ImageAttachment } from "@/types/image";
 
 const DRIVE_API_BASE = "https://www.googleapis.com/drive/v3";
@@ -43,6 +43,7 @@ type DriveManifest = {
       backed_up_at: string;
     }
   >;
+  deleted_records?: Record<string, CGMPDeletedRecord>;
 };
 
 function requiredEnv(name: string) {
@@ -346,6 +347,7 @@ async function loadManifest(): Promise<{ file: DriveFile | null; manifest: Drive
         updated_at: new Date().toISOString(),
         records: {},
         attachments: {},
+        deleted_records: {},
       },
     };
   }
@@ -359,8 +361,26 @@ async function loadManifest(): Promise<{ file: DriveFile | null; manifest: Drive
       updated_at: String(parsed.updated_at || new Date().toISOString()),
       records: parsed.records && typeof parsed.records === "object" ? parsed.records : {},
       attachments: parsed.attachments && typeof parsed.attachments === "object" ? parsed.attachments : {},
+      deleted_records:
+        parsed.deleted_records && typeof parsed.deleted_records === "object"
+          ? (parsed.deleted_records as Record<string, CGMPDeletedRecord>)
+          : {},
     },
   };
+}
+
+export async function backupDeletedRecordToDrive(tombstone: CGMPDeletedRecord) {
+  const backedUpAt = new Date().toISOString();
+  const { manifest } = await loadManifest();
+  manifest.updated_at = backedUpAt;
+  manifest.deleted_records = manifest.deleted_records || {};
+  manifest.deleted_records[tombstone.record_id] = {
+    ...tombstone,
+    schema_version: 1,
+    deleted_at: tombstone.deleted_at || backedUpAt,
+  };
+  await upsertJsonFile("manifest.json", JSON.stringify(manifest, null, 2));
+  return { backedUpAt };
 }
 
 export async function backupRecordToDrive(record: CGMPRecord) {

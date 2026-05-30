@@ -21,9 +21,22 @@ type GoogleTask = {
 
 type GoogleCalendarEvent = {
   id: string;
+  summary?: string;
+  description?: string;
+  location?: string;
   htmlLink?: string;
   updated?: string;
   status?: string;
+  start?: {
+    date?: string;
+    dateTime?: string;
+    timeZone?: string;
+  };
+  end?: {
+    date?: string;
+    dateTime?: string;
+    timeZone?: string;
+  };
 };
 
 async function googleJsonFetch<T>(url: string, init: RequestInit = {}) {
@@ -203,6 +216,42 @@ function addDays(date: string, days: number) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+function parseGoogleDateTime(value: string | undefined) {
+  if (!value) return { date: "", time: "" };
+  const match = value.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
+  if (match) return { date: match[1], time: match[2] };
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return { date: "", time: "" };
+  const jst = new Date(date.getTime() + 9 * 60 * 60 * 1000);
+  return {
+    date: `${jst.getUTCFullYear()}-${String(jst.getUTCMonth() + 1).padStart(2, "0")}-${String(jst.getUTCDate()).padStart(2, "0")}`,
+    time: `${String(jst.getUTCHours()).padStart(2, "0")}:${String(jst.getUTCMinutes()).padStart(2, "0")}`,
+  };
+}
+
+function minutesBetween(start: string | undefined, end: string | undefined) {
+  if (!start || !end) return 0;
+  const startTime = new Date(start).getTime();
+  const endTime = new Date(end).getTime();
+  if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || endTime <= startTime) return 0;
+  return Math.max(1, Math.round((endTime - startTime) / 60000));
+}
+
+function extractCalendarEventFields(event: GoogleCalendarEvent) {
+  const allDay = Boolean(event.start?.date && !event.start?.dateTime);
+  const parsedStart = allDay
+    ? { date: event.start?.date || "", time: "" }
+    : parseGoogleDateTime(event.start?.dateTime);
+  return {
+    title: event.summary || "",
+    location: event.location || "",
+    date: parsedStart.date,
+    time: parsedStart.time,
+    allDay,
+    durationMinutes: allDay ? 0 : minutesBetween(event.start?.dateTime, event.end?.dateTime),
+  };
+}
+
 export async function createGoogleCalendarEventFromRecord(record: CGMPRecord) {
   if (!record.date) {
     throw new Error("CALENDAR_DATE_REQUIRED");
@@ -222,6 +271,7 @@ export async function createGoogleCalendarEventFromRecord(record: CGMPRecord) {
     eventId: event.id,
     htmlLink: event.htmlLink || "",
     updatedAt: event.updated || new Date().toISOString(),
+    event: extractCalendarEventFields(event),
   };
 }
 
@@ -264,6 +314,7 @@ export async function updateGoogleCalendarEventFromRecord(record: CGMPRecord) {
     eventId: event.id || record.google_calendar_event_id,
     htmlLink: event.htmlLink || "",
     updatedAt: event.updated || new Date().toISOString(),
+    event: extractCalendarEventFields(event),
   };
 }
 
@@ -282,6 +333,7 @@ export async function getGoogleCalendarEventStatus({
     eventId: event.id || eventId,
     status: event.status || "confirmed",
     updatedAt: event.updated || new Date().toISOString(),
+    event: extractCalendarEventFields(event),
   };
 }
 
