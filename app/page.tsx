@@ -550,14 +550,6 @@ function getDomainSymbol(domain: CGMPDomain | string) {
   return DOMAIN_SYMBOLS[(normalized || "other") as Exclude<CGMPDomain, "">] || DOMAIN_SYMBOLS.other;
 }
 
-function getMinimapSymbol(record: CGMPRecord) {
-  const timeline = getRecordTimeline(record);
-  if (record.action === "unclear") return "?";
-  if (record.action === "reminder") return "・";
-  if (record.action === "calendar" || timeline.sourceLabel === "scheduled") return "●";
-  return "·";
-}
-
 function scrollToElementById(id: string, block: ScrollLogicalPosition = "start") {
   document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block });
 }
@@ -1395,10 +1387,10 @@ function WeeklyMinimap({
         if (event.currentTarget.contains(event.relatedTarget)) return;
         setIsExpanded(false);
       }}
-      className={`fixed right-1 top-28 bottom-32 z-30 select-none overflow-hidden rounded-3xl border transition-all duration-200 sm:right-3 sm:top-20 sm:bottom-24 ${
+      className={`fixed right-1 top-28 bottom-32 select-none overflow-hidden rounded-3xl border transition-all duration-200 sm:right-3 sm:top-20 sm:bottom-24 ${
         isExpanded
-          ? "w-16 border-[color:var(--border)] bg-[var(--card)] px-1.5 py-2 opacity-95 shadow-[0_18px_44px_var(--shadow-soft)] backdrop-blur-xl sm:w-[4.5rem]"
-          : "w-9 border-transparent bg-transparent px-1 py-1 opacity-40 shadow-none backdrop-blur-none hover:opacity-70 sm:w-10"
+          ? "z-[70] w-16 border-[color:var(--border)] bg-[var(--card)] px-1.5 py-2 opacity-95 shadow-[0_18px_44px_var(--shadow-soft)] backdrop-blur-xl sm:w-[4.5rem]"
+          : "z-30 w-9 border-transparent bg-transparent px-1 py-1 opacity-40 shadow-none backdrop-blur-none hover:opacity-70 sm:w-10"
       }`}
       aria-label="Weekly Minimap"
     >
@@ -1427,7 +1419,7 @@ function WeeklyMinimap({
                   : isExpanded
                     ? "border-transparent hover:border-[color:var(--border)] hover:bg-[var(--card-soft)]"
                     : "border-transparent bg-transparent shadow-none"
-              } ${isExpanded ? "grid grid-cols-[1.55rem_minmax(0,1fr)] items-start gap-1 px-1.5 py-1" : "px-1 py-0.5 text-left"}`}
+              } ${isExpanded ? "grid grid-cols-[1.65rem_minmax(0,1fr)] items-start gap-1 px-1.5 py-1" : "px-1 py-0.5 text-left"}`}
               aria-label={`${WEEKDAY_MINI_LABELS[index]}へ移動`}
             >
               <div
@@ -1448,19 +1440,11 @@ function WeeklyMinimap({
                     return (
                       <div
                         key={record.id}
-                        className={`flex w-full items-center overflow-hidden rounded-sm ${
-                          isExpanded ? "h-3 gap-1" : "h-2 gap-0.5"
-                        }`}
+                        className={`flex w-full items-center overflow-hidden rounded-sm ${isExpanded ? "h-2.5" : "h-2"}`}
                         aria-hidden="true"
                       >
                         <span
-                          className={`shrink-0 leading-none ${isExpanded ? "w-2.5 text-[9px]" : "w-1.5 text-[6px]"}`}
-                          style={{ color } as CSSProperties}
-                        >
-                          {getMinimapSymbol(record)}
-                        </span>
-                        <span
-                          className={`min-w-0 flex-1 rounded-full ${isExpanded ? "h-1 opacity-85" : "h-0.5 opacity-65"}`}
+                          className={`min-w-0 flex-1 rounded-full ${isExpanded ? "h-1 opacity-90" : "h-0.5 opacity-65"}`}
                           style={{ backgroundColor: color } as CSSProperties}
                         />
                       </div>
