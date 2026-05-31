@@ -98,6 +98,12 @@ type GoogleExternalSyncPayload = {
   results?: Array<{
     recordId: string;
     ok: boolean;
+    title?: string;
+    hasTask?: boolean;
+    hasCalendar?: boolean;
+    elapsedMs?: number;
+    taskElapsedMs?: number;
+    calendarElapsedMs?: number;
     google_task_status?: CGMPGoogleTaskStatus;
     google_task_due_date?: string;
     google_task_updated_at?: string;
@@ -113,6 +119,19 @@ type GoogleExternalSyncPayload = {
   }>;
   error?: string;
 };
+type ExternalSyncReportItem = {
+  recordId: string;
+  title: string;
+  ok: boolean;
+  changed: boolean;
+  elapsedMs: number;
+  taskElapsedMs: number;
+  calendarElapsedMs: number;
+  applyElapsedMs: number;
+  hasTask: boolean;
+  hasCalendar: boolean;
+  error: string;
+};
 type ExternalSyncProgressState = {
   phase: "preparing" | "checking" | "applying" | "done" | "error";
   total: number;
@@ -123,6 +142,10 @@ type ExternalSyncProgressState = {
   message: string;
   currentTitle: string;
   startedAt: number;
+  checkingElapsedMs: number;
+  applyingElapsedMs: number;
+  reloadElapsedMs: number;
+  reportItems: ExternalSyncReportItem[];
   finishedAt?: number;
 };
 type DeletedRecordsSummary = {
@@ -1937,12 +1960,51 @@ export default function Page() {
   }
 
   async function syncExternalStatuses(showNotice = false) {
-    if (externalSyncing) return;
+    if (externalSyncing) {
+      if (showNotice) {
+        const now = performance.now();
+        setExternalSyncProgress({
+          phase: "done",
+          total: 0,
+          checked: 0,
+          applied: 0,
+          changed: 0,
+          failed: 0,
+          message: "バックグラウンド同期が実行中です。少し待ってからもう一度押してください。",
+          currentTitle: "",
+          startedAt: now,
+          checkingElapsedMs: 0,
+          applyingElapsedMs: 0,
+          reloadElapsedMs: 0,
+          reportItems: [],
+        });
+      }
+      return;
+    }
     const targets = records.filter(
       (record) => (record.google_task_id && record.google_task_list_id) || (record.google_calendar_event_id && record.google_calendar_id)
     );
     if (targets.length === 0) {
-      if (showNotice) setNotice({ kind: "info", text: "Google連携済みの記録はありません。" });
+      if (showNotice) {
+        const now = performance.now();
+        setExternalSyncProgress({
+          phase: "done",
+          total: 0,
+          checked: 0,
+          applied: 0,
+          changed: 0,
+          failed: 0,
+          message: "Google連携済みの記録はありません。",
+          currentTitle: "",
+          startedAt: now,
+          checkingElapsedMs: 0,
+          applyingElapsedMs: 0,
+          reloadElapsedMs: 0,
+          reportItems: [],
+          finishedAt: now,
+        });
+        setNotice({ kind: "info", text: "Google連携済みの記録はありません。" });
+      }
       return;
     }
 
@@ -1960,6 +2022,10 @@ export default function Page() {
         message: "同期対象を確認しています。",
         currentTitle: "",
         startedAt,
+        checkingElapsedMs: 0,
+        applyingElapsedMs: 0,
+        reloadElapsedMs: 0,
+        reportItems: [],
         ...prev,
         ...patch,
       }));
@@ -1981,6 +2047,7 @@ export default function Page() {
     try {
       const results: NonNullable<GoogleExternalSyncPayload["results"]> = [];
       let checkedFailed = 0;
+      const checkingStartedAt = performance.now();
       if (showNotice) {
         const batchSize = 5;
         for (let index = 0; index < targets.length; index += batchSize) {
@@ -2003,6 +2070,7 @@ export default function Page() {
             phase: "checking",
             checked: batchEnd,
             failed: checkedFailed,
+            checkingElapsedMs: Math.round(performance.now() - checkingStartedAt),
             message: `Google側と照合中 ${batchEnd}/${targets.length}`,
             currentTitle:
               batchTargets.length > 1
@@ -2013,10 +2081,13 @@ export default function Page() {
       } else {
         results.push(...(await fetchSyncResults(targets)));
       }
+      const checkingElapsedMs = Math.round(performance.now() - checkingStartedAt);
 
       const resultById = new Map(results.map((result) => [result.recordId, result]));
       let changed = 0;
       let failed = results.filter((result) => !result.ok).length;
+      const reportItems: ExternalSyncReportItem[] = [];
+      const applyingStartedAt = performance.now();
       for (let index = 0; index < targets.length; index += 1) {
         const record = targets[index];
         const result = resultById.get(record.id);
@@ -2030,6 +2101,7 @@ export default function Page() {
           currentTitle: record.title || record.summary || record.raw_input || record.id,
         });
         if (await isRecordDeleted(record.id)) continue;
+        const applyStartedAt = performance.now();
         const taskDueDate =
           record.google_task_id && typeof result.google_task_due_date === "string" ? result.google_task_due_date : record.date;
         const calendarDate = record.google_calendar_event_id && result.calendar_date ? result.calendar_date : "";
@@ -2064,16 +2136,60 @@ export default function Page() {
           }
           changed += 1;
         }
+        const applyElapsedMs = Math.round(performance.now() - applyStartedAt);
+        reportItems.push({
+          recordId: record.id,
+          title: result.title || record.title || record.summary || record.raw_input || record.id,
+          ok: result.ok,
+          changed: JSON.stringify(nextRecord) !== JSON.stringify(record),
+          elapsedMs: Math.round(result.elapsedMs || 0),
+          taskElapsedMs: Math.round(result.taskElapsedMs || 0),
+          calendarElapsedMs: Math.round(result.calendarElapsedMs || 0),
+          applyElapsedMs,
+          hasTask: Boolean(result.hasTask),
+          hasCalendar: Boolean(result.hasCalendar),
+          error: result.error || "",
+        });
         setManualProgress({
           phase: "applying",
           applied: index + 1,
           changed,
           failed,
+          applyingElapsedMs: Math.round(performance.now() - applyingStartedAt),
+          reportItems,
           message: `CGMPへ反映中 ${index + 1}/${targets.length}`,
           currentTitle: record.title || record.summary || record.raw_input || record.id,
         });
       }
+      const applyingElapsedMs = Math.round(performance.now() - applyingStartedAt);
+      const reloadStartedAt = performance.now();
       await Promise.all([reloadRecords(), reloadBackupSummary()]);
+      const reloadElapsedMs = Math.round(performance.now() - reloadStartedAt);
+      const finishedAt = performance.now();
+      if (showNotice) {
+        console.table(
+          reportItems.map((item) => ({
+            title: item.title,
+            ok: item.ok,
+            changed: item.changed,
+            total_ms: item.elapsedMs,
+            task_ms: item.taskElapsedMs,
+            calendar_ms: item.calendarElapsedMs,
+            apply_ms: item.applyElapsedMs,
+            error: item.error,
+          }))
+        );
+        console.debug("[cgmp:google-sync] report", {
+          total: targets.length,
+          changed,
+          failed,
+          checkingElapsedMs,
+          applyingElapsedMs,
+          reloadElapsedMs,
+          totalElapsedMs: Math.round(finishedAt - startedAt),
+          slowest: [...reportItems].sort((a, b) => b.elapsedMs + b.applyElapsedMs - (a.elapsedMs + a.applyElapsedMs)).slice(0, 8),
+        });
+      }
       setManualProgress({
         phase: "done",
         applied: targets.length,
@@ -2081,7 +2197,11 @@ export default function Page() {
         failed,
         message: failed > 0 ? `同期完了: 更新${changed}件 / 失敗${failed}件` : `同期完了: 更新${changed}件`,
         currentTitle: "",
-        finishedAt: performance.now(),
+        checkingElapsedMs,
+        applyingElapsedMs,
+        reloadElapsedMs,
+        reportItems,
+        finishedAt,
       });
       if (showNotice) {
         setNotice({
@@ -3047,6 +3167,9 @@ export default function Page() {
                   ? externalSyncProgress.applied
                   : Math.max(externalSyncProgress.checked, externalSyncProgress.applied);
               const ratio = Math.min(100, Math.round((activeCount / Math.max(1, externalSyncProgress.total)) * 100));
+              const slowestItems = [...externalSyncProgress.reportItems]
+                .sort((a, b) => b.elapsedMs + b.applyElapsedMs - (a.elapsedMs + a.applyElapsedMs))
+                .slice(0, 6);
               return (
                 <section className="w-full max-w-md rounded-[28px] border border-[color:var(--border)] bg-[var(--card)] p-5 shadow-[0_28px_90px_var(--shadow-soft)]">
                   <div className="text-[11px] uppercase tracking-[0.34em] text-[var(--accent)]">Google Sync</div>
@@ -3095,6 +3218,43 @@ export default function Page() {
                     </div>
                   </div>
                   <div className="mt-3 text-xs text-[var(--subtle)]">経過 {elapsed} ms</div>
+                  {done ? (
+                    <div className="mt-4 rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] p-3 text-xs text-[var(--muted)]">
+                      <div className="font-semibold text-[var(--text)]">同期レポート</div>
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        <span>照合: {externalSyncProgress.checkingElapsedMs} ms</span>
+                        <span>反映: {externalSyncProgress.applyingElapsedMs} ms</span>
+                        <span>再読込: {externalSyncProgress.reloadElapsedMs} ms</span>
+                        <span>合計: {elapsed} ms</span>
+                      </div>
+                      {slowestItems.length > 0 ? (
+                        <div className="mt-3">
+                          <div className="font-semibold text-[var(--text)]">遅い順</div>
+                          <div className="mt-2 max-h-44 space-y-2 overflow-auto pr-1">
+                            {slowestItems.map((item) => (
+                              <div key={item.recordId} className="rounded-xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
+                                <div className="truncate font-semibold text-[var(--text)]">
+                                  {item.ok ? "" : "失敗: "}
+                                  {item.title}
+                                </div>
+                                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
+                                  <span>total {item.elapsedMs}ms</span>
+                                  {item.hasTask ? <span>Tasks {item.taskElapsedMs}ms</span> : null}
+                                  {item.hasCalendar ? <span>Calendar {item.calendarElapsedMs}ms</span> : null}
+                                  <span>反映 {item.applyElapsedMs}ms</span>
+                                  {item.changed ? <span>更新あり</span> : <span>変更なし</span>}
+                                </div>
+                                {item.error ? <div className="mt-1 text-[11px] text-[var(--danger)]">{item.error}</div> : null}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                      <p className="mt-3 text-[11px] leading-5 text-[var(--subtle)]">
+                        この内容はブラウザconsoleにも出力しています。スクショやconsoleログを見れば、どこが遅いか追いやすくなります。
+                      </p>
+                    </div>
+                  ) : null}
                   {done ? (
                     <div className="mt-5 flex justify-end">
                       <button type="button" onClick={() => setExternalSyncProgress(null)} className={secondaryButtonClass}>
@@ -3499,7 +3659,7 @@ export default function Page() {
                     <button type="button" onClick={() => importMissingFromDrive(true)} disabled={driveImporting} className={secondaryButtonClass}>
                       {driveImporting ? "取り込み中..." : "未取り込みを追加"}
                     </button>
-                    <button type="button" onClick={() => syncExternalStatuses(true)} disabled={externalSyncing} className={secondaryButtonClass}>
+                    <button type="button" onClick={() => syncExternalStatuses(true)} className={secondaryButtonClass}>
                       {externalSyncing ? "同期中..." : "Google状態を同期"}
                     </button>
                     <a href="/api/auth/google/start" className={secondaryButtonClass}>
