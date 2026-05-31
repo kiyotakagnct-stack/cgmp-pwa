@@ -148,6 +148,31 @@ type ExternalSyncProgressState = {
   reportItems: ExternalSyncReportItem[];
   finishedAt?: number;
 };
+type BackupSyncReportItem = {
+  recordId: string;
+  title: string;
+  ok: boolean;
+  itemType: string;
+  attachmentId: string;
+  elapsedMs: number;
+  blobElapsedMs: number;
+  uploadElapsedMs: number;
+  previewSizeBytes: number;
+  thumbnailSizeBytes: number;
+  error: string;
+};
+type BackupSyncProgressState = {
+  phase: "processing" | "done" | "error";
+  message: string;
+  startedAt: number;
+  finishedAt?: number;
+  total: number;
+  succeeded: number;
+  failed: number;
+  processElapsedMs: number;
+  reloadElapsedMs: number;
+  reportItems: BackupSyncReportItem[];
+};
 type DeletedRecordsSummary = {
   count: number;
   latestDeletedAt: string;
@@ -1685,6 +1710,7 @@ export default function Page() {
   const [pendingMiniJumpId, setPendingMiniJumpId] = useState<string | null>(null);
   const [backupSummary, setBackupSummary] = useState<CGMPBackupSummary | null>(null);
   const [backupProcessing, setBackupProcessing] = useState(false);
+  const [backupSyncProgress, setBackupSyncProgress] = useState<BackupSyncProgressState | null>(null);
   const [driveBackupLoading, setDriveBackupLoading] = useState(false);
   const [driveImporting, setDriveImporting] = useState(false);
   const [driveBackupRecords, setDriveBackupRecords] = useState<DriveBackupRecordPreview[] | null>(null);
@@ -1780,12 +1806,100 @@ export default function Page() {
   }
 
   async function runBackupQueue(showNotice = false) {
-    if (backupProcessing) return;
+    if (backupProcessing) {
+      if (showNotice) {
+        const now = performance.now();
+        setBackupSyncProgress({
+          phase: "processing",
+          message: "バックアップ処理がすでに実行中です。完了まで少し待ってください。",
+          startedAt: now,
+          total: 0,
+          succeeded: 0,
+          failed: 0,
+          processElapsedMs: 0,
+          reloadElapsedMs: 0,
+          reportItems: [],
+        });
+      }
+      return;
+    }
+    const startedAt = performance.now();
+    if (showNotice) {
+      setBackupSyncProgress({
+        phase: "processing",
+        message: "Google Driveバックアップを開始しています。",
+        startedAt,
+        total: 0,
+        succeeded: 0,
+        failed: 0,
+        processElapsedMs: 0,
+        reloadElapsedMs: 0,
+        reportItems: [],
+      });
+    }
     setBackupProcessing(true);
     try {
+      const processStartedAt = performance.now();
       const results = await processBackupQueue();
+      const processElapsedMs = Math.round(performance.now() - processStartedAt);
+      const reloadStartedAt = performance.now();
       await Promise.all([reloadRecords(), reloadBackupSummary()]);
+      const reloadElapsedMs = Math.round(performance.now() - reloadStartedAt);
       const failed = results.filter((result) => !result.ok).length;
+      const reportItems: BackupSyncReportItem[] = results.map((result) => ({
+        recordId: result.recordId,
+        title: result.title || result.recordId,
+        ok: result.ok,
+        itemType: result.itemType || "record",
+        attachmentId: result.attachmentId || "",
+        elapsedMs: Math.round(result.elapsedMs || 0),
+        blobElapsedMs: Math.round(result.blobElapsedMs || 0),
+        uploadElapsedMs: Math.round(result.uploadElapsedMs || 0),
+        previewSizeBytes: result.previewSizeBytes || 0,
+        thumbnailSizeBytes: result.thumbnailSizeBytes || 0,
+        error: result.error || "",
+      }));
+      if (showNotice) {
+        const finishedAt = performance.now();
+        console.table(
+          reportItems.map((item) => ({
+            title: item.title,
+            ok: item.ok,
+            type: item.itemType,
+            total_ms: item.elapsedMs,
+            blob_ms: item.blobElapsedMs,
+            upload_ms: item.uploadElapsedMs,
+            preview_kb: Math.round(item.previewSizeBytes / 1024),
+            error: item.error,
+          }))
+        );
+        console.debug("[cgmp:drive-backup] report", {
+          total: results.length,
+          succeeded: results.length - failed,
+          failed,
+          processElapsedMs,
+          reloadElapsedMs,
+          totalElapsedMs: Math.round(finishedAt - startedAt),
+          slowest: [...reportItems].sort((a, b) => b.elapsedMs - a.elapsedMs).slice(0, 8),
+        });
+        setBackupSyncProgress({
+          phase: "done",
+          message:
+            results.length === 0
+              ? "バックアップ待ちの記録はありません。"
+              : failed > 0
+                ? `バックアップ完了: 成功${results.length - failed}件 / 失敗${failed}件`
+                : `バックアップ完了: 成功${results.length}件`,
+          startedAt,
+          finishedAt,
+          total: results.length,
+          succeeded: results.length - failed,
+          failed,
+          processElapsedMs,
+          reloadElapsedMs,
+          reportItems,
+        });
+      }
       if (showNotice) {
         setNotice({
           kind: failed > 0 ? "error" : "info",
@@ -1798,6 +1912,20 @@ export default function Page() {
         });
       }
     } catch (error) {
+      if (showNotice) {
+        setBackupSyncProgress({
+          phase: "error",
+          message: error instanceof Error ? error.message : "バックアップに失敗しました",
+          startedAt,
+          finishedAt: performance.now(),
+          total: 0,
+          succeeded: 0,
+          failed: 1,
+          processElapsedMs: Math.round(performance.now() - startedAt),
+          reloadElapsedMs: 0,
+          reportItems: [],
+        });
+      }
       if (showNotice) {
         setNotice({
           kind: "error",
@@ -3268,6 +3396,101 @@ export default function Page() {
           </div>
         ) : null}
 
+        {backupSyncProgress ? (
+          <div className="fixed inset-0 z-[95] flex items-end justify-center bg-white/65 px-4 py-5 backdrop-blur-sm dark:bg-slate-950/55 sm:items-center">
+            {(() => {
+              const done = backupSyncProgress.phase === "done" || backupSyncProgress.phase === "error";
+              const elapsed = Math.round((backupSyncProgress.finishedAt || performance.now()) - backupSyncProgress.startedAt);
+              const slowestItems = [...backupSyncProgress.reportItems].sort((a, b) => b.elapsedMs - a.elapsedMs).slice(0, 6);
+              return (
+                <section className="w-full max-w-md rounded-[28px] border border-[color:var(--border)] bg-[var(--card)] p-5 shadow-[0_28px_90px_var(--shadow-soft)]">
+                  <div className="text-[11px] uppercase tracking-[0.34em] text-[var(--accent)]">Drive Backup</div>
+                  <div className="mt-3 flex items-start justify-between gap-3">
+                    <div>
+                      <h2 className="text-xl font-semibold text-[var(--text)]">
+                        {backupSyncProgress.phase === "done"
+                          ? "バックアップが完了しました"
+                          : backupSyncProgress.phase === "error"
+                            ? "バックアップで停止しました"
+                            : "Google Driveへ同期中"}
+                      </h2>
+                      <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{backupSyncProgress.message}</p>
+                    </div>
+                    {!done ? (
+                      <div className="mt-1 h-9 w-9 shrink-0 animate-spin rounded-full border-4 border-[color:var(--accent-soft)] border-t-[color:var(--accent)]" />
+                    ) : (
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--accent-soft)] text-sm font-bold text-[var(--accent)]">
+                        {backupSyncProgress.phase === "done" ? "✓" : "!"}
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-4 grid grid-cols-2 gap-2 text-xs text-[var(--muted)]">
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
+                      対象 {backupSyncProgress.total}件
+                    </div>
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
+                      成功 {backupSyncProgress.succeeded}件
+                    </div>
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
+                      失敗 {backupSyncProgress.failed}件
+                    </div>
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
+                      経過 {elapsed} ms
+                    </div>
+                  </div>
+                  {done ? (
+                    <div className="mt-4 rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] p-3 text-xs text-[var(--muted)]">
+                      <div className="font-semibold text-[var(--text)]">Drive同期レポート</div>
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        <span>処理: {backupSyncProgress.processElapsedMs} ms</span>
+                        <span>再読込: {backupSyncProgress.reloadElapsedMs} ms</span>
+                        <span>合計: {elapsed} ms</span>
+                        <span>対象: {backupSyncProgress.total}件</span>
+                      </div>
+                      {slowestItems.length > 0 ? (
+                        <div className="mt-3">
+                          <div className="font-semibold text-[var(--text)]">遅い順</div>
+                          <div className="mt-2 max-h-44 space-y-2 overflow-auto pr-1">
+                            {slowestItems.map((item) => (
+                              <div
+                                key={`${item.recordId}:${item.itemType}:${item.attachmentId}`}
+                                className="rounded-xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2"
+                              >
+                                <div className="truncate font-semibold text-[var(--text)]">
+                                  {item.ok ? "" : "失敗: "}
+                                  {item.title}
+                                </div>
+                                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
+                                  <span>{item.itemType}</span>
+                                  <span>total {item.elapsedMs}ms</span>
+                                  {item.blobElapsedMs > 0 ? <span>Blob {item.blobElapsedMs}ms</span> : null}
+                                  {item.uploadElapsedMs > 0 ? <span>Upload {item.uploadElapsedMs}ms</span> : null}
+                                  {item.previewSizeBytes > 0 ? <span>{Math.round(item.previewSizeBytes / 1024)}KB</span> : null}
+                                </div>
+                                {item.error ? <div className="mt-1 text-[11px] text-[var(--danger)]">{item.error}</div> : null}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                      <p className="mt-3 text-[11px] leading-5 text-[var(--subtle)]">
+                        この内容はブラウザconsoleにも出力しています。Drive同期が遅い原因の切り分けに使えます。
+                      </p>
+                    </div>
+                  ) : null}
+                  {done ? (
+                    <div className="mt-5 flex justify-end">
+                      <button type="button" onClick={() => setBackupSyncProgress(null)} className={secondaryButtonClass}>
+                        閉じる
+                      </button>
+                    </div>
+                  ) : null}
+                </section>
+              );
+            })()}
+          </div>
+        ) : null}
+
         {tab === "home" ? (
           <div className="grid gap-3 sm:gap-4">
             <section className={panelClass}>
@@ -3647,7 +3870,7 @@ export default function Page() {
                     </div>
                   </dl>
                   <div className="mt-4 flex flex-wrap gap-2">
-                    <button type="button" onClick={() => runBackupQueue(true)} disabled={backupProcessing} className={primaryButtonClass}>
+                    <button type="button" onClick={() => runBackupQueue(true)} className={primaryButtonClass}>
                       {backupProcessing ? "処理中..." : "今すぐバックアップ"}
                     </button>
                     <button type="button" onClick={rebackupAllRecords} disabled={backupProcessing} className={secondaryButtonClass}>

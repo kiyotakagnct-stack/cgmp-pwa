@@ -18,6 +18,7 @@ import type { ImageAttachment } from "@/types/image";
 type BackupProcessItemResult = {
   ok: boolean;
   recordId: string;
+  title?: string;
   itemType?: "record" | "attachment" | "delete";
   attachmentId?: string;
   driveFileId?: string;
@@ -25,6 +26,11 @@ type BackupProcessItemResult = {
   thumbnailDriveFileId?: string;
   checksum?: string;
   backedUpAt?: string;
+  elapsedMs?: number;
+  blobElapsedMs?: number;
+  uploadElapsedMs?: number;
+  previewSizeBytes?: number;
+  thumbnailSizeBytes?: number;
   error?: string;
 };
 
@@ -95,6 +101,7 @@ function backupItemPriority(item: { item_type: "record" | "attachment"; created_
 }
 
 async function backupRecord(record: CGMPRecord): Promise<BackupProcessItemResult> {
+  const startedAt = performance.now();
   const response = await fetch("/api/backup/record", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -105,20 +112,26 @@ async function backupRecord(record: CGMPRecord): Promise<BackupProcessItemResult
     return {
       ok: false,
       recordId: record.id,
+      title: record.title || record.summary || record.raw_input || record.id,
+      itemType: "record",
+      elapsedMs: Math.round(performance.now() - startedAt),
       error: payload.error || "BACKUP_REQUEST_FAILED",
     };
   }
   return {
     ok: true,
     recordId: record.id,
+    title: record.title || record.summary || record.raw_input || record.id,
     itemType: "record",
     driveFileId: payload.driveFileId,
     checksum: payload.checksum,
     backedUpAt: payload.backedUpAt,
+    elapsedMs: Math.round(performance.now() - startedAt),
   };
 }
 
 async function backupDeletedRecord(tombstone: CGMPDeletedRecord): Promise<BackupProcessItemResult> {
+  const startedAt = performance.now();
   const response = await fetch("/api/backup/delete", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -129,30 +142,41 @@ async function backupDeletedRecord(tombstone: CGMPDeletedRecord): Promise<Backup
     return {
       ok: false,
       recordId: tombstone.record_id,
+      title: tombstone.title || tombstone.record_id,
       itemType: "delete",
+      elapsedMs: Math.round(performance.now() - startedAt),
       error: payload.error || "DELETE_TOMBSTONE_BACKUP_FAILED",
     };
   }
   return {
     ok: true,
     recordId: tombstone.record_id,
+    title: tombstone.title || tombstone.record_id,
     itemType: "delete",
     backedUpAt: payload.backedUpAt,
+    elapsedMs: Math.round(performance.now() - startedAt),
   };
 }
 
 export async function backupAttachment(record: CGMPRecord, attachment: ImageAttachment): Promise<BackupProcessItemResult> {
+  const startedAt = performance.now();
+  const blobStartedAt = performance.now();
   const previewBlob = await getImageBlob(attachment.previewBlobKey);
   if (!previewBlob) {
     return {
       ok: false,
       recordId: record.id,
+      title: record.title || record.summary || record.raw_input || record.id,
+      itemType: "attachment",
       attachmentId: attachment.id,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      blobElapsedMs: Math.round(performance.now() - blobStartedAt),
       error: "PREVIEW_BLOB_NOT_FOUND",
     };
   }
 
   const thumbnailBlob = attachment.thumbnailBlobKey ? await getImageBlob(attachment.thumbnailBlobKey) : null;
+  const blobElapsedMs = Math.round(performance.now() - blobStartedAt);
   const formData = new FormData();
   formData.append("recordId", record.id);
   formData.append("attachment", JSON.stringify(attachment));
@@ -161,10 +185,12 @@ export async function backupAttachment(record: CGMPRecord, attachment: ImageAtta
     formData.append("thumbnail", thumbnailBlob, "thumbnail.jpg");
   }
 
+  const uploadStartedAt = performance.now();
   const response = await fetch("/api/backup/attachment", {
     method: "POST",
     body: formData,
   });
+  const uploadElapsedMs = Math.round(performance.now() - uploadStartedAt);
   const payload = (await response.json().catch(() => ({}))) as BackupProcessItemResult & {
     ok?: boolean;
     detail?: string;
@@ -173,19 +199,32 @@ export async function backupAttachment(record: CGMPRecord, attachment: ImageAtta
     return {
       ok: false,
       recordId: record.id,
+      title: record.title || record.summary || record.raw_input || record.id,
+      itemType: "attachment",
       attachmentId: attachment.id,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      blobElapsedMs,
+      uploadElapsedMs,
+      previewSizeBytes: previewBlob.size,
+      thumbnailSizeBytes: thumbnailBlob?.size || 0,
       error: payload.detail || payload.error || "ATTACHMENT_BACKUP_REQUEST_FAILED",
     };
   }
   return {
     ok: true,
     recordId: record.id,
+    title: record.title || record.summary || record.raw_input || record.id,
     itemType: "attachment",
     attachmentId: attachment.id,
     previewDriveFileId: payload.previewDriveFileId,
     thumbnailDriveFileId: payload.thumbnailDriveFileId,
     checksum: payload.checksum,
     backedUpAt: payload.backedUpAt,
+    elapsedMs: Math.round(performance.now() - startedAt),
+    blobElapsedMs,
+    uploadElapsedMs,
+    previewSizeBytes: previewBlob.size,
+    thumbnailSizeBytes: thumbnailBlob?.size || 0,
   };
 }
 
