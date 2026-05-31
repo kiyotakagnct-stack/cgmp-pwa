@@ -65,7 +65,7 @@ import type { CSSProperties, ReactNode, RefObject } from "react";
 import type { ImageAttachment, ImageVisionResult } from "@/types/image";
 
 type AppTab = "home" | "week" | "compose" | "settings";
-type SortKey = "updated_at" | "datetime";
+type SortKey = "updated_at" | "created_at" | "datetime";
 type SearchMode = "text" | "semantic";
 type ThemeMode = "system" | "light" | "dark";
 type Notice = { kind: "info" | "error"; text: string } | null;
@@ -2301,7 +2301,7 @@ export default function Page() {
               external_error: result.error || "Google状態同期に失敗しました",
             };
         if (JSON.stringify(nextRecord) !== JSON.stringify(record)) {
-          const saved = await putRecordWithoutBackup({ ...nextRecord, updated_at: new Date().toISOString() });
+          const saved = await putRecordWithoutBackup({ ...nextRecord, updated_at: record.updated_at });
           setRecords((current) => current.map((item) => (item.id === saved.id ? saved : item)));
           if (selectedId === saved.id) {
             setDetailDraft(formFromRecord(saved));
@@ -3017,6 +3017,12 @@ export default function Page() {
       if (sortKey === "datetime") {
         const aValue = getDateSortValue(a);
         const bValue = getDateSortValue(b);
+        if (aValue === bValue) return String(b.id).localeCompare(String(a.id));
+        return bValue - aValue;
+      }
+      if (sortKey === "created_at") {
+        const aValue = new Date(a.created_at || a.updated_at).getTime();
+        const bValue = new Date(b.created_at || b.updated_at).getTime();
         if (aValue === bValue) return String(b.id).localeCompare(String(a.id));
         return bValue - aValue;
       }
@@ -3905,9 +3911,12 @@ export default function Page() {
                     <LabeledSelect
                       label="並び順"
                       value={sortKey}
-                      onChange={(value) => setSortKey(value === "datetime" ? "datetime" : "updated_at")}
+                      onChange={(value) =>
+                        setSortKey(value === "datetime" ? "datetime" : value === "created_at" ? "created_at" : "updated_at")
+                      }
                       options={[
                         { value: "updated_at", label: "更新順" },
+                        { value: "created_at", label: "作成順" },
                         { value: "datetime", label: "日時順" },
                       ]}
                     />
