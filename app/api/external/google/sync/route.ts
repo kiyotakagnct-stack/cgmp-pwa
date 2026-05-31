@@ -9,6 +9,7 @@ type SyncResult = {
   recordId: string;
   ok: boolean;
   google_task_status?: string;
+  google_task_due_date?: string;
   google_task_updated_at?: string;
   google_calendar_updated_at?: string;
   google_calendar_status?: string;
@@ -36,6 +37,7 @@ export async function POST(request: Request) {
             taskId: record.google_task_id,
           });
           result.google_task_status = task.status;
+          result.google_task_due_date = task.dueDate;
           result.google_task_updated_at = task.updatedAt;
         }
         if (record.google_calendar_event_id && record.google_calendar_id) {

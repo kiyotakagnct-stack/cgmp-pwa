@@ -15,6 +15,7 @@ import {
   loadDeletedRecords,
   isRecordDeleted,
   loadSettings,
+  putRecordWithoutBackup,
   saveSettings,
   upsertRecord,
 } from "@/lib/cgmp/storage";
@@ -98,6 +99,7 @@ type GoogleExternalSyncPayload = {
     recordId: string;
     ok: boolean;
     google_task_status?: CGMPGoogleTaskStatus;
+    google_task_due_date?: string;
     google_task_updated_at?: string;
     google_calendar_status?: string;
     google_calendar_updated_at?: string;
@@ -110,6 +112,18 @@ type GoogleExternalSyncPayload = {
     error?: string;
   }>;
   error?: string;
+};
+type ExternalSyncProgressState = {
+  phase: "preparing" | "checking" | "applying" | "done" | "error";
+  total: number;
+  checked: number;
+  applied: number;
+  changed: number;
+  failed: number;
+  message: string;
+  currentTitle: string;
+  startedAt: number;
+  finishedAt?: number;
 };
 type DeletedRecordsSummary = {
   count: number;
@@ -1659,6 +1673,7 @@ export default function Page() {
   const [externalProcessingKey, setExternalProcessingKey] = useState("");
   const [externalConfirm, setExternalConfirm] = useState<ExternalConfirmState>(null);
   const [externalSyncing, setExternalSyncing] = useState(false);
+  const [externalSyncProgress, setExternalSyncProgress] = useState<ExternalSyncProgressState | null>(null);
   const [aiProcessingOverlay, setAiProcessingOverlay] = useState<AiProcessingOverlayState | null>(null);
   const [aiProcessingElapsedMs, setAiProcessingElapsedMs] = useState(0);
   const [scriptableImporting, setScriptableImporting] = useState(false);
@@ -1932,23 +1947,92 @@ export default function Page() {
     }
 
     setExternalSyncing(true);
-    try {
+    const startedAt = performance.now();
+    const setManualProgress = (patch: Partial<ExternalSyncProgressState>) => {
+      if (!showNotice) return;
+      setExternalSyncProgress((prev) => ({
+        phase: "preparing",
+        total: targets.length,
+        checked: 0,
+        applied: 0,
+        changed: 0,
+        failed: 0,
+        message: "同期対象を確認しています。",
+        currentTitle: "",
+        startedAt,
+        ...prev,
+        ...patch,
+      }));
+    };
+    const fetchSyncResults = async (syncTargets: CGMPRecord[]) => {
       const response = await fetch("/api/external/google/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ records: targets }),
+        body: JSON.stringify({ records: syncTargets }),
       });
       const payload = (await response.json().catch(() => ({}))) as GoogleExternalSyncPayload;
       if (!response.ok || !payload.ok) {
         throw new Error(payload.error || "GOOGLE_EXTERNAL_SYNC_FAILED");
       }
+      return payload.results || [];
+    };
 
-      const resultById = new Map((payload.results || []).map((result) => [result.recordId, result]));
+    setManualProgress({ phase: "preparing", message: `同期対象 ${targets.length} 件を準備しています。` });
+    try {
+      const results: NonNullable<GoogleExternalSyncPayload["results"]> = [];
+      let checkedFailed = 0;
+      if (showNotice) {
+        const batchSize = 5;
+        for (let index = 0; index < targets.length; index += batchSize) {
+          const batchTargets = targets.slice(index, index + batchSize);
+          const batchEnd = Math.min(index + batchTargets.length, targets.length);
+          const firstTarget = batchTargets[0];
+          setManualProgress({
+            phase: "checking",
+            checked: index,
+            message: `Google側と照合中 ${index}/${targets.length}`,
+            currentTitle:
+              batchTargets.length > 1
+                ? `${firstTarget.title || firstTarget.summary || firstTarget.raw_input || firstTarget.id} ほか${batchTargets.length - 1}件`
+                : firstTarget.title || firstTarget.summary || firstTarget.raw_input || firstTarget.id,
+          });
+          const batchResults = await fetchSyncResults(batchTargets);
+          results.push(...batchResults);
+          checkedFailed += batchResults.filter((result) => !result.ok).length;
+          setManualProgress({
+            phase: "checking",
+            checked: batchEnd,
+            failed: checkedFailed,
+            message: `Google側と照合中 ${batchEnd}/${targets.length}`,
+            currentTitle:
+              batchTargets.length > 1
+                ? `${firstTarget.title || firstTarget.summary || firstTarget.raw_input || firstTarget.id} ほか${batchTargets.length - 1}件`
+                : firstTarget.title || firstTarget.summary || firstTarget.raw_input || firstTarget.id,
+          });
+        }
+      } else {
+        results.push(...(await fetchSyncResults(targets)));
+      }
+
+      const resultById = new Map(results.map((result) => [result.recordId, result]));
       let changed = 0;
-      for (const record of targets) {
+      let failed = results.filter((result) => !result.ok).length;
+      for (let index = 0; index < targets.length; index += 1) {
+        const record = targets[index];
         const result = resultById.get(record.id);
         if (!result) continue;
+        setManualProgress({
+          phase: "applying",
+          applied: index,
+          changed,
+          failed,
+          message: `CGMPへ反映中 ${index}/${targets.length}`,
+          currentTitle: record.title || record.summary || record.raw_input || record.id,
+        });
         if (await isRecordDeleted(record.id)) continue;
+        const taskDueDate =
+          record.google_task_id && typeof result.google_task_due_date === "string" ? result.google_task_due_date : record.date;
+        const calendarDate = record.google_calendar_event_id && result.calendar_date ? result.calendar_date : "";
         const nextRecord: CGMPRecord = result.ok
           ? {
               ...record,
@@ -1959,7 +2043,7 @@ export default function Page() {
               google_calendar_updated_at: result.google_calendar_updated_at || record.google_calendar_updated_at,
               title: result.calendar_title || record.title,
               location: result.calendar_location ?? record.location,
-              date: result.calendar_date || record.date,
+              date: calendarDate || taskDueDate,
               time: typeof result.calendar_time === "string" ? result.calendar_time : record.time,
               all_day: typeof result.calendar_all_day === "boolean" ? result.calendar_all_day : record.all_day,
               duration_minutes:
@@ -1973,16 +2057,44 @@ export default function Page() {
               external_error: result.error || "Google状態同期に失敗しました",
             };
         if (JSON.stringify(nextRecord) !== JSON.stringify(record)) {
-          await upsertRecord({ ...nextRecord, updated_at: new Date().toISOString() });
+          const saved = await putRecordWithoutBackup({ ...nextRecord, updated_at: new Date().toISOString() });
+          setRecords((current) => current.map((item) => (item.id === saved.id ? saved : item)));
+          if (selectedId === saved.id) {
+            setDetailDraft(formFromRecord(saved));
+          }
           changed += 1;
         }
+        setManualProgress({
+          phase: "applying",
+          applied: index + 1,
+          changed,
+          failed,
+          message: `CGMPへ反映中 ${index + 1}/${targets.length}`,
+          currentTitle: record.title || record.summary || record.raw_input || record.id,
+        });
       }
       await Promise.all([reloadRecords(), reloadBackupSummary()]);
-      void runBackupQueue(false);
+      setManualProgress({
+        phase: "done",
+        applied: targets.length,
+        changed,
+        failed,
+        message: failed > 0 ? `同期完了: 更新${changed}件 / 失敗${failed}件` : `同期完了: 更新${changed}件`,
+        currentTitle: "",
+        finishedAt: performance.now(),
+      });
       if (showNotice) {
-        setNotice({ kind: "info", text: `Google状態を同期しました（更新${changed}件）。` });
+        setNotice({
+          kind: failed > 0 ? "error" : "info",
+          text: failed > 0 ? `Google状態を同期しました（更新${changed}件 / 失敗${failed}件）。` : `Google状態を同期しました（更新${changed}件）。`,
+        });
       }
     } catch (error) {
+      setManualProgress({
+        phase: "error",
+        message: error instanceof Error ? error.message : "Google状態同期に失敗しました",
+        finishedAt: performance.now(),
+      });
       if (showNotice) {
         setNotice({
           kind: "error",
@@ -2922,6 +3034,77 @@ export default function Page() {
                 </button>
               </div>
             </section>
+          </div>
+        ) : null}
+
+        {externalSyncProgress ? (
+          <div className="fixed inset-0 z-[95] flex items-end justify-center bg-white/65 px-4 py-5 backdrop-blur-sm dark:bg-slate-950/55 sm:items-center">
+            {(() => {
+              const done = externalSyncProgress.phase === "done" || externalSyncProgress.phase === "error";
+              const elapsed = Math.round((externalSyncProgress.finishedAt || performance.now()) - externalSyncProgress.startedAt);
+              const activeCount =
+                externalSyncProgress.phase === "applying"
+                  ? externalSyncProgress.applied
+                  : Math.max(externalSyncProgress.checked, externalSyncProgress.applied);
+              const ratio = Math.min(100, Math.round((activeCount / Math.max(1, externalSyncProgress.total)) * 100));
+              return (
+                <section className="w-full max-w-md rounded-[28px] border border-[color:var(--border)] bg-[var(--card)] p-5 shadow-[0_28px_90px_var(--shadow-soft)]">
+                  <div className="text-[11px] uppercase tracking-[0.34em] text-[var(--accent)]">Google Sync</div>
+                  <div className="mt-3 flex items-start justify-between gap-3">
+                    <div>
+                      <h2 className="text-xl font-semibold text-[var(--text)]">
+                        {externalSyncProgress.phase === "done"
+                          ? "同期が完了しました"
+                          : externalSyncProgress.phase === "error"
+                            ? "同期で停止しました"
+                            : "Google状態を同期中"}
+                      </h2>
+                      <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{externalSyncProgress.message}</p>
+                    </div>
+                    {!done ? (
+                      <div className="mt-1 h-9 w-9 shrink-0 animate-spin rounded-full border-4 border-[color:var(--accent-soft)] border-t-[color:var(--accent)]" />
+                    ) : (
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--accent-soft)] text-sm font-bold text-[var(--accent)]">
+                        {externalSyncProgress.phase === "done" ? "✓" : "!"}
+                      </div>
+                    )}
+                  </div>
+                  {externalSyncProgress.currentTitle ? (
+                    <div className="mt-4 rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+                      {externalSyncProgress.currentTitle}
+                    </div>
+                  ) : null}
+                  <div className="mt-5 h-2 overflow-hidden rounded-full bg-[var(--accent-soft)]">
+                    <div
+                      className="h-full rounded-full bg-[var(--accent)] transition-all duration-300"
+                      style={{ width: `${ratio}%` }}
+                    />
+                  </div>
+                  <div className="mt-4 grid grid-cols-2 gap-2 text-xs text-[var(--muted)]">
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
+                      照合 {externalSyncProgress.checked}/{externalSyncProgress.total}
+                    </div>
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
+                      反映 {externalSyncProgress.applied}/{externalSyncProgress.total}
+                    </div>
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
+                      更新 {externalSyncProgress.changed}件
+                    </div>
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
+                      失敗 {externalSyncProgress.failed}件
+                    </div>
+                  </div>
+                  <div className="mt-3 text-xs text-[var(--subtle)]">経過 {elapsed} ms</div>
+                  {done ? (
+                    <div className="mt-5 flex justify-end">
+                      <button type="button" onClick={() => setExternalSyncProgress(null)} className={secondaryButtonClass}>
+                        閉じる
+                      </button>
+                    </div>
+                  ) : null}
+                </section>
+              );
+            })()}
           </div>
         ) : null}
 

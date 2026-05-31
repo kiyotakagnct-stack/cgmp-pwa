@@ -14,6 +14,7 @@ type GoogleTask = {
   id: string;
   title: string;
   status?: CGMPGoogleTaskStatus;
+  due?: string;
   updated?: string;
   selfLink?: string;
   webViewLink?: string;
@@ -75,6 +76,18 @@ function taskDueDate(record: CGMPRecord) {
   if (!record.date) return undefined;
   // Google Tasks stores due as a date-only value and discards the time portion.
   return `${record.date}T00:00:00.000Z`;
+}
+
+function parseGoogleTaskDueDate(value: string | undefined) {
+  if (!value) return "";
+  const dateOnly = value.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (dateOnly) return dateOnly[1];
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "";
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 async function getPrimaryTaskListId() {
@@ -176,6 +189,7 @@ export async function getGoogleTaskStatus({
     taskListId,
     taskId: task.id || taskId,
     status: task.status || "needsAction",
+    dueDate: parseGoogleTaskDueDate(task.due),
     updatedAt: task.updated || new Date().toISOString(),
   };
 }
