@@ -1391,10 +1391,14 @@ function WeeklyMinimap({
   return (
     <aside
       onPointerDown={revealMinimap}
-      className={`fixed right-1 top-48 bottom-72 z-30 select-none overflow-hidden rounded-3xl border border-[color:var(--border)] bg-[var(--card)] shadow-[0_18px_44px_var(--shadow-soft)] backdrop-blur-xl transition-all duration-200 sm:right-3 sm:top-36 sm:bottom-44 ${
+      onBlur={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget)) return;
+        setIsExpanded(false);
+      }}
+      className={`fixed right-1 top-36 bottom-36 z-30 select-none overflow-hidden rounded-3xl border transition-all duration-200 sm:right-3 sm:top-24 sm:bottom-28 ${
         isExpanded
-          ? "w-12 px-1.5 py-2 opacity-95 sm:w-14"
-          : "w-9 px-1 py-2 opacity-35 hover:opacity-80 focus-within:opacity-95 sm:w-10"
+          ? "w-12 border-[color:var(--border)] bg-[var(--card)] px-1.5 py-2 opacity-95 shadow-[0_18px_44px_var(--shadow-soft)] backdrop-blur-xl sm:w-14"
+          : "w-9 border-transparent bg-transparent px-1 py-1 opacity-40 shadow-none backdrop-blur-none hover:opacity-70 sm:w-10"
       }`}
       aria-label="Weekly Minimap"
     >
@@ -1418,17 +1422,19 @@ function WeeklyMinimap({
               role="button"
               tabIndex={0}
               className={`min-h-0 flex-1 rounded-2xl border text-left transition ${
-                isActive
+                isExpanded && isActive
                   ? "border-[color:var(--accent)] bg-[var(--accent-soft)] shadow-[inset_0_0_0_1px_var(--accent)]"
-                  : "border-transparent hover:border-[color:var(--border)] hover:bg-[var(--card-soft)]"
+                  : isExpanded
+                    ? "border-transparent hover:border-[color:var(--border)] hover:bg-[var(--card-soft)]"
+                    : "border-transparent bg-transparent shadow-none"
               } ${isExpanded ? "px-1.5 py-1" : "px-1 py-0.5"}`}
               aria-label={`${WEEKDAY_MINI_LABELS[index]}へ移動`}
             >
               <div
                 className={`mx-auto w-fit rounded-full px-1 font-semibold ${
-                  isToday
+                  isExpanded && isToday
                     ? "ring-1 ring-[color:var(--accent)] text-[var(--accent)]"
-                    : isActive
+                    : isExpanded && isActive
                       ? "text-[var(--accent)]"
                       : "text-[var(--subtle)]"
                 } ${isExpanded ? "mb-1 text-[10px] leading-4" : "mb-0.5 text-[8px] leading-3"}`}
