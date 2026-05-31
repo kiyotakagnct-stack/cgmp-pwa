@@ -157,6 +157,8 @@ export type CGMPEmbeddingIndex = {
   embedded_at: string;
 };
 
+export type CGMPSemanticSearchResultMode = "threshold" | "top10";
+
 export type CGMPDeletedRecord = {
   schema_version: 1;
   record_id: string;
@@ -184,6 +186,8 @@ export type CGMPSettings = {
   schema_version: number;
   openai_model: string;
   timezone: string;
+  semantic_search_threshold: number;
+  semantic_search_result_mode: CGMPSemanticSearchResultMode;
   created_at: string;
   updated_at: string;
 };

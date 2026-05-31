@@ -49,6 +49,7 @@ import type {
   CGMPPara,
   CGMPRecord,
   CGMPSettings,
+  CGMPSemanticSearchResultMode,
 } from "@/lib/cgmp/types";
 import {
   createId,
@@ -194,6 +195,12 @@ type EmbeddingProgressState = {
   currentTitle: string;
   force: boolean;
   errors: string[];
+};
+type EmbeddingIndexStats = {
+  count: number;
+  dimensions: number;
+  latestEmbeddedAt: string;
+  model: string;
 };
 type DeletedRecordsSummary = {
   count: number;
@@ -636,6 +643,12 @@ function getDomainSymbol(domain: CGMPDomain | string) {
 
 function scrollToElementById(id: string, block: ScrollLogicalPosition = "start") {
   document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block });
+}
+
+function normalizeSemanticThreshold(value: unknown) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return SEMANTIC_CANDIDATE_THRESHOLD;
+  return Math.min(1, Math.max(-1, number));
 }
 
 function Badge({
@@ -1754,6 +1767,7 @@ export default function Page() {
   const [scriptableImporting, setScriptableImporting] = useState(false);
   const [scriptableImportResult, setScriptableImportResult] = useState<ScriptableImportResult | null>(null);
   const [embeddingProgress, setEmbeddingProgress] = useState<EmbeddingProgressState | null>(null);
+  const [embeddingIndexStats, setEmbeddingIndexStats] = useState<EmbeddingIndexStats | null>(null);
   const [relatedCandidates, setRelatedCandidates] = useState<SimilarRecord[]>([]);
   const initialDriveImportDoneRef = useRef(false);
   const initialExternalSyncDoneRef = useRef(false);
@@ -2616,6 +2630,21 @@ export default function Page() {
     });
   }
 
+  async function reloadEmbeddingIndexStats() {
+    const index = await loadEmbeddingIndex();
+    const latestEmbeddedAt = index.reduce((latest, item) => {
+      if (!latest) return item.embedded_at;
+      return item.embedded_at > latest ? item.embedded_at : latest;
+    }, "");
+    const first = index[0];
+    setEmbeddingIndexStats({
+      count: index.length,
+      dimensions: first?.dimensions || 0,
+      latestEmbeddedAt,
+      model: first?.model || "text-embedding-3-small",
+    });
+  }
+
   async function suggestRelatedRecords(record: CGMPRecord) {
     try {
       const { index } = await createOrRefreshEmbedding(record, true);
@@ -2630,6 +2659,7 @@ export default function Page() {
       if (results.length > 0) {
         setRelatedCandidates(results);
       }
+      void reloadEmbeddingIndexStats();
     } catch (error) {
       console.debug("[cgmp:embedding] related suggestion failed", {
         record_id: record.id,
@@ -2680,6 +2710,7 @@ export default function Page() {
           : prev
       );
       setNotice({ kind: "info", text: "更新が必要なembeddingはありません。" });
+      void reloadEmbeddingIndexStats();
       return;
     }
 
@@ -2731,6 +2762,7 @@ export default function Page() {
         ? `embedding作成を中断しました（完了${completed}件 / 失敗${failed}件）。`
         : `embedding作成が完了しました（完了${completed}件 / 失敗${failed}件）。`,
     });
+    void reloadEmbeddingIndexStats();
   }
 
   useEffect(() => {
@@ -2752,11 +2784,12 @@ export default function Page() {
     let cancelled = false;
     void (async () => {
       try {
-        const [nextRecords, nextSettings, nextBackupSummary, nextDeletedRecords] = await Promise.all([
+        const [nextRecords, nextSettings, nextBackupSummary, nextDeletedRecords, nextEmbeddingIndex] = await Promise.all([
           loadAllRecords(),
           loadSettings(),
           getBackupStatus(),
           loadDeletedRecords(),
+          loadEmbeddingIndex(),
         ]);
         if (cancelled) return;
         setRecords(nextRecords);
@@ -2765,6 +2798,15 @@ export default function Page() {
         setDeletedRecordsSummary({
           count: nextDeletedRecords.length,
           latestDeletedAt: nextDeletedRecords[0]?.deleted_at || "",
+        });
+        setEmbeddingIndexStats({
+          count: nextEmbeddingIndex.length,
+          dimensions: nextEmbeddingIndex[0]?.dimensions || 0,
+          latestEmbeddedAt: nextEmbeddingIndex.reduce((latest, item) => {
+            if (!latest) return item.embedded_at;
+            return item.embedded_at > latest ? item.embedded_at : latest;
+          }, ""),
+          model: nextEmbeddingIndex[0]?.model || "text-embedding-3-small",
         });
         setSelectedId(null);
         setIsReady(true);
@@ -2900,6 +2942,9 @@ export default function Page() {
       return tagOk && actionOk && domainOk && paraOk;
     });
   }, [records, tagQuery, actionFilter, domainFilter, paraFilter]);
+  const semanticSearchThreshold = normalizeSemanticThreshold(settingsDraft?.semantic_search_threshold);
+  const semanticSearchResultMode: CGMPSemanticSearchResultMode =
+    settingsDraft?.semantic_search_result_mode === "top10" ? "top10" : "threshold";
 
   useEffect(() => {
     if (searchMode !== "semantic") {
@@ -2924,8 +2969,8 @@ export default function Page() {
         text,
         records: baseFilteredRecords,
         provider: embeddingProviderRef.current,
-        limit: 20,
-        threshold: SEMANTIC_CANDIDATE_THRESHOLD,
+        limit: semanticSearchResultMode === "top10" ? 10 : 20,
+        threshold: semanticSearchResultMode === "top10" ? -1 : semanticSearchThreshold,
       })
         .then((results) => {
           if (cancelled) return;
@@ -2952,7 +2997,7 @@ export default function Page() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [searchMode, query, baseFilteredRecords]);
+  }, [searchMode, query, baseFilteredRecords, semanticSearchResultMode, semanticSearchThreshold]);
 
   const filteredRecords = useMemo(() => {
     const tagged =
@@ -2997,6 +3042,15 @@ export default function Page() {
     paraFilter !== "all",
     sortKey !== "updated_at",
   ].filter(Boolean).length;
+  const semanticStatusText = (() => {
+    if (semanticSearching) return "意味検索中...";
+    if (semanticError) return `意味検索エラー: ${semanticError}`;
+    if (!query.trim()) return "検索語を入力";
+    if ((embeddingIndexStats?.count || 0) === 0) return "インデックス未作成";
+    return semanticSearchResultMode === "top10"
+      ? `近い順 Top${semanticResults.length} / index ${embeddingIndexStats?.count || 0}件`
+      : `${semanticResults.length}件 / 閾値 ${semanticSearchThreshold.toFixed(2)} / index ${embeddingIndexStats?.count || 0}件`;
+  })();
 
   function toggleCheckedRecord(id: string) {
     setCheckedRecordIds((current) =>
@@ -3829,7 +3883,7 @@ export default function Page() {
                 ))}
                 {searchMode === "semantic" ? (
                   <span className="text-xs text-[var(--muted)]">
-                    {semanticSearching ? "意味検索中..." : semanticError ? `意味検索エラー: ${semanticError}` : query.trim() ? `${semanticResults.length}件` : "検索語を入力"}
+                    {semanticStatusText}
                   </span>
                 ) : null}
               </div>
@@ -4096,6 +4150,63 @@ export default function Page() {
                   <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
                     既存メモにembeddingを作成します。未処理、または本文が変わったメモだけ処理できます。
                   </p>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-[var(--muted)]">
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
+                      <div className="text-[var(--subtle)]">index</div>
+                      <div className="mt-1 font-semibold text-[var(--text)]">{embeddingIndexStats?.count ?? 0}件</div>
+                    </div>
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
+                      <div className="text-[var(--subtle)]">model</div>
+                      <div className="mt-1 truncate font-semibold text-[var(--text)]">
+                        {embeddingIndexStats?.model || "text-embedding-3-small"}
+                      </div>
+                    </div>
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
+                      <div className="text-[var(--subtle)]">dimensions</div>
+                      <div className="mt-1 font-semibold text-[var(--text)]">{embeddingIndexStats?.dimensions || "-"}</div>
+                    </div>
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
+                      <div className="text-[var(--subtle)]">latest</div>
+                      <div className="mt-1 truncate font-semibold text-[var(--text)]">
+                        {embeddingIndexStats?.latestEmbeddedAt
+                          ? formatJstDateTime(embeddingIndexStats.latestEmbeddedAt)
+                          : "未作成"}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <LabeledInput
+                      label="意味検索の閾値"
+                      type="number"
+                      value={String(settingsDraft?.semantic_search_threshold ?? SEMANTIC_CANDIDATE_THRESHOLD)}
+                      onChange={(value) => {
+                        const next = normalizeSemanticThreshold(value);
+                        setSettingsDraft((prev) => (prev ? { ...prev, semantic_search_threshold: next } : prev));
+                      }}
+                      placeholder="0.45"
+                    />
+                    <LabeledSelect
+                      label="意味検索の表示方式"
+                      value={settingsDraft?.semantic_search_result_mode || "threshold"}
+                      onChange={(value) =>
+                        setSettingsDraft((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                semantic_search_result_mode: value === "top10" ? "top10" : "threshold",
+                              }
+                            : prev
+                        )
+                      }
+                      options={[
+                        { value: "threshold", label: "閾値内を表示" },
+                        { value: "top10", label: "近い順 Top10" },
+                      ]}
+                    />
+                  </div>
+                  <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
+                    閾値は -1.00 〜 1.00。大きいほど厳しめです。Top10表示では閾値に関係なく近い順で最大10件を表示します。
+                  </p>
                   <div className="mt-4 flex flex-wrap gap-2">
                     <button
                       type="button"
@@ -4112,6 +4223,14 @@ export default function Page() {
                       className={secondaryButtonClass}
                     >
                       全件再作成
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void reloadEmbeddingIndexStats()}
+                      disabled={embeddingProgress?.running}
+                      className={secondaryButtonClass}
+                    >
+                      状態を確認
                     </button>
                     {embeddingProgress?.running ? (
                       <button

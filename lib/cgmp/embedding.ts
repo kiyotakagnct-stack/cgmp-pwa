@@ -6,8 +6,8 @@ import {
 import type { CGMPEmbeddingIndex, CGMPRecord } from "./types";
 
 export const EMBEDDING_MODEL = "text-embedding-3-small";
-export const SEMANTIC_STRONG_THRESHOLD = 0.78;
-export const SEMANTIC_CANDIDATE_THRESHOLD = 0.7;
+export const SEMANTIC_STRONG_THRESHOLD = 0.68;
+export const SEMANTIC_CANDIDATE_THRESHOLD = 0.45;
 
 export type EmbeddingProvider = {
   embed(text: string): Promise<number[]>;

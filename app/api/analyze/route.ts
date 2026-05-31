@@ -35,6 +35,16 @@ function getJstStamp(date = new Date()) {
   return `${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}:${map.second}`;
 }
 
+function normalizeInputTimeToJstStamp(value: unknown) {
+  const text = String(value || "").trim();
+  if (!text) return getJstStamp();
+  const parsed = new Date(text);
+  if (Number.isFinite(parsed.getTime())) {
+    return getJstStamp(parsed);
+  }
+  return text;
+}
+
 function normalizeJson(input: unknown): JsonObject {
   if (!input || typeof input !== "object" || Array.isArray(input)) return {};
   return input as JsonObject;
@@ -547,7 +557,7 @@ export async function POST(request: Request) {
     }
 
     const model = String(body.model || process.env.OPENAI_MODEL || "gpt-4.1-nano").trim();
-    const originalInputTime = String(body.input_at || getJstStamp()).trim();
+    const originalInputTime = normalizeInputTimeToJstStamp(body.input_at);
     const userContent = buildUserContent(originalInputTime, text);
 
     let split: SplitAnalysis;

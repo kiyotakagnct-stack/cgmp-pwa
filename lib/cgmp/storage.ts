@@ -6,6 +6,7 @@ import type {
   CGMPExternalDeleteStatus,
   CGMPRecord,
   CGMPSettings,
+  CGMPSemanticSearchResultMode,
 } from "./types";
 import { clearImageBlobs, deleteImageBlobs } from "@/lib/db/imageBlobStore";
 import type { ImageAttachment } from "@/types/image";
@@ -20,6 +21,7 @@ const DELETED_RECORDS_STORE = "deleted_records";
 const EMBEDDING_INDEX_STORE = "embedding_index";
 const SETTINGS_KEY = "settings";
 const DEVICE_ID_KEY = "cgmp-device-id";
+const DEFAULT_SEMANTIC_SEARCH_THRESHOLD = 0.45;
 
 function hasWindow() {
   return typeof window !== "undefined";
@@ -215,9 +217,21 @@ export function createDefaultSettings(): CGMPSettings {
     schema_version: 1,
     openai_model: "gpt-4.1-nano",
     timezone: "Asia/Tokyo",
+    semantic_search_threshold: DEFAULT_SEMANTIC_SEARCH_THRESHOLD,
+    semantic_search_result_mode: "threshold",
     created_at: now,
     updated_at: now,
   };
+}
+
+function normalizeSemanticSearchThreshold(value: unknown) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return DEFAULT_SEMANTIC_SEARCH_THRESHOLD;
+  return Math.min(1, Math.max(-1, number));
+}
+
+function normalizeSemanticSearchResultMode(value: unknown): CGMPSemanticSearchResultMode {
+  return value === "top10" ? "top10" : "threshold";
 }
 
 export async function loadSettings(): Promise<CGMPSettings> {
@@ -228,7 +242,12 @@ export async function loadSettings(): Promise<CGMPSettings> {
     const tx = db.transaction(SETTINGS_STORE, "readonly");
     const store = tx.objectStore(SETTINGS_STORE);
     const result = await requestToPromise<CGMPSettings | undefined>(store.get(SETTINGS_KEY));
-    return result ? { ...createDefaultSettings(), ...result } : createDefaultSettings();
+    const merged = result ? { ...createDefaultSettings(), ...result } : createDefaultSettings();
+    return {
+      ...merged,
+      semantic_search_threshold: normalizeSemanticSearchThreshold(merged.semantic_search_threshold),
+      semantic_search_result_mode: normalizeSemanticSearchResultMode(merged.semantic_search_result_mode),
+    };
   } finally {
     db.close();
   }
@@ -242,6 +261,10 @@ export async function saveSettings(settings: Partial<CGMPSettings>) {
     ...current,
     ...settings,
     id: SETTINGS_KEY,
+    semantic_search_threshold: normalizeSemanticSearchThreshold(settings.semantic_search_threshold ?? current.semantic_search_threshold),
+    semantic_search_result_mode: normalizeSemanticSearchResultMode(
+      settings.semantic_search_result_mode ?? current.semantic_search_result_mode
+    ),
     updated_at: new Date().toISOString(),
   };
 
