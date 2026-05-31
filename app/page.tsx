@@ -562,6 +562,10 @@ function scrollToElementById(id: string, block: ScrollLogicalPosition = "start")
   document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block });
 }
 
+function scrollToElementByIdImmediate(id: string, block: ScrollLogicalPosition = "start") {
+  document.getElementById(id)?.scrollIntoView({ behavior: "auto", block });
+}
+
 function Badge({
   children,
   tone = "slate",
@@ -1369,12 +1373,47 @@ function WeeklyMinimap({
   activeDay: number;
   todayKey: string;
 }) {
+  const railRef = useRef<HTMLElement | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+
+  const scrollFromPointer = (clientY: number) => {
+    const rail = railRef.current;
+    if (!rail) return;
+
+    const rect = rail.getBoundingClientRect();
+    const ratio = Math.min(0.999, Math.max(0, (clientY - rect.top) / rect.height));
+    const targets = days.flatMap((day, dayIndex) =>
+      day.records.length > 0
+        ? day.records.map((record) => ({ id: `week-item-${record.id}`, block: "center" as ScrollLogicalPosition }))
+        : [{ id: `week-day-${dayIndex}`, block: "start" as ScrollLogicalPosition }]
+    );
+    const target = targets[Math.min(targets.length - 1, Math.floor(ratio * targets.length))];
+    if (target) scrollToElementByIdImmediate(target.id, target.block);
+  };
+
   return (
     <aside
-      className="fixed right-1 top-28 bottom-32 z-30 w-10 overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-1.5 py-2 shadow-[0_14px_38px_var(--shadow-soft)] opacity-90 backdrop-blur-xl sm:right-3 sm:w-12"
+      ref={railRef}
+      onPointerDown={(event) => {
+        setIsDragging(true);
+        event.currentTarget.setPointerCapture(event.pointerId);
+        scrollFromPointer(event.clientY);
+      }}
+      onPointerMove={(event) => {
+        if (!isDragging) return;
+        scrollFromPointer(event.clientY);
+      }}
+      onPointerUp={(event) => {
+        setIsDragging(false);
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }}
+      onPointerCancel={() => setIsDragging(false)}
+      className={`fixed right-2 top-48 bottom-72 z-30 w-14 touch-none select-none overflow-hidden rounded-3xl border border-[color:var(--border)] bg-[var(--card)] px-2 py-2.5 shadow-[0_18px_44px_var(--shadow-soft)] opacity-95 backdrop-blur-xl transition sm:right-4 sm:top-36 sm:bottom-44 sm:w-16 ${
+        isDragging ? "cursor-grabbing ring-2 ring-[color:var(--accent)]" : "cursor-ns-resize"
+      }`}
       aria-label="Weekly Minimap"
     >
-      <div className="flex h-full flex-col gap-1 overflow-hidden">
+      <div className="flex h-full flex-col gap-1.5 overflow-hidden">
         {days.map((day, index) => {
           const isActive = activeDay === index;
           const isToday = day.dateKey === todayKey;
@@ -1389,15 +1428,15 @@ function WeeklyMinimap({
               }}
               role="button"
               tabIndex={0}
-              className={`min-h-0 flex-1 rounded-xl border px-1 py-1 text-left transition ${
+              className={`min-h-0 flex-1 rounded-2xl border px-1.5 py-1 text-left transition ${
                 isActive
-                  ? "border-[color:var(--accent)] bg-[var(--accent-soft)]"
+                  ? "border-[color:var(--accent)] bg-[var(--accent-soft)] shadow-[inset_0_0_0_1px_var(--accent)]"
                   : "border-transparent hover:border-[color:var(--border)] hover:bg-[var(--card-soft)]"
               }`}
               aria-label={`${WEEKDAY_MINI_LABELS[index]}へ移動`}
             >
               <div
-                className={`mx-auto mb-1 w-fit rounded-full px-1 text-[9px] font-semibold leading-4 ${
+                className={`mx-auto mb-1 w-fit rounded-full px-1 text-[10px] font-semibold leading-4 ${
                   isToday
                     ? "ring-1 ring-[color:var(--accent)] text-[var(--accent)]"
                     : isActive
@@ -1407,7 +1446,7 @@ function WeeklyMinimap({
               >
                 {WEEKDAY_MINI_LABELS[index]}
               </div>
-              <div className="space-y-0.5">
+              <div className="space-y-1">
                 {day.records.length > 0 ? (
                   day.records.map((record) => {
                     const color = getDomainColorVar(record.domain || "other");
@@ -1419,25 +1458,25 @@ function WeeklyMinimap({
                           event.stopPropagation();
                           scrollToElementById(`week-item-${record.id}`, "center");
                         }}
-                        className="flex h-2.5 w-full items-center gap-0.5 overflow-hidden rounded-sm"
+                        className="flex h-3 w-full items-center gap-1 overflow-hidden rounded-sm"
                         aria-label="recordへ移動"
                         title=""
                       >
                         <span
-                          className="w-2 shrink-0 text-[8px] leading-none"
+                          className="w-2.5 shrink-0 text-[9px] leading-none"
                           style={{ color } as CSSProperties}
                         >
                           {getMinimapSymbol(record)}
                         </span>
                         <span
-                          className="h-0.5 min-w-0 flex-1 rounded-full opacity-80"
+                          className="h-1 min-w-0 flex-1 rounded-full opacity-85"
                           style={{ backgroundColor: color } as CSSProperties}
                         />
                       </button>
                     );
                   })
                 ) : (
-                  <div className="mx-auto h-0.5 w-3 rounded-full bg-[var(--border)] opacity-60" />
+                  <div className="mx-auto h-1 w-4 rounded-full bg-[var(--border)] opacity-60" />
                 )}
               </div>
             </div>
@@ -1519,7 +1558,7 @@ function WeeklyView({
   }, [days]);
 
   return (
-    <div className="grid max-w-full gap-3 overflow-hidden pr-11 sm:gap-4 sm:pr-14">
+    <div className="grid max-w-full gap-3 overflow-hidden pr-16 sm:gap-4 sm:pr-20">
       <WeeklyMinimap days={days} activeDay={activeDay} todayKey={todayKey} />
       <section className={panelClass}>
         <SectionHeading eyebrow="Week" title="週次ログビュー" />
