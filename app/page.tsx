@@ -1286,28 +1286,28 @@ function WeekRecordItem({
     <button
       type="button"
       onClick={() => onOpen(record.id)}
-      className="group w-full rounded-[22px] border border-[color:var(--border)] bg-[var(--card)] p-4 text-left transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)] sm:rounded-[24px]"
+      className="group w-full rounded-[22px] border border-[color:var(--border)] bg-[var(--card)] p-5 text-left transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)] sm:rounded-[24px]"
     >
-      <div className="flex items-start gap-3">
+      <div className="flex items-start gap-4">
         <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <span className="shrink-0 font-mono text-base font-semibold text-[var(--text)]">{timeline.timeLabel}</span>
-            <span className="shrink-0 rounded-full bg-[var(--card-soft)] px-2 py-0.5 text-[11px] text-[var(--subtle)]">
+          <div className="flex min-w-0 flex-wrap items-center gap-2.5">
+            <span className="shrink-0 font-mono text-lg font-semibold leading-7 text-[var(--text)]">{timeline.timeLabel}</span>
+            <span className="shrink-0 rounded-full bg-[var(--card-soft)] px-2.5 py-1 text-xs text-[var(--subtle)]">
               {timeline.sourceLabel}
             </span>
-            <span className="shrink-0 text-lg leading-none">{getActionSymbol(record)}</span>
-            <span className="shrink-0 text-lg leading-none">{getDomainSymbol(record.domain)}</span>
-            <span className="min-w-0 flex-1 basis-[12rem] truncate text-base font-semibold text-[var(--text)]">
+            <span className="shrink-0 text-xl leading-none">{getActionSymbol(record)}</span>
+            <span className="shrink-0 text-xl leading-none">{getDomainSymbol(record.domain)}</span>
+            <span className="min-w-0 flex-1 basis-[12rem] truncate text-lg font-semibold leading-7 text-[var(--text)]">
               {record.title || "（無題）"}
             </span>
           </div>
-          <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-[var(--muted)]">
-            <span className="line-clamp-2 min-w-[12rem] flex-1 leading-6">
+          <div className="mt-4 flex flex-wrap items-center gap-2.5 text-base text-[var(--muted)]">
+            <span className="line-clamp-2 min-w-[12rem] flex-1 leading-7">
               {record.summary || record.body || record.raw_input || "内容なし"}
             </span>
-            <Badge compact tone="slate">{getParaLabel(para)}</Badge>
+            <Badge tone="slate">{getParaLabel(para)}</Badge>
             {primaryTags.map((tag) => (
-              <Badge key={tag} compact>{`#${tag}`}</Badge>
+              <Badge key={tag}>{`#${tag}`}</Badge>
             ))}
           </div>
           {isTaskRegistered ? (
@@ -1319,7 +1319,7 @@ function WeekRecordItem({
                   onToggleGoogleTaskStatus(record.id);
                 }}
                 disabled={taskProcessing}
-                className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                className={`rounded-full border px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
                   record.google_task_status === "completed"
                     ? "border-[color:var(--success)] bg-[var(--success-soft)] text-[var(--success)] hover:brightness-95"
                     : "border-[color:var(--orange)] bg-[var(--orange-soft)] text-[var(--orange)] hover:brightness-95"
