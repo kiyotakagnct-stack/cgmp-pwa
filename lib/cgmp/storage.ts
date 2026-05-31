@@ -1,14 +1,23 @@
-import type { CGMPBackupQueueItem, CGMPBackupStatus, CGMPDeletedRecord, CGMPExternalDeleteStatus, CGMPRecord, CGMPSettings } from "./types";
+import type {
+  CGMPBackupQueueItem,
+  CGMPBackupStatus,
+  CGMPDeletedRecord,
+  CGMPEmbeddingIndex,
+  CGMPExternalDeleteStatus,
+  CGMPRecord,
+  CGMPSettings,
+} from "./types";
 import { clearImageBlobs, deleteImageBlobs } from "@/lib/db/imageBlobStore";
 import type { ImageAttachment } from "@/types/image";
 
 const DB_NAME = "cgmp-pwa";
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 const RECORDS_STORE = "records";
 const SETTINGS_STORE = "settings";
 const BACKUP_QUEUE_STORE = "backup_queue";
 const IMAGE_BLOBS_STORE = "image_blobs";
 const DELETED_RECORDS_STORE = "deleted_records";
+const EMBEDDING_INDEX_STORE = "embedding_index";
 const SETTINGS_KEY = "settings";
 const DEVICE_ID_KEY = "cgmp-device-id";
 
@@ -53,6 +62,11 @@ function openDatabase() {
       if (!db.objectStoreNames.contains(DELETED_RECORDS_STORE)) {
         const store = db.createObjectStore(DELETED_RECORDS_STORE, { keyPath: "record_id" });
         store.createIndex("deleted_at", "deleted_at", { unique: false });
+      }
+      if (!db.objectStoreNames.contains(EMBEDDING_INDEX_STORE)) {
+        const store = db.createObjectStore(EMBEDDING_INDEX_STORE, { keyPath: "record_id" });
+        store.createIndex("model", "model", { unique: false });
+        store.createIndex("source_updated_at", "source_updated_at", { unique: false });
       }
     };
 
@@ -337,7 +351,7 @@ export async function upsertRecord(record: CGMPRecord) {
 
   const db = await openDatabase();
   await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction([RECORDS_STORE, BACKUP_QUEUE_STORE, DELETED_RECORDS_STORE], "readwrite");
+    const tx = db.transaction([RECORDS_STORE, BACKUP_QUEUE_STORE, DELETED_RECORDS_STORE, EMBEDDING_INDEX_STORE], "readwrite");
     const deletedRequest = tx.objectStore(DELETED_RECORDS_STORE).get(nextRecord.id);
 
     deletedRequest.onsuccess = () => {
@@ -455,6 +469,7 @@ export async function deleteRecord(id: string, patch: Partial<CGMPDeletedRecord>
         external_delete_error: patch.external_delete_error || "",
       });
       recordsStore.delete(id);
+      tx.objectStore(EMBEDDING_INDEX_STORE).delete(id);
       const queueStore = tx.objectStore(BACKUP_QUEUE_STORE);
       queueStore.delete(`record:${id}`);
       record?.attachments?.forEach((attachment) => queueStore.delete(`attachment:${id}:${attachment.id}`));
@@ -481,9 +496,10 @@ export async function clearAllRecords() {
 
   const db = await openDatabase();
   await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction([RECORDS_STORE, BACKUP_QUEUE_STORE], "readwrite");
+    const tx = db.transaction([RECORDS_STORE, BACKUP_QUEUE_STORE, EMBEDDING_INDEX_STORE], "readwrite");
     tx.objectStore(RECORDS_STORE).clear();
     tx.objectStore(BACKUP_QUEUE_STORE).clear();
+    tx.objectStore(EMBEDDING_INDEX_STORE).clear();
     tx.oncomplete = () => {
       db.close();
       resolve();
@@ -547,6 +563,76 @@ export async function loadBackupQueue() {
   } finally {
     db.close();
   }
+}
+
+function normalizeEmbeddingIndex(value: unknown): CGMPEmbeddingIndex | null {
+  const source = value && typeof value === "object" ? (value as Partial<CGMPEmbeddingIndex>) : {};
+  const vector = Array.isArray(source.vector) ? source.vector.map((item) => Number(item)).filter(Number.isFinite) : [];
+  if (!source.record_id || vector.length === 0) return null;
+  return {
+    record_id: String(source.record_id),
+    vector,
+    model: String(source.model || "text-embedding-3-small"),
+    dimensions: Number.isFinite(Number(source.dimensions)) ? Number(source.dimensions) : vector.length,
+    embedding_text_hash: String(source.embedding_text_hash || ""),
+    source_updated_at: String(source.source_updated_at || ""),
+    embedded_at: String(source.embedded_at || new Date().toISOString()),
+  };
+}
+
+export async function loadEmbeddingIndex() {
+  if (!hasWindow()) return [];
+
+  const db = await openDatabase();
+  try {
+    const tx = db.transaction(EMBEDDING_INDEX_STORE, "readonly");
+    const store = tx.objectStore(EMBEDDING_INDEX_STORE);
+    const result = await requestToPromise<CGMPEmbeddingIndex[]>(store.getAll());
+    return (Array.isArray(result) ? result : [])
+      .map(normalizeEmbeddingIndex)
+      .filter((item): item is CGMPEmbeddingIndex => Boolean(item));
+  } finally {
+    db.close();
+  }
+}
+
+export async function getEmbeddingIndex(recordId: string) {
+  if (!hasWindow()) return null;
+
+  const db = await openDatabase();
+  try {
+    const tx = db.transaction(EMBEDDING_INDEX_STORE, "readonly");
+    const store = tx.objectStore(EMBEDDING_INDEX_STORE);
+    const result = await requestToPromise<CGMPEmbeddingIndex | undefined>(store.get(recordId));
+    return normalizeEmbeddingIndex(result);
+  } finally {
+    db.close();
+  }
+}
+
+export async function upsertEmbeddingIndex(index: CGMPEmbeddingIndex) {
+  if (!hasWindow()) return index;
+  const normalized = normalizeEmbeddingIndex(index);
+  if (!normalized) return index;
+
+  await withTransaction(EMBEDDING_INDEX_STORE, "readwrite", async (store) => {
+    store.put(normalized);
+  });
+  return normalized;
+}
+
+export async function deleteEmbeddingIndex(recordId: string) {
+  if (!hasWindow()) return;
+  await withTransaction(EMBEDDING_INDEX_STORE, "readwrite", async (store) => {
+    store.delete(recordId);
+  });
+}
+
+export async function clearEmbeddingIndex() {
+  if (!hasWindow()) return;
+  await withTransaction(EMBEDDING_INDEX_STORE, "readwrite", async (store) => {
+    store.clear();
+  });
 }
 
 export async function removeBackupQueueItem(id: string) {

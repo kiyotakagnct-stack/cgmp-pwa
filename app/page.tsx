@@ -13,12 +13,23 @@ import {
   deleteRecord,
   loadAllRecords,
   loadDeletedRecords,
+  loadEmbeddingIndex,
   isRecordDeleted,
   loadSettings,
   putRecordWithoutBackup,
   saveSettings,
   upsertRecord,
 } from "@/lib/cgmp/storage";
+import {
+  ApiEmbeddingProvider,
+  ensureRecordEmbedding,
+  hashEmbeddingText,
+  buildEmbeddingText,
+  searchSimilarByText,
+  searchSimilarByVector,
+  SEMANTIC_CANDIDATE_THRESHOLD,
+  type SimilarRecord,
+} from "@/lib/cgmp/embedding";
 import {
   backupDeleteTombstoneNow,
   enqueueAllRecordsForBackup,
@@ -54,6 +65,7 @@ import type { ImageAttachment, ImageVisionResult } from "@/types/image";
 
 type AppTab = "home" | "week" | "compose" | "settings";
 type SortKey = "updated_at" | "datetime";
+type SearchMode = "text" | "semantic";
 type ThemeMode = "system" | "light" | "dark";
 type Notice = { kind: "info" | "error"; text: string } | null;
 type LightboxState = { imageUrl: string; title: string } | null;
@@ -172,6 +184,16 @@ type BackupSyncProgressState = {
   processElapsedMs: number;
   reloadElapsedMs: number;
   reportItems: BackupSyncReportItem[];
+};
+type EmbeddingProgressState = {
+  running: boolean;
+  total: number;
+  completed: number;
+  skipped: number;
+  failed: number;
+  currentTitle: string;
+  force: boolean;
+  errors: string[];
 };
 type DeletedRecordsSummary = {
   count: number;
@@ -1685,6 +1707,10 @@ export default function Page() {
   const [notice, setNotice] = useState<Notice>(null);
   const [query, setQuery] = useState("");
   const [tagQuery, setTagQuery] = useState("");
+  const [searchMode, setSearchMode] = useState<SearchMode>("text");
+  const [semanticSearching, setSemanticSearching] = useState(false);
+  const [semanticResults, setSemanticResults] = useState<Array<{ recordId: string; score: number; level: "strong" | "candidate" }>>([]);
+  const [semanticError, setSemanticError] = useState("");
   const [actionFilter, setActionFilter] = useState<"all" | CGMPAction>("all");
   const [domainFilter, setDomainFilter] = useState<"all" | CGMPDomain>("all");
   const [paraFilter, setParaFilter] = useState<"all" | CGMPPara>("all");
@@ -1727,11 +1753,15 @@ export default function Page() {
   const [aiProcessingElapsedMs, setAiProcessingElapsedMs] = useState(0);
   const [scriptableImporting, setScriptableImporting] = useState(false);
   const [scriptableImportResult, setScriptableImportResult] = useState<ScriptableImportResult | null>(null);
+  const [embeddingProgress, setEmbeddingProgress] = useState<EmbeddingProgressState | null>(null);
+  const [relatedCandidates, setRelatedCandidates] = useState<SimilarRecord[]>([]);
   const initialDriveImportDoneRef = useRef(false);
   const initialExternalSyncDoneRef = useRef(false);
   const aiProcessingIdRef = useRef(0);
   const aiProcessingHideTimerRef = useRef<number | null>(null);
   const scriptableImportInputRef = useRef<HTMLInputElement | null>(null);
+  const embeddingProviderRef = useRef(new ApiEmbeddingProvider());
+  const embeddingCancelRef = useRef(false);
 
   function changeThemeMode(mode: ThemeMode) {
     setThemeMode(mode);
@@ -2575,6 +2605,134 @@ export default function Page() {
     }
   }
 
+  async function createOrRefreshEmbedding(record: CGMPRecord, force = false) {
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      throw new Error("オフラインのためembedding生成をスキップしました");
+    }
+    return ensureRecordEmbedding({
+      record,
+      provider: embeddingProviderRef.current,
+      force,
+    });
+  }
+
+  async function suggestRelatedRecords(record: CGMPRecord) {
+    try {
+      const { index } = await createOrRefreshEmbedding(record, true);
+      const candidates = (await loadAllRecords()).filter((candidate) => candidate.id !== record.id);
+      const results = await searchSimilarByVector({
+        vector: index.vector,
+        records: candidates,
+        excludeRecordId: record.id,
+        limit: 5,
+        threshold: SEMANTIC_CANDIDATE_THRESHOLD,
+      });
+      if (results.length > 0) {
+        setRelatedCandidates(results);
+      }
+    } catch (error) {
+      console.debug("[cgmp:embedding] related suggestion failed", {
+        record_id: record.id,
+        error,
+      });
+    }
+  }
+
+  async function rebuildEmbeddingIndex(force = false) {
+    if (embeddingProgress?.running) return;
+    embeddingCancelRef.current = false;
+    const startedRecords = [...records];
+    const existing = await loadEmbeddingIndex();
+    const existingById = new Map(existing.map((item) => [item.record_id, item]));
+    const targets: CGMPRecord[] = [];
+    for (const record of startedRecords) {
+      if (force) {
+        targets.push(record);
+        continue;
+      }
+      const text = buildEmbeddingText(record);
+      const hash = await hashEmbeddingText(text);
+      const current = existingById.get(record.id);
+      if (!current || current.embedding_text_hash !== hash) {
+        targets.push(record);
+      }
+    }
+
+    setEmbeddingProgress({
+      running: true,
+      total: targets.length,
+      completed: 0,
+      skipped: startedRecords.length - targets.length,
+      failed: 0,
+      currentTitle: targets[0]?.title || "",
+      force,
+      errors: [],
+    });
+
+    if (targets.length === 0) {
+      setEmbeddingProgress((prev) =>
+        prev
+          ? {
+              ...prev,
+              running: false,
+              currentTitle: "",
+            }
+          : prev
+      );
+      setNotice({ kind: "info", text: "更新が必要なembeddingはありません。" });
+      return;
+    }
+
+    let completed = 0;
+    let failed = 0;
+    const errors: string[] = [];
+    for (const record of targets) {
+      if (embeddingCancelRef.current) break;
+      setEmbeddingProgress((prev) => (prev ? { ...prev, currentTitle: record.title || record.summary || record.id } : prev));
+      try {
+        await createOrRefreshEmbedding(record, force);
+        completed += 1;
+      } catch (error) {
+        failed += 1;
+        const message = `${record.id}: ${error instanceof Error ? error.message : "EMBEDDING_FAILED"}`;
+        errors.push(message);
+        console.debug("[cgmp:embedding] embedding generation failed", {
+          record_id: record.id,
+          error,
+        });
+      }
+      setEmbeddingProgress((prev) =>
+        prev
+          ? {
+              ...prev,
+              completed,
+              failed,
+              errors: errors.slice(-20),
+            }
+          : prev
+      );
+    }
+
+    setEmbeddingProgress((prev) =>
+      prev
+        ? {
+            ...prev,
+            running: false,
+            completed,
+            failed,
+            currentTitle: embeddingCancelRef.current ? "中断しました" : "",
+            errors: errors.slice(-20),
+          }
+        : prev
+    );
+    setNotice({
+      kind: failed > 0 ? "error" : "info",
+      text: embeddingCancelRef.current
+        ? `embedding作成を中断しました（完了${completed}件 / 失敗${failed}件）。`
+        : `embedding作成が完了しました（完了${completed}件 / 失敗${failed}件）。`,
+    });
+  }
+
   useEffect(() => {
     const storedTheme = readStoredTheme();
     setThemeMode(storedTheme);
@@ -2730,16 +2888,87 @@ export default function Page() {
     };
   }, [isReady]);
 
-  const filteredRecords = useMemo(() => {
-    const tagged = records.filter((record) => {
-      const textOk = matchesQuery(record, query, tagQuery);
+  const baseFilteredRecords = useMemo(() => {
+    return records.filter((record) => {
+      const tag = tagQuery.trim().toLowerCase();
+      const tagOk =
+        !tag ||
+        (record.tags || []).some((item) => String(item || "").toLowerCase().includes(tag));
       const actionOk = actionFilter === "all" || record.action === actionFilter;
       const domainOk = domainFilter === "all" || record.domain === domainFilter;
       const paraOk = paraFilter === "all" || getEffectivePara(record) === paraFilter;
-      return textOk && actionOk && domainOk && paraOk;
+      return tagOk && actionOk && domainOk && paraOk;
     });
+  }, [records, tagQuery, actionFilter, domainFilter, paraFilter]);
+
+  useEffect(() => {
+    if (searchMode !== "semantic") {
+      setSemanticSearching(false);
+      setSemanticError("");
+      setSemanticResults([]);
+      return;
+    }
+    const text = query.trim();
+    if (!text) {
+      setSemanticSearching(false);
+      setSemanticError("");
+      setSemanticResults([]);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setSemanticSearching(true);
+      setSemanticError("");
+      void searchSimilarByText({
+        text,
+        records: baseFilteredRecords,
+        provider: embeddingProviderRef.current,
+        limit: 20,
+        threshold: SEMANTIC_CANDIDATE_THRESHOLD,
+      })
+        .then((results) => {
+          if (cancelled) return;
+          setSemanticResults(
+            results.map((item) => ({
+              recordId: item.record.id,
+              score: item.score,
+              level: item.level,
+            }))
+          );
+        })
+        .catch((error) => {
+          if (cancelled) return;
+          console.debug("[cgmp:embedding] semantic search failed", error);
+          setSemanticError(error instanceof Error ? error.message : "意味検索に失敗しました");
+          setSemanticResults([]);
+        })
+        .finally(() => {
+          if (!cancelled) setSemanticSearching(false);
+        });
+    }, 450);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [searchMode, query, baseFilteredRecords]);
+
+  const filteredRecords = useMemo(() => {
+    const tagged =
+      searchMode === "semantic" && query.trim()
+        ? semanticResults
+            .map((result) => baseFilteredRecords.find((record) => record.id === result.recordId))
+            .filter((record): record is CGMPRecord => Boolean(record))
+        : baseFilteredRecords.filter((record) => matchesQuery(record, query, ""));
 
     return tagged.sort((a, b) => {
+      if (searchMode === "semantic" && query.trim()) {
+        const scoreById = new Map(semanticResults.map((result) => [result.recordId, result.score]));
+        const aScore = scoreById.get(a.id) || 0;
+        const bScore = scoreById.get(b.id) || 0;
+        if (aScore !== bScore) return bScore - aScore;
+      }
       if (sortKey === "datetime") {
         const aValue = getDateSortValue(a);
         const bValue = getDateSortValue(b);
@@ -2752,7 +2981,7 @@ export default function Page() {
       if (aValue === bValue) return String(b.id).localeCompare(String(a.id));
       return bValue - aValue;
     });
-  }, [records, query, tagQuery, actionFilter, domainFilter, paraFilter, sortKey]);
+  }, [baseFilteredRecords, query, searchMode, semanticResults, sortKey]);
 
   const selectedRecord = useMemo(() => records.find((record) => record.id === selectedId) ?? null, [records, selectedId]);
   const miniFilteredRecords = useMemo(() => {
@@ -3048,6 +3277,9 @@ export default function Page() {
       window.setTimeout(() => {
         void runBackupQueue(false);
       }, 0);
+      window.setTimeout(() => {
+        void suggestRelatedRecords(nextRecord);
+      }, 0);
       setComposeDraft(blankForm(""));
       setComposeAiStatus("none");
       setComposeAiError("");
@@ -3078,6 +3310,12 @@ export default function Page() {
       const syncedRecord = await updateRegisteredExternalItems(savedRecord);
       await reloadRecords(syncedRecord.id);
       await reloadBackupSummary();
+      void createOrRefreshEmbedding(syncedRecord).catch((error) => {
+        console.debug("[cgmp:embedding] detail embedding refresh failed", {
+          record_id: syncedRecord.id,
+          error,
+        });
+      });
       setNotice({
         kind: syncedRecord.external_action_status === "failed" ? "error" : "info",
         text: syncedRecord.external_action_status === "failed" ? "更新しましたがGoogle側の更新に失敗しました。" : "更新しました。",
@@ -3491,6 +3729,62 @@ export default function Page() {
           </div>
         ) : null}
 
+        {relatedCandidates.length > 0 ? (
+          <div className="fixed inset-0 z-[92] flex items-end justify-center bg-white/65 px-4 py-5 backdrop-blur-sm dark:bg-slate-950/55 sm:items-center">
+            <section className="w-full max-w-lg rounded-[28px] border border-[color:var(--border)] bg-[var(--card)] p-5 shadow-[0_28px_90px_var(--shadow-soft)]">
+              <div className="text-[11px] uppercase tracking-[0.34em] text-[var(--accent)]">Related Notes</div>
+              <h2 className="mt-2 text-xl font-semibold text-[var(--text)]">こんなの関連しませんか？</h2>
+              <div className="mt-4 max-h-[54vh] space-y-3 overflow-auto pr-1">
+                {relatedCandidates.map((item) => (
+                  <article key={item.record.id} className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <DomainBadge domain={item.record.domain || "other"} />
+                      <Badge compact tone={item.record.action === "calendar" ? "amber" : item.record.action === "reminder" ? "rose" : "cyan"}>
+                        {item.record.action}
+                      </Badge>
+                      <Badge compact tone={item.level === "strong" ? "emerald" : "slate"}>
+                        関連度 {item.level === "strong" ? "高" : "中"} {Math.round(item.score * 100)}%
+                      </Badge>
+                    </div>
+                    <h3 className="mt-3 text-base font-semibold text-[var(--text)]">{item.record.title || "Untitled"}</h3>
+                    <p className="mt-1 line-clamp-2 text-sm leading-6 text-[var(--muted)]">
+                      {item.record.summary || item.record.body || item.record.raw_input}
+                    </p>
+                    {(item.record.tags || []).length > 0 ? (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {(item.record.tags || []).slice(0, 4).map((tag) => (
+                          <Badge compact key={tag}>#{tag}</Badge>
+                        ))}
+                      </div>
+                    ) : null}
+                    <div className="mt-3 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRelatedCandidates([]);
+                          setSelectedId(item.record.id);
+                          setTab("home");
+                          window.setTimeout(() => {
+                            document.getElementById(`record-card-${item.record.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+                          }, 80);
+                        }}
+                        className={secondaryButtonClass}
+                      >
+                        開く
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+              <div className="mt-5 flex justify-end">
+                <button type="button" onClick={() => setRelatedCandidates([])} className={primaryButtonClass}>
+                  閉じる
+                </button>
+              </div>
+            </section>
+          </div>
+        ) : null}
+
         {tab === "home" ? (
           <div className="grid gap-3 sm:gap-4">
             <section className={panelClass}>
@@ -3514,6 +3808,30 @@ export default function Page() {
                     新規入力へ
                   </button>
                 </div>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {[
+                  { value: "text", label: "通常検索" },
+                  { value: "semantic", label: "意味検索" },
+                ].map((item) => (
+                  <button
+                    key={item.value}
+                    type="button"
+                    onClick={() => setSearchMode(item.value as SearchMode)}
+                    className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                      searchMode === item.value
+                        ? "border-[color:var(--accent)] bg-[var(--accent)] text-[var(--accent-contrast)]"
+                        : "border-[color:var(--border)] bg-[var(--card-soft)] text-[var(--muted)]"
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+                {searchMode === "semantic" ? (
+                  <span className="text-xs text-[var(--muted)]">
+                    {semanticSearching ? "意味検索中..." : semanticError ? `意味検索エラー: ${semanticError}` : query.trim() ? `${semanticResults.length}件` : "検索語を入力"}
+                  </span>
+                ) : null}
               </div>
 
               <div
@@ -3772,6 +4090,71 @@ export default function Page() {
                   <p className="text-sm leading-6 text-slate-600">
                     Vercel では `OPENAI_API_KEY` と Google連携用の環境変数を設定してください。クライアント側には渡しません。
                   </p>
+                </div>
+                <div className={softPanelClass}>
+                  <div className="text-sm font-medium text-[var(--text)]">意味検索インデックス</div>
+                  <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                    既存メモにembeddingを作成します。未処理、または本文が変わったメモだけ処理できます。
+                  </p>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void rebuildEmbeddingIndex(false)}
+                      disabled={embeddingProgress?.running}
+                      className={primaryButtonClass}
+                    >
+                      意味検索インデックスを作成
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void rebuildEmbeddingIndex(true)}
+                      disabled={embeddingProgress?.running}
+                      className={secondaryButtonClass}
+                    >
+                      全件再作成
+                    </button>
+                    {embeddingProgress?.running ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          embeddingCancelRef.current = true;
+                        }}
+                        className={dangerButtonClass}
+                      >
+                        中断
+                      </button>
+                    ) : null}
+                  </div>
+                  {embeddingProgress ? (
+                    <div className="mt-4 rounded-2xl border border-[color:var(--border)] bg-[var(--card)] p-3 text-xs text-[var(--muted)]">
+                      <div className="font-semibold text-[var(--text)]">
+                        {embeddingProgress.running ? `処理中... ${embeddingProgress.completed} / ${embeddingProgress.total}` : "処理結果"}
+                      </div>
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        <span>対象 {embeddingProgress.total}件</span>
+                        <span>完了 {embeddingProgress.completed}件</span>
+                        <span>スキップ {embeddingProgress.skipped}件</span>
+                        <span>失敗 {embeddingProgress.failed}件</span>
+                      </div>
+                      {embeddingProgress.currentTitle ? (
+                        <div className="mt-2 rounded-xl bg-[var(--card-soft)] px-3 py-2">
+                          {embeddingProgress.currentTitle}
+                        </div>
+                      ) : null}
+                      {embeddingProgress.errors.length > 0 ? (
+                        <details className="mt-3">
+                          <summary className="cursor-pointer font-semibold text-[var(--danger)]">
+                            エラー {embeddingProgress.errors.length}件
+                          </summary>
+                          <ul className="mt-2 max-h-36 space-y-1 overflow-auto text-[var(--danger)]">
+                            {embeddingProgress.errors.map((error, index) => (
+                              <li key={`${error}:${index}`}>{error}</li>
+                            ))}
+                          </ul>
+                        </details>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
                 <div className={softPanelClass}>
                   <div className="text-sm font-medium text-slate-800">アプリ更新</div>

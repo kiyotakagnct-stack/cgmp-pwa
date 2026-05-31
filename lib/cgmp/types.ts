@@ -147,6 +147,16 @@ export type CGMPBackupSummary = {
   lastBackupAt: string;
 };
 
+export type CGMPEmbeddingIndex = {
+  record_id: string;
+  vector: number[];
+  model: string;
+  dimensions: number;
+  embedding_text_hash: string;
+  source_updated_at: string;
+  embedded_at: string;
+};
+
 export type CGMPDeletedRecord = {
   schema_version: 1;
   record_id: string;
