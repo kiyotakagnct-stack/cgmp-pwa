@@ -562,10 +562,6 @@ function scrollToElementById(id: string, block: ScrollLogicalPosition = "start")
   document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block });
 }
 
-function scrollToElementByIdImmediate(id: string, block: ScrollLogicalPosition = "start") {
-  document.getElementById(id)?.scrollIntoView({ behavior: "auto", block });
-}
-
 function Badge({
   children,
   tone = "slate",
@@ -1373,110 +1369,99 @@ function WeeklyMinimap({
   activeDay: number;
   todayKey: string;
 }) {
-  const railRef = useRef<HTMLElement | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
+  const collapseTimerRef = useRef<number | null>(null);
 
-  const scrollFromPointer = (clientY: number) => {
-    const rail = railRef.current;
-    if (!rail) return;
-
-    const rect = rail.getBoundingClientRect();
-    const ratio = Math.min(0.999, Math.max(0, (clientY - rect.top) / rect.height));
-    const targets = days.flatMap((day, dayIndex) =>
-      day.records.length > 0
-        ? day.records.map((record) => ({ id: `week-item-${record.id}`, block: "center" as ScrollLogicalPosition }))
-        : [{ id: `week-day-${dayIndex}`, block: "start" as ScrollLogicalPosition }]
-    );
-    const target = targets[Math.min(targets.length - 1, Math.floor(ratio * targets.length))];
-    if (target) scrollToElementByIdImmediate(target.id, target.block);
+  const revealMinimap = () => {
+    setIsExpanded(true);
+    if (collapseTimerRef.current) {
+      window.clearTimeout(collapseTimerRef.current);
+    }
+    collapseTimerRef.current = window.setTimeout(() => setIsExpanded(false), 1600);
   };
+
+  useEffect(() => {
+    return () => {
+      if (collapseTimerRef.current) {
+        window.clearTimeout(collapseTimerRef.current);
+      }
+    };
+  }, []);
 
   return (
     <aside
-      ref={railRef}
-      onPointerDown={(event) => {
-        setIsDragging(true);
-        event.currentTarget.setPointerCapture(event.pointerId);
-        scrollFromPointer(event.clientY);
-      }}
-      onPointerMove={(event) => {
-        if (!isDragging) return;
-        scrollFromPointer(event.clientY);
-      }}
-      onPointerUp={(event) => {
-        setIsDragging(false);
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      }}
-      onPointerCancel={() => setIsDragging(false)}
-      className={`fixed right-2 top-48 bottom-72 z-30 w-14 touch-none select-none overflow-hidden rounded-3xl border border-[color:var(--border)] bg-[var(--card)] px-2 py-2.5 shadow-[0_18px_44px_var(--shadow-soft)] opacity-95 backdrop-blur-xl transition sm:right-4 sm:top-36 sm:bottom-44 sm:w-16 ${
-        isDragging ? "cursor-grabbing ring-2 ring-[color:var(--accent)]" : "cursor-ns-resize"
+      onPointerDown={revealMinimap}
+      className={`fixed right-1 top-48 bottom-72 z-30 select-none overflow-hidden rounded-3xl border border-[color:var(--border)] bg-[var(--card)] shadow-[0_18px_44px_var(--shadow-soft)] backdrop-blur-xl transition-all duration-200 sm:right-3 sm:top-36 sm:bottom-44 ${
+        isExpanded
+          ? "w-12 px-1.5 py-2 opacity-95 sm:w-14"
+          : "w-9 px-1 py-2 opacity-35 hover:opacity-80 focus-within:opacity-95 sm:w-10"
       }`}
       aria-label="Weekly Minimap"
     >
-      <div className="flex h-full flex-col gap-1.5 overflow-hidden">
+      <div className={`flex h-full flex-col overflow-hidden ${isExpanded ? "gap-1.5" : "gap-1"}`}>
         {days.map((day, index) => {
           const isActive = activeDay === index;
           const isToday = day.dateKey === todayKey;
           return (
             <div
               key={day.dateKey}
-              onClick={() => scrollToElementById(`week-day-${index}`)}
+              onClick={() => {
+                revealMinimap();
+                scrollToElementById(`week-day-${index}`);
+              }}
               onKeyDown={(event) => {
                 if (event.key !== "Enter" && event.key !== " ") return;
                 event.preventDefault();
+                revealMinimap();
                 scrollToElementById(`week-day-${index}`);
               }}
               role="button"
               tabIndex={0}
-              className={`min-h-0 flex-1 rounded-2xl border px-1.5 py-1 text-left transition ${
+              className={`min-h-0 flex-1 rounded-2xl border text-left transition ${
                 isActive
                   ? "border-[color:var(--accent)] bg-[var(--accent-soft)] shadow-[inset_0_0_0_1px_var(--accent)]"
                   : "border-transparent hover:border-[color:var(--border)] hover:bg-[var(--card-soft)]"
-              }`}
+              } ${isExpanded ? "px-1.5 py-1" : "px-1 py-0.5"}`}
               aria-label={`${WEEKDAY_MINI_LABELS[index]}へ移動`}
             >
               <div
-                className={`mx-auto mb-1 w-fit rounded-full px-1 text-[10px] font-semibold leading-4 ${
+                className={`mx-auto w-fit rounded-full px-1 font-semibold ${
                   isToday
                     ? "ring-1 ring-[color:var(--accent)] text-[var(--accent)]"
                     : isActive
                       ? "text-[var(--accent)]"
                       : "text-[var(--subtle)]"
-                }`}
+                } ${isExpanded ? "mb-1 text-[10px] leading-4" : "mb-0.5 text-[8px] leading-3"}`}
               >
                 {WEEKDAY_MINI_LABELS[index]}
               </div>
-              <div className="space-y-1">
+              <div className={isExpanded ? "space-y-1" : "space-y-0.5"}>
                 {day.records.length > 0 ? (
                   day.records.map((record) => {
                     const color = getDomainColorVar(record.domain || "other");
                     return (
-                      <button
+                      <div
                         key={record.id}
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          scrollToElementById(`week-item-${record.id}`, "center");
-                        }}
-                        className="flex h-3 w-full items-center gap-1 overflow-hidden rounded-sm"
-                        aria-label="recordへ移動"
-                        title=""
+                        className={`flex w-full items-center overflow-hidden rounded-sm ${
+                          isExpanded ? "h-3 gap-1" : "h-2 gap-0.5"
+                        }`}
+                        aria-hidden="true"
                       >
                         <span
-                          className="w-2.5 shrink-0 text-[9px] leading-none"
+                          className={`shrink-0 leading-none ${isExpanded ? "w-2.5 text-[9px]" : "w-1.5 text-[6px]"}`}
                           style={{ color } as CSSProperties}
                         >
                           {getMinimapSymbol(record)}
                         </span>
                         <span
-                          className="h-1 min-w-0 flex-1 rounded-full opacity-85"
+                          className={`min-w-0 flex-1 rounded-full ${isExpanded ? "h-1 opacity-85" : "h-0.5 opacity-65"}`}
                           style={{ backgroundColor: color } as CSSProperties}
                         />
-                      </button>
+                      </div>
                     );
                   })
                 ) : (
-                  <div className="mx-auto h-1 w-4 rounded-full bg-[var(--border)] opacity-60" />
+                  <div className="mx-auto h-0.5 w-3 rounded-full bg-[var(--border)] opacity-60" />
                 )}
               </div>
             </div>
@@ -1558,7 +1543,7 @@ function WeeklyView({
   }, [days]);
 
   return (
-    <div className="grid max-w-full gap-3 overflow-hidden pr-16 sm:gap-4 sm:pr-20">
+    <div className="grid max-w-full gap-3 overflow-hidden sm:gap-4">
       <WeeklyMinimap days={days} activeDay={activeDay} todayKey={todayKey} />
       <section className={panelClass}>
         <SectionHeading eyebrow="Week" title="週次ログビュー" />
