@@ -1395,9 +1395,9 @@ function WeeklyMinimap({
         if (event.currentTarget.contains(event.relatedTarget)) return;
         setIsExpanded(false);
       }}
-      className={`fixed right-1 top-36 bottom-36 z-30 select-none overflow-hidden rounded-3xl border transition-all duration-200 sm:right-3 sm:top-24 sm:bottom-28 ${
+      className={`fixed right-1 top-28 bottom-32 z-30 select-none overflow-hidden rounded-3xl border transition-all duration-200 sm:right-3 sm:top-20 sm:bottom-24 ${
         isExpanded
-          ? "w-12 border-[color:var(--border)] bg-[var(--card)] px-1.5 py-2 opacity-95 shadow-[0_18px_44px_var(--shadow-soft)] backdrop-blur-xl sm:w-14"
+          ? "w-16 border-[color:var(--border)] bg-[var(--card)] px-1.5 py-2 opacity-95 shadow-[0_18px_44px_var(--shadow-soft)] backdrop-blur-xl sm:w-[4.5rem]"
           : "w-9 border-transparent bg-transparent px-1 py-1 opacity-40 shadow-none backdrop-blur-none hover:opacity-70 sm:w-10"
       }`}
       aria-label="Weekly Minimap"
@@ -1421,27 +1421,27 @@ function WeeklyMinimap({
               }}
               role="button"
               tabIndex={0}
-              className={`min-h-0 flex-1 rounded-2xl border text-left transition ${
+              className={`min-h-0 flex-1 rounded-2xl border transition ${
                 isExpanded && isActive
                   ? "border-[color:var(--accent)] bg-[var(--accent-soft)] shadow-[inset_0_0_0_1px_var(--accent)]"
                   : isExpanded
                     ? "border-transparent hover:border-[color:var(--border)] hover:bg-[var(--card-soft)]"
                     : "border-transparent bg-transparent shadow-none"
-              } ${isExpanded ? "px-1.5 py-1" : "px-1 py-0.5"}`}
+              } ${isExpanded ? "grid grid-cols-[1.55rem_minmax(0,1fr)] items-start gap-1 px-1.5 py-1" : "px-1 py-0.5 text-left"}`}
               aria-label={`${WEEKDAY_MINI_LABELS[index]}へ移動`}
             >
               <div
-                className={`mx-auto w-fit rounded-full px-1 font-semibold ${
+                className={`w-fit rounded-full px-1 font-semibold ${
                   isExpanded && isToday
-                    ? "ring-1 ring-[color:var(--accent)] text-[var(--accent)]"
-                    : isExpanded && isActive
-                      ? "text-[var(--accent)]"
+                    ? "bg-[var(--card)] ring-1 ring-[color:var(--accent)] text-[var(--accent)]"
+                  : isExpanded && isActive
+                      ? "bg-[var(--card)] text-[var(--accent)]"
                       : "text-[var(--subtle)]"
-                } ${isExpanded ? "mb-1 text-[10px] leading-4" : "mb-0.5 text-[8px] leading-3"}`}
+                } ${isExpanded ? "sticky top-0 z-10 text-[10px] leading-4" : "mx-auto mb-0.5 text-[8px] leading-3"}`}
               >
                 {WEEKDAY_MINI_LABELS[index]}
               </div>
-              <div className={isExpanded ? "space-y-1" : "space-y-0.5"}>
+              <div className={isExpanded ? "min-w-0 space-y-1 pt-0.5" : "space-y-0.5"}>
                 {day.records.length > 0 ? (
                   day.records.map((record) => {
                     const color = getDomainColorVar(record.domain || "other");
