@@ -162,6 +162,11 @@ export type CGMPDeletedRecord = {
   google_calendar_id: string;
   external_delete_status: CGMPExternalDeleteStatus;
   external_delete_error: string;
+  drive_backup_status: CGMPBackupStatus;
+  drive_backup_retry_count: number;
+  drive_backup_last_error: string;
+  drive_backup_next_retry_at: string;
+  drive_backed_up_at: string;
 };
 
 export type CGMPSettings = {

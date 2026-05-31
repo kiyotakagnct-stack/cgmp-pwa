@@ -258,9 +258,38 @@ export async function processBackupQueue() {
     });
   const results: BackupProcessItemResult[] = [];
 
-  for (const tombstone of tombstones.filter((item) => isRetryDue(""))) {
+  const dueTombstones = tombstones
+    .filter((item) => item.drive_backup_status !== "backed_up")
+    .filter((item) => isRetryDue(item.drive_backup_next_retry_at || ""));
+
+  for (const tombstone of dueTombstones) {
+    await upsertDeletedRecord({
+      ...tombstone,
+      drive_backup_status: "backing_up",
+      drive_backup_last_error: "",
+    });
     const result = await backupDeletedRecord(tombstone);
     results.push(result);
+    if (result.ok) {
+      await upsertDeletedRecord({
+        ...tombstone,
+        drive_backup_status: "backed_up",
+        drive_backup_retry_count: 0,
+        drive_backup_last_error: "",
+        drive_backup_next_retry_at: "",
+        drive_backed_up_at: result.backedUpAt || new Date().toISOString(),
+      });
+      continue;
+    }
+
+    const retryCount = tombstone.drive_backup_retry_count + 1;
+    await upsertDeletedRecord({
+      ...tombstone,
+      drive_backup_status: "backup_failed",
+      drive_backup_retry_count: retryCount,
+      drive_backup_last_error: result.error || "DELETE_TOMBSTONE_BACKUP_FAILED",
+      drive_backup_next_retry_at: nextRetryAt(retryCount),
+    });
   }
 
   for (const item of dueItems) {
@@ -393,8 +422,33 @@ export async function getBackupStatus(): Promise<CGMPBackupSummary> {
 }
 
 export async function backupDeleteTombstoneNow(tombstone: CGMPDeletedRecord) {
-  const saved = await upsertDeletedRecord(tombstone);
-  return backupDeletedRecord(saved);
+  const saved = await upsertDeletedRecord({
+    ...tombstone,
+    drive_backup_status: "backing_up",
+    drive_backup_last_error: "",
+  });
+  const result = await backupDeletedRecord(saved);
+  if (result.ok) {
+    await upsertDeletedRecord({
+      ...saved,
+      drive_backup_status: "backed_up",
+      drive_backup_retry_count: 0,
+      drive_backup_last_error: "",
+      drive_backup_next_retry_at: "",
+      drive_backed_up_at: result.backedUpAt || new Date().toISOString(),
+    });
+    return result;
+  }
+
+  const retryCount = saved.drive_backup_retry_count + 1;
+  await upsertDeletedRecord({
+    ...saved,
+    drive_backup_status: "backup_failed",
+    drive_backup_retry_count: retryCount,
+    drive_backup_last_error: result.error || "DELETE_TOMBSTONE_BACKUP_FAILED",
+    drive_backup_next_retry_at: nextRetryAt(retryCount),
+  });
+  return result;
 }
 
 export async function restoreFromDrive() {

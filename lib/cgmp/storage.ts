@@ -127,6 +127,11 @@ function normalizeDeletedRecord(value: unknown): CGMPDeletedRecord | null {
     google_calendar_id: String(source.google_calendar_id || ""),
     external_delete_status: (source.external_delete_status || "none") as CGMPExternalDeleteStatus,
     external_delete_error: String(source.external_delete_error || ""),
+    drive_backup_status: (source.drive_backup_status || "pending_backup") as CGMPBackupStatus,
+    drive_backup_retry_count: Number.isFinite(Number(source.drive_backup_retry_count)) ? Number(source.drive_backup_retry_count) : 0,
+    drive_backup_last_error: String(source.drive_backup_last_error || ""),
+    drive_backup_next_retry_at: String(source.drive_backup_next_retry_at || ""),
+    drive_backed_up_at: String(source.drive_backed_up_at || ""),
   };
 }
 
