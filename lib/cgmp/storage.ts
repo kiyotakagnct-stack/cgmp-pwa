@@ -429,7 +429,7 @@ export async function applyRemoteRecordDeletion(tombstone: CGMPDeletedRecord) {
   const db = await openDatabase();
   let blobKeys: string[] = [];
   await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction([RECORDS_STORE, BACKUP_QUEUE_STORE, DELETED_RECORDS_STORE], "readwrite");
+    const tx = db.transaction([RECORDS_STORE, BACKUP_QUEUE_STORE, DELETED_RECORDS_STORE, EMBEDDING_INDEX_STORE], "readwrite");
     const recordsStore = tx.objectStore(RECORDS_STORE);
     const getRequest = recordsStore.get(normalized.record_id);
     getRequest.onsuccess = () => {
@@ -439,6 +439,7 @@ export async function applyRemoteRecordDeletion(tombstone: CGMPDeletedRecord) {
       const queueStore = tx.objectStore(BACKUP_QUEUE_STORE);
       queueStore.delete(`record:${normalized.record_id}`);
       record?.attachments?.forEach((attachment) => queueStore.delete(`attachment:${normalized.record_id}:${attachment.id}`));
+      tx.objectStore(EMBEDDING_INDEX_STORE).delete(normalized.record_id);
       tx.objectStore(DELETED_RECORDS_STORE).put(normalized);
     };
     getRequest.onerror = () => {
@@ -464,7 +465,7 @@ export async function deleteRecord(id: string, patch: Partial<CGMPDeletedRecord>
   let blobKeys: string[] = [];
   let tombstone: CGMPDeletedRecord | null = null;
   await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction([RECORDS_STORE, BACKUP_QUEUE_STORE, DELETED_RECORDS_STORE], "readwrite");
+    const tx = db.transaction([RECORDS_STORE, BACKUP_QUEUE_STORE, DELETED_RECORDS_STORE, EMBEDDING_INDEX_STORE], "readwrite");
     const recordsStore = tx.objectStore(RECORDS_STORE);
     const getRequest = recordsStore.get(id);
     getRequest.onsuccess = () => {
