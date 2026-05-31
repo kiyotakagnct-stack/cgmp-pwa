@@ -21,6 +21,9 @@ export const metadata: Metadata = {
     title: "CGMP",
     statusBarStyle: "black-translucent",
   },
+  other: {
+    "color-scheme": "light dark",
+  },
 };
 
 export const viewport: Viewport = {
@@ -32,9 +35,30 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const themeScript = `
+(() => {
+  try {
+    const key = "cgmp_theme";
+    const stored = window.localStorage.getItem(key);
+    const mode = stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+    const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const resolved = mode === "system" ? (prefersDark ? "dark" : "light") : mode;
+    document.documentElement.dataset.theme = resolved;
+    document.documentElement.dataset.themePreference = mode;
+  } catch {
+    document.documentElement.dataset.theme = "light";
+    document.documentElement.dataset.themePreference = "system";
+  }
+})();
+`;
+
   return (
-    <html lang="ja" className="h-full antialiased">
-      <body className="min-h-full flex flex-col bg-slate-950 text-zinc-50">{children}</body>
+    <html lang="ja" className="h-full antialiased" suppressHydrationWarning>
+      <head>
+        <meta name="color-scheme" content="light dark" />
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
+      <body className="min-h-full flex flex-col bg-[var(--bg)] text-[var(--text)]">{children}</body>
     </html>
   );
 }

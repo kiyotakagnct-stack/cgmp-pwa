@@ -13,6 +13,7 @@ import {
   deleteRecord,
   loadAllRecords,
   loadDeletedRecords,
+  isRecordDeleted,
   loadSettings,
   saveSettings,
   upsertRecord,
@@ -47,11 +48,12 @@ import {
   parseTags,
   tagsToHashtags,
 } from "@/lib/cgmp/utils";
-import type { ReactNode, RefObject } from "react";
+import type { CSSProperties, ReactNode, RefObject } from "react";
 import type { ImageAttachment, ImageVisionResult } from "@/types/image";
 
 type AppTab = "home" | "compose" | "settings";
 type SortKey = "updated_at" | "datetime";
+type ThemeMode = "system" | "light" | "dark";
 type Notice = { kind: "info" | "error"; text: string } | null;
 type LightboxState = { imageUrl: string; title: string } | null;
 type AiProcessingOverlayState = {
@@ -140,18 +142,42 @@ type RecordFormState = {
 };
 
 const fieldClass =
-  "mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-blue-400/80 focus:ring-4 focus:ring-blue-200/55";
+  "mt-2 w-full rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-4 py-3 text-sm text-[var(--text)] outline-none transition placeholder:text-[color:var(--subtle)] focus:border-[color:var(--accent)] focus:ring-4 focus:ring-[color:var(--accent-soft)]";
 const textareaClass = `${fieldClass} min-h-[120px] resize-y`;
 const panelClass =
-  "rounded-[24px] border border-sky-100 bg-white/95 p-4 shadow-[0_18px_55px_rgba(37,99,235,0.10),0_2px_10px_rgba(15,23,42,0.04)] sm:rounded-[28px] sm:p-5";
+  "rounded-[24px] border border-[color:var(--border)] bg-[var(--card)] p-4 shadow-[0_18px_55px_var(--shadow-soft),0_2px_10px_var(--shadow-soft)] sm:rounded-[28px] sm:p-5";
 const softPanelClass =
-  "rounded-[22px] border border-slate-200 bg-slate-50/90 p-3 shadow-[0_10px_30px_rgba(15,23,42,0.04)] sm:rounded-[24px] sm:p-4";
+  "rounded-[22px] border border-[color:var(--border)] bg-[var(--card-soft)] p-3 shadow-[0_10px_30px_var(--shadow-soft)] sm:rounded-[24px] sm:p-4";
 const primaryButtonClass =
-  "rounded-2xl border border-blue-500 bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(37,99,235,0.22)] transition hover:border-blue-600 hover:bg-blue-700";
+  "rounded-2xl border border-[color:var(--accent)] bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-[var(--accent-contrast)] shadow-[0_10px_24px_var(--shadow-soft)] transition hover:brightness-95";
 const secondaryButtonClass =
-  "rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-[0_8px_18px_rgba(15,23,42,0.04)] transition hover:border-blue-200 hover:bg-blue-50";
+  "rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-4 py-2.5 text-sm font-semibold text-[var(--text)] shadow-[0_8px_18px_var(--shadow-soft)] transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)]";
 const dangerButtonClass =
-  "rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-100";
+  "rounded-2xl border border-[color:var(--danger)] bg-[var(--danger-soft)] px-4 py-2.5 text-sm font-semibold text-[var(--danger)] transition hover:brightness-95";
+const THEME_STORAGE_KEY = "cgmp_theme";
+
+function readStoredTheme(): ThemeMode {
+  if (typeof window === "undefined") return "system";
+  try {
+    const value = window.localStorage.getItem(THEME_STORAGE_KEY);
+    return value === "light" || value === "dark" || value === "system" ? value : "system";
+  } catch {
+    return "system";
+  }
+}
+
+function resolveTheme(mode: ThemeMode): "light" | "dark" {
+  if (typeof window === "undefined") return "light";
+  if (mode !== "system") return mode;
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function applyTheme(mode: ThemeMode) {
+  if (typeof document === "undefined") return;
+  const resolved = resolveTheme(mode);
+  document.documentElement.dataset.theme = resolved;
+  document.documentElement.dataset.themePreference = mode;
+}
 
 function blankForm(text = ""): RecordFormState {
   return {
@@ -426,14 +452,14 @@ function Badge({
 }) {
   const toneClass =
     tone === "cyan"
-      ? "border-blue-200 bg-blue-50 text-blue-700"
+      ? "border-[color:var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
       : tone === "emerald"
-        ? "border-teal-200 bg-teal-50 text-teal-700"
+        ? "border-[color:var(--success)] bg-[var(--success-soft)] text-[var(--success)]"
         : tone === "amber"
-          ? "border-orange-200 bg-orange-50 text-orange-700"
+          ? "border-[color:var(--orange)] bg-[var(--orange-soft)] text-[var(--orange)]"
           : tone === "rose"
-            ? "border-rose-200 bg-rose-50 text-rose-700"
-            : "border-slate-200 bg-slate-100 text-slate-700";
+            ? "border-[color:var(--danger)] bg-[var(--danger-soft)] text-[var(--danger)]"
+            : "border-[color:var(--border)] bg-[var(--card-soft)] text-[var(--muted)]";
   return (
     <span
       className={`inline-flex items-center rounded-full border ${
@@ -441,6 +467,30 @@ function Badge({
       } ${toneClass}`}
     >
       {children}
+    </span>
+  );
+}
+
+function getDomainColorVar(domain: CGMPDomain | string) {
+  const normalized = String(domain || "other").replace("_", "-");
+  if (normalized === "life-admin") return "var(--domain-life-admin)";
+  return `var(--domain-${normalized})`;
+}
+
+function DomainBadge({ domain, compact = false }: { domain: CGMPDomain | string; compact?: boolean }) {
+  const color = getDomainColorVar(domain);
+  return (
+    <span
+      className={`inline-flex items-center rounded-full border text-[color:var(--domain-color)] ${
+        compact ? "px-2 py-0.5 text-[11px] leading-5" : "px-2.5 py-1 text-xs"
+      }`}
+      style={{
+        "--domain-color": color,
+        backgroundColor: `color-mix(in srgb, ${color} 12%, var(--card))`,
+        borderColor: color,
+      } as CSSProperties}
+    >
+      {getDomainLabel(domain)}
     </span>
   );
 }
@@ -462,24 +512,24 @@ function AiProcessingOverlay({
 
   return (
     <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-white/68 px-6 backdrop-blur-[2px]"
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-[var(--overlay)] px-6 backdrop-blur-[2px]"
       role="status"
       aria-live="polite"
       aria-label={title}
     >
-      <div className="w-full max-w-[280px] rounded-[28px] border border-blue-100 bg-white/95 p-6 text-center shadow-[0_24px_80px_rgba(37,99,235,0.18)]">
-        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-blue-50">
+      <div className="w-full max-w-[280px] rounded-[28px] border border-[color:var(--border)] bg-[var(--card)] p-6 text-center shadow-[0_24px_80px_var(--shadow-soft)]">
+        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-[var(--accent-soft)]">
           {isDone ? (
-            <span className="text-2xl font-bold text-blue-600">✓</span>
+            <span className="text-2xl font-bold text-[var(--accent)]">✓</span>
           ) : (
-            <span className="h-8 w-8 animate-spin rounded-full border-4 border-blue-100 border-t-blue-600" />
+            <span className="h-8 w-8 animate-spin rounded-full border-4 border-[color:var(--accent-soft)] border-t-[color:var(--accent)]" />
           )}
         </div>
-        <div className="mt-4 text-xs font-semibold uppercase tracking-[0.28em] text-blue-500">
+        <div className="mt-4 text-xs font-semibold uppercase tracking-[0.28em] text-[var(--accent)]">
           {state.kind === "text" ? "Text AI" : "Image AI"}
         </div>
-        <div className="mt-2 text-lg font-semibold text-slate-950">{title}</div>
-        <div className="mt-2 font-mono text-sm text-slate-500">{description}</div>
+        <div className="mt-2 text-lg font-semibold text-[var(--text)]">{title}</div>
+        <div className="mt-2 font-mono text-sm text-[var(--muted)]">{description}</div>
       </div>
     </div>
   );
@@ -496,9 +546,9 @@ function SectionHeading({
 }) {
   return (
     <div className="mb-4">
-      <div className="text-[11px] uppercase tracking-[0.3em] text-blue-500/80">{eyebrow}</div>
-      <h2 className="mt-2 text-xl font-semibold text-slate-950">{title}</h2>
-      {description ? <p className="mt-1 text-sm leading-6 text-slate-500">{description}</p> : null}
+      <div className="text-[11px] uppercase tracking-[0.3em] text-[var(--accent)]">{eyebrow}</div>
+      <h2 className="mt-2 text-xl font-semibold text-[var(--text)]">{title}</h2>
+      {description ? <p className="mt-1 text-sm leading-6 text-[var(--muted)]">{description}</p> : null}
     </div>
   );
 }
@@ -517,7 +567,7 @@ function LabeledInput({
   type?: string;
 }) {
   return (
-    <label className="block text-sm font-medium text-slate-700">
+    <label className="block text-sm font-medium text-[var(--text)]">
       {label}
       <input
         type={type}
@@ -540,7 +590,7 @@ function LabeledNumber({
   onChange: (value: number) => void;
 }) {
   return (
-    <label className="block text-sm font-medium text-slate-700">
+    <label className="block text-sm font-medium text-[var(--text)]">
       {label}
       <input
         type="number"
@@ -569,7 +619,7 @@ function LabeledTextarea({
   inputRef?: RefObject<HTMLTextAreaElement | null>;
 }) {
   return (
-    <label className="block text-sm font-medium text-slate-700">
+    <label className="block text-sm font-medium text-[var(--text)]">
       {label}
       <textarea
         value={value}
@@ -595,7 +645,7 @@ function LabeledSelect({
   options: { value: string; label: string }[];
 }) {
   return (
-    <label className="block text-sm font-medium text-slate-700">
+    <label className="block text-sm font-medium text-[var(--text)]">
       {label}
       <select value={value} onChange={(event) => onChange(event.target.value)} className={fieldClass}>
         {options.map((option) => (
@@ -618,13 +668,13 @@ function LabeledToggle({
   onChange: (value: boolean) => void;
 }) {
   return (
-    <label className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
+    <label className="flex items-center justify-between gap-3 rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-4 py-3 text-sm text-[var(--text)]">
       <span>{label}</span>
       <button
         type="button"
         onClick={() => onChange(!value)}
         className={`relative h-6 w-11 rounded-full border transition ${
-          value ? "border-blue-500 bg-blue-500" : "border-slate-200 bg-slate-100"
+          value ? "border-[color:var(--accent)] bg-[var(--accent)]" : "border-[color:var(--border)] bg-[var(--card-soft)]"
         }`}
       >
         <span
@@ -832,10 +882,10 @@ function RecordCard({
       <div
         className={`rounded-[22px] border p-3 transition duration-300 sm:rounded-[24px] sm:p-4 ${
           isChecked
-            ? "border-orange-300 bg-orange-50/70 shadow-[0_0_0_1px_rgba(249,115,22,0.12),0_16px_42px_rgba(249,115,22,0.12)]"
+            ? "border-[color:var(--orange)] bg-[var(--orange-soft)] shadow-[0_16px_42px_var(--shadow-soft)]"
             : isSelected
-            ? "border-blue-500 bg-blue-50 shadow-[0_0_0_1px_rgba(37,99,235,0.10),0_16px_42px_rgba(37,99,235,0.14)]"
-            : "border-slate-200 bg-white group-hover:border-blue-200 group-hover:bg-blue-50/50"
+            ? "border-[color:var(--accent)] bg-[var(--accent-soft)] shadow-[0_16px_42px_var(--shadow-soft)]"
+            : "border-[color:var(--border)] bg-[var(--card)] group-hover:border-[color:var(--accent)] group-hover:bg-[var(--accent-soft)]"
         }`}
       >
         <div className="flex flex-wrap items-center gap-1.5">
@@ -855,8 +905,8 @@ function RecordCard({
             }}
             className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border text-xs font-bold transition ${
               isChecked
-                ? "border-orange-400 bg-orange-500 text-white shadow-[0_8px_18px_rgba(249,115,22,0.22)]"
-                : "border-slate-300 bg-white text-transparent group-hover:border-blue-300"
+                ? "border-[color:var(--orange)] bg-[var(--orange)] text-white shadow-[0_8px_18px_var(--shadow-soft)]"
+                : "border-[color:var(--border)] bg-[var(--card)] text-transparent group-hover:border-[color:var(--accent)]"
             }`}
             aria-label={`${record.title || "メモ"}を選択`}
           >
@@ -865,7 +915,7 @@ function RecordCard({
           <Badge compact tone={record.action === "calendar" ? "amber" : record.action === "reminder" ? "rose" : record.action === "unclear" ? "slate" : "cyan"}>
             {getActionLabel(record.action)}
           </Badge>
-          <Badge compact tone="slate">{getDomainLabel(record.domain || "other")}</Badge>
+          <DomainBadge compact domain={record.domain || "other"} />
           <Badge compact tone="slate">{getParaLabel(para)}</Badge>
           <Badge compact tone={getBackupTone(record)}>{getBackupLabel(record)}</Badge>
           {photoBackupBadge ? <Badge compact tone={photoBackupBadge.tone}>{photoBackupBadge.label}</Badge> : null}
@@ -876,7 +926,7 @@ function RecordCard({
           ) : null}
           {isCalendarRegistered ? <Badge compact tone="amber">GCal</Badge> : null}
           {record.external_action_status === "failed" ? <Badge compact tone="rose">外部失敗</Badge> : null}
-          <span className="text-[11px] text-slate-400">{formatJstDateTime(record.updated_at)}</span>
+          <span className="text-[11px] text-[var(--subtle)]">{formatJstDateTime(record.updated_at)}</span>
           <div className="ml-auto shrink-0">
             <input
               ref={photoInputRef}
@@ -900,7 +950,7 @@ function RecordCard({
                 photoInputRef.current?.click();
               }}
               onKeyDown={(event) => event.stopPropagation()}
-              className="rounded-full border border-blue-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-blue-700 shadow-[0_6px_16px_rgba(37,99,235,0.08)] transition hover:border-blue-300 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-full border border-[color:var(--accent)] bg-[var(--card)] px-2.5 py-1 text-[11px] font-semibold text-[var(--accent)] shadow-[0_6px_16px_var(--shadow-soft)] transition hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50"
             >
               ＋写真
             </button>
@@ -908,8 +958,8 @@ function RecordCard({
         </div>
 
         <div className="mt-3">
-          <h3 className="text-base font-semibold text-slate-950">{record.title || "（無題）"}</h3>
-          <p className="mt-1 line-clamp-2 text-sm leading-6 text-slate-600">
+          <h3 className="text-base font-semibold text-[var(--text)]">{record.title || "（無題）"}</h3>
+          <p className="mt-1 line-clamp-2 text-sm leading-6 text-[var(--muted)]">
             {record.summary || record.body || record.raw_input}
           </p>
         </div>
@@ -920,7 +970,7 @@ function RecordCard({
           ))}
         </div>
 
-        <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-400">
+        <div className="mt-4 flex flex-wrap gap-2 text-xs text-[var(--subtle)]">
           <span>{record.date || "未設定日付"}</span>
           <span>{record.time || "未設定時刻"}</span>
           <span>{record.external_action_status}</span>
@@ -936,9 +986,9 @@ function RecordCard({
               : "mt-0 h-0 opacity-0 group-focus-visible:mt-4 group-focus-visible:h-[28rem] group-focus-visible:opacity-100 sm:group-focus-visible:h-[30rem]"
           }`}
         >
-          <div className="flex h-full flex-col rounded-2xl border border-blue-100 bg-white px-4 py-3">
+          <div className="flex h-full flex-col rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-4 py-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="text-[11px] uppercase tracking-[0.28em] text-blue-500">Detail</div>
+              <div className="text-[11px] uppercase tracking-[0.28em] text-[var(--accent)]">Detail</div>
               <div className="flex flex-wrap gap-2">
                 {record.action === "reminder" ? (
                   isTaskRegistered ? (
@@ -1019,7 +1069,7 @@ function RecordCard({
                 </button>
               </div>
             </div>
-            <div className="mt-3 flex-1 space-y-4 overflow-auto overscroll-contain pr-1 text-sm leading-6 text-slate-700">
+            <div className="mt-3 flex-1 space-y-4 overflow-auto overscroll-contain pr-1 text-sm leading-6 text-[var(--text)]">
               <section>
                 <div className="text-[11px] uppercase tracking-[0.24em] text-slate-400">AI要約</div>
                 <p className="mt-1 whitespace-pre-wrap break-words">{record.summary || "（要約なし）"}</p>
@@ -1088,16 +1138,16 @@ function MiniRecordCard({
       onClick={() => onOpen(record.id)}
       className="group w-full text-left"
     >
-      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 transition hover:border-blue-200 hover:bg-blue-50/50">
-        <div className="flex items-center gap-2 text-[11px] text-slate-400">
+      <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-4 py-3 transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)]">
+        <div className="flex items-center gap-2 text-[11px] text-[var(--subtle)]">
           <span>{record.updated_at ? formatJstDateTime(record.updated_at) : "未設定"}</span>
           <span>/</span>
           <span>{record.action || "note"}</span>
         </div>
-        <div className="mt-1 line-clamp-2 text-sm font-semibold leading-6 text-slate-950">
+        <div className="mt-1 line-clamp-2 text-sm font-semibold leading-6 text-[var(--text)]">
           {record.title || "（無題）"}
         </div>
-        <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">
+        <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--muted)]">
           {record.summary || record.raw_input || ""}
         </p>
       </div>
@@ -1107,6 +1157,7 @@ function MiniRecordCard({
 
 export default function Page() {
   const [tab, setTab] = useState<AppTab>("home");
+  const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [records, setRecords] = useState<CGMPRecord[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isReady, setIsReady] = useState(false);
@@ -1158,6 +1209,16 @@ export default function Page() {
   const aiProcessingIdRef = useRef(0);
   const aiProcessingHideTimerRef = useRef<number | null>(null);
   const scriptableImportInputRef = useRef<HTMLInputElement | null>(null);
+
+  function changeThemeMode(mode: ThemeMode) {
+    setThemeMode(mode);
+    applyTheme(mode);
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, mode);
+    } catch {
+      // Theme preference is nice-to-have; the UI still updates for this session.
+    }
+  }
 
   async function reloadRecords(preferredId?: string) {
     const nextRecords = await loadAllRecords();
@@ -1428,6 +1489,7 @@ export default function Page() {
       for (const record of targets) {
         const result = resultById.get(record.id);
         if (!result) continue;
+        if (await isRecordDeleted(record.id)) continue;
         const nextRecord: CGMPRecord = result.ok
           ? {
               ...record,
@@ -1693,6 +1755,21 @@ export default function Page() {
       setDriveImporting(false);
     }
   }
+
+  useEffect(() => {
+    const storedTheme = readStoredTheme();
+    setThemeMode(storedTheme);
+    applyTheme(storedTheme);
+  }, []);
+
+  useEffect(() => {
+    if (themeMode !== "system") return;
+    const media = window.matchMedia?.("(prefers-color-scheme: dark)");
+    if (!media) return;
+    const handleChange = () => applyTheme("system");
+    media.addEventListener("change", handleChange);
+    return () => media.removeEventListener("change", handleChange);
+  }, [themeMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2250,9 +2327,15 @@ export default function Page() {
 
     try {
       const targets = records.filter((record) => checkedRecordIds.includes(record.id));
-      const externalErrors = (await Promise.all(targets.map((record) => deleteRegisteredExternalItems(record)))).flat();
-      await Promise.all(targets.map((record) => createDeletionTombstone(record, externalErrors)));
-      const deletedIds = new Set(checkedRecordIds);
+      const deleteResults = await Promise.all(
+        targets.map(async (record) => ({
+          record,
+          externalErrors: await deleteRegisteredExternalItems(record),
+        }))
+      );
+      await Promise.all(deleteResults.map(({ record, externalErrors }) => createDeletionTombstone(record, externalErrors)));
+      const externalErrors = deleteResults.flatMap((result) => result.externalErrors);
+      const deletedIds = new Set(targets.map((record) => record.id));
       setCheckedRecordIds([]);
       setIsEditPanelOpen((open) => (selectedId && deletedIds.has(selectedId) ? false : open));
       setSelectedId((current) => (current && deletedIds.has(current) ? null : current));
@@ -2334,12 +2417,12 @@ export default function Page() {
 
   if (!isReady) {
     return (
-      <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(191,219,254,0.7),_transparent_42%),linear-gradient(180deg,#f8fbff_0%,#eef5ff_52%,#f7fafc_100%)] px-6 py-10 text-slate-800">
+      <main className="min-h-screen bg-[image:var(--app-bg)] px-6 py-10 text-[var(--text)]">
         <div className="mx-auto flex min-h-[60vh] max-w-5xl items-center justify-center">
           <div className={panelClass}>
-            <p className="text-sm uppercase tracking-[0.4em] text-blue-500">CGMP PWA</p>
-            <h1 className="mt-3 text-3xl font-semibold text-slate-950">読み込み中...</h1>
-            <p className="mt-2 text-slate-500">IndexedDB と設定を確認しています。</p>
+            <p className="text-sm uppercase tracking-[0.4em] text-[var(--accent)]">CGMP PWA</p>
+            <h1 className="mt-3 text-3xl font-semibold text-[var(--text)]">読み込み中...</h1>
+            <p className="mt-2 text-[var(--muted)]">IndexedDB と設定を確認しています。</p>
           </div>
         </div>
       </main>
@@ -2347,14 +2430,14 @@ export default function Page() {
   }
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(191,219,254,0.75),_transparent_42%),linear-gradient(180deg,#f8fbff_0%,#eef5ff_52%,#f7fafc_100%)] text-slate-800">
+    <main className="min-h-screen bg-[image:var(--app-bg)] text-[var(--text)]">
       <div className="mx-auto flex min-h-screen max-w-7xl flex-col px-2 py-3 pb-28 sm:px-5 lg:px-7">
         {notice ? (
           <div
             className={`mb-4 rounded-2xl border px-4 py-3 text-sm ${
               notice.kind === "info"
-                ? "border-blue-200 bg-blue-50 text-blue-800"
-                : "border-rose-200 bg-rose-50 text-rose-700"
+                ? "border-[color:var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
+                : "border-[color:var(--danger)] bg-[var(--danger-soft)] text-[var(--danger)]"
             }`}
           >
             {notice.text}
@@ -2362,13 +2445,13 @@ export default function Page() {
         ) : null}
 
         {externalConfirm ? (
-          <div className="fixed inset-0 z-[90] flex items-end justify-center bg-white/65 px-4 py-5 backdrop-blur-sm sm:items-center">
-            <section className="w-full max-w-md rounded-[28px] border border-blue-100 bg-white p-5 shadow-[0_28px_90px_rgba(15,23,42,0.18)]">
-              <div className="text-[11px] uppercase tracking-[0.34em] text-blue-500">Google Sync</div>
-              <h2 className="mt-2 text-xl font-semibold text-slate-950">
+          <div className="fixed inset-0 z-[90] flex items-end justify-center bg-[var(--overlay)] px-4 py-5 backdrop-blur-sm sm:items-center">
+            <section className="w-full max-w-md rounded-[28px] border border-[color:var(--border)] bg-[var(--card)] p-5 shadow-[0_28px_90px_var(--shadow-soft)]">
+              <div className="text-[11px] uppercase tracking-[0.34em] text-[var(--accent)]">Google Sync</div>
+              <h2 className="mt-2 text-xl font-semibold text-[var(--text)]">
                 {externalConfirm.action === "calendar" ? "Google Calendarにも登録しますか？" : "Google Tasksにも登録しますか？"}
               </h2>
-              <p className="mt-3 text-sm leading-6 text-slate-600">
+              <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
                 「{externalConfirm.title}」を保存しました。Google側にも作成すると、以後の完了状態や日時変更をCGMPと同期できます。
               </p>
               <div className="mt-5 flex flex-wrap gap-2">
@@ -2413,7 +2496,7 @@ export default function Page() {
                   isFilterOpen ? "mt-3 max-h-[32rem] opacity-100" : "mt-0 max-h-0 opacity-0"
                 }`}
               >
-                <div className="rounded-[20px] border border-slate-200 bg-slate-50/80 p-3">
+                <div className="rounded-[20px] border border-[color:var(--border)] bg-[var(--card-soft)] p-3">
                   <div className="grid gap-3 sm:grid-cols-2">
                     <LabeledInput label="Tag search" value={tagQuery} onChange={setTagQuery} placeholder="例: 仕様" />
                     <LabeledSelect
@@ -2617,6 +2700,31 @@ export default function Page() {
                   onChange={(value) => setSettingsDraft((prev) => (prev ? { ...prev, timezone: value } : prev))}
                   placeholder="Asia/Tokyo"
                 />
+                <div className={softPanelClass}>
+                  <div className="text-sm font-medium text-[var(--text)]">Theme</div>
+                  <div className="mt-3 grid grid-cols-3 gap-2">
+                    {[
+                      { value: "system", label: "System" },
+                      { value: "light", label: "Light" },
+                      { value: "dark", label: "Dark" },
+                    ].map((item) => (
+                      <button
+                        key={item.value}
+                        type="button"
+                        onClick={() => changeThemeMode(item.value as ThemeMode)}
+                        className={`rounded-2xl border px-3 py-2 text-sm font-semibold transition ${
+                          themeMode === item.value
+                            ? "border-[color:var(--accent)] bg-[var(--accent)] text-[var(--accent-contrast)]"
+                            : "border-[color:var(--border)] bg-[var(--card)] text-[var(--muted)] hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)]"
+                        }`}
+                        aria-pressed={themeMode === item.value}
+                      >
+                        <span className="mr-1">{themeMode === item.value ? "●" : "○"}</span>
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <div className={softPanelClass}>
                   <p className="text-sm leading-6 text-slate-600">
                     Vercel では `OPENAI_API_KEY` と Google連携用の環境変数を設定してください。クライアント側には渡しません。
@@ -2823,7 +2931,7 @@ export default function Page() {
             setComposeAiMeta(null);
             setComposeFocusTick((value) => value + 1);
           }}
-          className="flex h-14 w-14 items-center justify-center rounded-full border border-orange-200 bg-orange-500 text-2xl font-semibold text-white shadow-[0_24px_60px_rgba(249,115,22,0.26)] backdrop-blur-xl transition hover:-translate-y-0.5 hover:bg-orange-600 hover:shadow-[0_28px_70px_rgba(249,115,22,0.32)] sm:h-16 sm:w-16"
+          className="flex h-14 w-14 items-center justify-center rounded-full border border-[color:var(--orange)] bg-[var(--orange)] text-2xl font-semibold text-white shadow-[0_24px_60px_var(--shadow-soft)] backdrop-blur-xl transition hover:-translate-y-0.5 hover:brightness-95 sm:h-16 sm:w-16"
           aria-label="新規メモを作成"
           title="新規メモを作成"
         >
@@ -2832,7 +2940,7 @@ export default function Page() {
         <button
           type="button"
           onClick={() => setIsMiniListOpen((value) => !value)}
-          className="flex h-14 w-14 items-center justify-center rounded-full border border-slate-200 bg-white text-[26px] font-semibold text-slate-700 shadow-[0_20px_48px_rgba(15,23,42,0.12)] backdrop-blur-xl transition hover:-translate-y-0.5 hover:bg-blue-50 sm:h-16 sm:w-16"
+          className="flex h-14 w-14 items-center justify-center rounded-full border border-[color:var(--border)] bg-[var(--card)] text-[26px] font-semibold text-[var(--text)] shadow-[0_20px_48px_var(--shadow-soft)] backdrop-blur-xl transition hover:-translate-y-0.5 hover:bg-[var(--accent-soft)] sm:h-16 sm:w-16"
           aria-label="縮小メモ一覧を開く"
           title="縮小メモ一覧"
         >
@@ -2843,29 +2951,29 @@ export default function Page() {
       {isEditPanelOpen && selectedRecord && detailDraft ? (
         <>
           <div
-            className="fixed inset-0 z-[60] bg-slate-950/25 backdrop-blur-[2px]"
+            className="fixed inset-0 z-[60] bg-slate-950/30 backdrop-blur-[2px]"
             onClick={() => setIsEditPanelOpen(false)}
             aria-hidden="true"
           />
-          <aside className="fixed inset-x-0 bottom-0 z-[70] flex max-h-[88vh] animate-[editSheetUp_300ms_cubic-bezier(0.22,1,0.36,1)] flex-col rounded-t-[30px] border-t border-slate-200 bg-white shadow-[0_-24px_80px_rgba(15,23,42,0.18)] sm:inset-x-auto sm:inset-y-0 sm:left-0 sm:h-full sm:max-h-none sm:w-[min(600px,48vw)] sm:animate-[editPanelIn_300ms_cubic-bezier(0.22,1,0.36,1)] sm:rounded-r-[32px] sm:rounded-tl-none sm:border-r sm:border-t-0 sm:shadow-[24px_0_80px_rgba(15,23,42,0.16)]">
-            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 sm:px-6">
+          <aside className="fixed inset-x-0 bottom-0 z-[70] flex max-h-[88vh] animate-[editSheetUp_300ms_cubic-bezier(0.22,1,0.36,1)] flex-col rounded-t-[30px] border-t border-[color:var(--border)] bg-[var(--card)] shadow-[0_-24px_80px_var(--shadow-soft)] sm:inset-x-auto sm:inset-y-0 sm:left-0 sm:h-full sm:max-h-none sm:w-[min(600px,48vw)] sm:animate-[editPanelIn_300ms_cubic-bezier(0.22,1,0.36,1)] sm:rounded-r-[32px] sm:rounded-tl-none sm:border-r sm:border-t-0 sm:shadow-[24px_0_80px_var(--shadow-soft)]">
+            <div className="flex items-start justify-between gap-4 border-b border-[color:var(--border)] px-5 py-4 sm:px-6">
               <div className="min-w-0">
-                <div className="text-[11px] uppercase tracking-[0.34em] text-blue-500">Edit</div>
-                <h2 className="mt-1 truncate text-xl font-semibold text-slate-950">
+                <div className="text-[11px] uppercase tracking-[0.34em] text-[var(--accent)]">Edit</div>
+                <h2 className="mt-1 truncate text-xl font-semibold text-[var(--text)]">
                   {selectedRecord.title || "（無題）"}
                 </h2>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <Badge tone={selectedRecord.action === "calendar" ? "amber" : selectedRecord.action === "reminder" ? "rose" : "cyan"}>
                     {selectedRecord.action}
                   </Badge>
-                  <Badge>{selectedRecord.domain || "other"}</Badge>
+                  <DomainBadge domain={selectedRecord.domain || "other"} />
                   <Badge>{getEffectivePara(selectedRecord)}</Badge>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setIsEditPanelOpen(false)}
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-xl text-slate-600 transition hover:bg-slate-50"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-[color:var(--border)] bg-[var(--card)] text-xl text-[var(--muted)] transition hover:bg-[var(--card-soft)]"
                 aria-label="編集パネルを閉じる"
               >
                 ×
@@ -2880,8 +2988,8 @@ export default function Page() {
                   onFilesSelected={(files) => handleAddPhotos(selectedRecord.id, files)}
                 />
                 {(selectedRecord.attachments || []).length > 0 ? (
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
-                    <div className="mb-3 text-[11px] uppercase tracking-[0.28em] text-blue-500">Photos</div>
+                  <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] p-3">
+                    <div className="mb-3 text-[11px] uppercase tracking-[0.28em] text-[var(--accent)]">Photos</div>
                     <ImageAttachmentGrid
                       attachments={selectedRecord.attachments}
                       onOpen={(attachment, imageUrl) => setLightbox({ imageUrl, title: attachment.summary_80 || "添付画像" })}
@@ -2901,7 +3009,7 @@ export default function Page() {
               </div>
             </div>
 
-            <div className="border-t border-slate-200 bg-white/95 px-5 py-4 backdrop-blur sm:px-6">
+            <div className="border-t border-[color:var(--border)] bg-[var(--card)] px-5 py-4 backdrop-blur sm:px-6">
               <div className="flex flex-wrap gap-2">
                 <button type="button" onClick={() => saveDetail(true)} disabled={detailSaving} className={primaryButtonClass}>
                   {detailSaving ? "保存中..." : "保存して閉じる"}
@@ -2924,15 +3032,15 @@ export default function Page() {
       {isMiniListOpen ? (
         <>
           <div
-            className="fixed inset-0 z-40 bg-slate-900/25 backdrop-blur-[1px]"
+            className="fixed inset-0 z-40 bg-slate-900/30 backdrop-blur-[1px]"
             onClick={() => setIsMiniListOpen(false)}
             aria-hidden="true"
           />
-          <aside className="fixed inset-y-0 right-0 z-50 flex w-[min(92vw,420px)] animate-[miniListIn_300ms_cubic-bezier(0.22,1,0.36,1)] flex-col border-l border-slate-200 bg-white/98 shadow-[0_0_0_1px_rgba(255,255,255,0.7),-24px_0_80px_rgba(15,23,42,0.16)]">
-            <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
+          <aside className="fixed inset-y-0 right-0 z-50 flex w-[min(92vw,420px)] animate-[miniListIn_300ms_cubic-bezier(0.22,1,0.36,1)] flex-col border-l border-[color:var(--border)] bg-[var(--card)] shadow-[-24px_0_80px_var(--shadow-soft)]">
+            <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-5 py-4">
               <div>
-                <div className="text-[11px] uppercase tracking-[0.34em] text-blue-500">Mini List</div>
-                <h2 className="mt-1 text-lg font-semibold text-slate-950">縮小メモ一覧</h2>
+                <div className="text-[11px] uppercase tracking-[0.34em] text-[var(--accent)]">Mini List</div>
+                <h2 className="mt-1 text-lg font-semibold text-[var(--text)]">縮小メモ一覧</h2>
               </div>
               <button
                 type="button"
@@ -2943,8 +3051,8 @@ export default function Page() {
               </button>
             </div>
 
-            <div className="border-b border-slate-200 px-5 py-4">
-              <label className="block text-sm font-medium text-slate-700">
+            <div className="border-b border-[color:var(--border)] px-5 py-4">
+              <label className="block text-sm font-medium text-[var(--text)]">
                 全文検索
                 <input
                   value={miniListQuery}
@@ -2953,7 +3061,7 @@ export default function Page() {
                   className={fieldClass}
                 />
               </label>
-              <div className="mt-3 text-xs text-slate-400">
+              <div className="mt-3 text-xs text-[var(--subtle)]">
                 {miniFilteredRecords.length} / {records.length}
               </div>
             </div>
@@ -2988,8 +3096,8 @@ export default function Page() {
 
       {checkedCount > 0 ? (
         <div className="fixed inset-x-0 bottom-24 z-50 flex justify-center px-4">
-          <div className="flex max-w-[calc(100vw-2rem)] flex-wrap items-center justify-center gap-2 rounded-[24px] border border-slate-200 bg-white/95 px-3 py-3 shadow-[0_18px_55px_rgba(15,23,42,0.16)] backdrop-blur-xl">
-            <span className="px-2 text-sm font-semibold text-slate-700">{checkedCount}件選択中</span>
+          <div className="flex max-w-[calc(100vw-2rem)] flex-wrap items-center justify-center gap-2 rounded-[24px] border border-[color:var(--border)] bg-[var(--card)] px-3 py-3 shadow-[0_18px_55px_var(--shadow-soft)] backdrop-blur-xl">
+            <span className="px-2 text-sm font-semibold text-[var(--text)]">{checkedCount}件選択中</span>
             <button type="button" onClick={toggleAllFilteredRecords} className={secondaryButtonClass}>
               {allFilteredChecked ? "表示分を解除" : "全て選択"}
             </button>
@@ -3013,7 +3121,7 @@ export default function Page() {
 
       <AiProcessingOverlay state={aiProcessingOverlay} elapsedMs={aiProcessingElapsedMs} />
 
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/90 px-4 py-3 backdrop-blur-xl">
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-[color:var(--border)] bg-[var(--card)] px-4 py-3 backdrop-blur-xl">
         <div className="mx-auto grid max-w-3xl grid-cols-3 gap-2">
           {[
             { key: "home", label: "Home" },
@@ -3026,8 +3134,8 @@ export default function Page() {
               onClick={() => setTab(item.key as AppTab)}
               className={`rounded-2xl px-4 py-3 text-sm font-medium transition ${
                 tab === item.key
-                  ? "bg-blue-600 text-white shadow-[0_10px_24px_rgba(37,99,235,0.18)]"
-                  : "bg-slate-100 text-slate-600 hover:bg-blue-50 hover:text-blue-700"
+                  ? "bg-[var(--accent)] text-[var(--accent-contrast)] shadow-[0_10px_24px_var(--shadow-soft)]"
+                  : "bg-[var(--card-soft)] text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
               }`}
             >
               {item.label}

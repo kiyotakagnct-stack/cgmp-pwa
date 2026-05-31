@@ -279,6 +279,20 @@ export async function upsertDeletedRecord(tombstone: CGMPDeletedRecord) {
   return normalized;
 }
 
+export async function isRecordDeleted(recordId: string) {
+  if (!hasWindow()) return false;
+
+  const db = await openDatabase();
+  try {
+    const tx = db.transaction(DELETED_RECORDS_STORE, "readonly");
+    const store = tx.objectStore(DELETED_RECORDS_STORE);
+    const result = await requestToPromise<CGMPDeletedRecord | undefined>(store.get(recordId));
+    return Boolean(normalizeDeletedRecord(result));
+  } finally {
+    db.close();
+  }
+}
+
 export async function upsertRecord(record: CGMPRecord) {
   if (!hasWindow()) return record;
 
@@ -314,15 +328,34 @@ export async function upsertRecord(record: CGMPRecord) {
       next_retry_at: attachment.backup_next_retry_at || "",
       created_at: now,
       updated_at: now,
-    }));
+  }));
 
   const db = await openDatabase();
   await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction([RECORDS_STORE, BACKUP_QUEUE_STORE], "readwrite");
-    tx.objectStore(RECORDS_STORE).put(nextRecord);
-    const queueStore = tx.objectStore(BACKUP_QUEUE_STORE);
-    queueStore.put(queueItem);
-    attachmentQueueItems.forEach((item) => queueStore.put(item));
+    const tx = db.transaction([RECORDS_STORE, BACKUP_QUEUE_STORE, DELETED_RECORDS_STORE], "readwrite");
+    const deletedRequest = tx.objectStore(DELETED_RECORDS_STORE).get(nextRecord.id);
+
+    deletedRequest.onsuccess = () => {
+      const tombstone = normalizeDeletedRecord(deletedRequest.result);
+      const recordsStore = tx.objectStore(RECORDS_STORE);
+      const queueStore = tx.objectStore(BACKUP_QUEUE_STORE);
+
+      if (tombstone) {
+        // A deleted record can be resurrected by stale async work (backup/sync) unless
+        // the storage layer refuses normal writes after a tombstone exists.
+        recordsStore.delete(nextRecord.id);
+        queueStore.delete(queueItem.id);
+        attachmentQueueItems.forEach((item) => queueStore.delete(item.id));
+        return;
+      }
+
+      recordsStore.put(nextRecord);
+      queueStore.put(queueItem);
+      attachmentQueueItems.forEach((item) => queueStore.put(item));
+    };
+    deletedRequest.onerror = () => {
+      reject(deletedRequest.error || new Error("IndexedDB request failed"));
+    };
     tx.oncomplete = () => {
       db.close();
       resolve();
@@ -475,8 +508,25 @@ export async function enqueueBackup(recordId: string) {
     updated_at: now,
   };
 
-  await withTransaction(BACKUP_QUEUE_STORE, "readwrite", async (store) => {
-    store.put(item);
+  const db = await openDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction([BACKUP_QUEUE_STORE, DELETED_RECORDS_STORE], "readwrite");
+    const deletedRequest = tx.objectStore(DELETED_RECORDS_STORE).get(recordId);
+    deletedRequest.onsuccess = () => {
+      if (normalizeDeletedRecord(deletedRequest.result)) return;
+      tx.objectStore(BACKUP_QUEUE_STORE).put(item);
+    };
+    deletedRequest.onerror = () => {
+      reject(deletedRequest.error || new Error("IndexedDB request failed"));
+    };
+    tx.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+    tx.onerror = () => {
+      db.close();
+      reject(tx.error || new Error("IndexedDB transaction failed"));
+    };
   });
 }
 

@@ -1,8 +1,81 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f4f8fc;
-  --foreground: #182236;
+  --bg: #f8fafc;
+  --bg-soft: #eef5ff;
+  --card: #ffffff;
+  --card-soft: #f8fafc;
+  --text: #0f172a;
+  --muted: #64748b;
+  --subtle: #94a3b8;
+  --border: #cbd5e1;
+  --accent: #2563eb;
+  --accent-contrast: #ffffff;
+  --accent-soft: #dbeafe;
+  --orange: #ff6b00;
+  --orange-soft: #fff7ed;
+  --danger: #e11d48;
+  --danger-soft: #fff1f2;
+  --success: #0f9f7a;
+  --success-soft: #ecfdf5;
+  --overlay: rgba(255, 255, 255, 0.68);
+  --shadow-soft: rgba(15, 23, 42, 0.08);
+  --app-bg:
+    radial-gradient(circle at top, rgba(191, 219, 254, 0.75), transparent 42%),
+    linear-gradient(180deg, #f8fbff 0%, #eef5ff 52%, #f7fafc 100%);
+  --domain-work: #2563eb;
+  --domain-family: #db2777;
+  --domain-self: #7c3aed;
+  --domain-health: #16a34a;
+  --domain-finance: #ca8a04;
+  --domain-learning: #0891b2;
+  --domain-creation: #ea580c;
+  --domain-life-admin: #ea580c;
+  --domain-other: #64748b;
+  --background: var(--bg);
+  --foreground: var(--text);
+}
+
+[data-theme="dark"] {
+  --bg: #0f172a;
+  --bg-soft: #111c2f;
+  --card: #1e293b;
+  --card-soft: #172236;
+  --text: #f8fafc;
+  --muted: #94a3b8;
+  --subtle: #64748b;
+  --border: #334155;
+  --accent: #60a5fa;
+  --accent-contrast: #06111f;
+  --accent-soft: rgba(96, 165, 250, 0.16);
+  --orange: #fb923c;
+  --orange-soft: rgba(251, 146, 60, 0.14);
+  --danger: #fb7185;
+  --danger-soft: rgba(251, 113, 133, 0.13);
+  --success: #5eead4;
+  --success-soft: rgba(94, 234, 212, 0.13);
+  --overlay: rgba(2, 6, 23, 0.62);
+  --shadow-soft: rgba(0, 0, 0, 0.26);
+  --app-bg:
+    radial-gradient(circle at top, rgba(14, 116, 144, 0.28), transparent 42%),
+    linear-gradient(180deg, #07111f 0%, #0f172a 46%, #111827 100%);
+  --domain-work: #60a5fa;
+  --domain-family: #f472b6;
+  --domain-self: #c4b5fd;
+  --domain-health: #4ade80;
+  --domain-finance: #facc15;
+  --domain-learning: #22d3ee;
+  --domain-creation: #fb923c;
+  --domain-life-admin: #fb923c;
+  --domain-other: #cbd5e1;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 @theme inline {
@@ -18,6 +91,7 @@
 
 html {
   height: 100%;
+  color-scheme: light dark;
 }
 
 body {
@@ -32,8 +106,8 @@ body {
 }
 
 ::selection {
-  background: rgba(37, 99, 235, 0.22);
-  color: #10213f;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--text);
 }
 
 ::-webkit-scrollbar {
@@ -42,17 +116,109 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: rgba(226, 232, 240, 0.85);
+  background: color-mix(in srgb, var(--border) 38%, transparent);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.55);
-  border: 3px solid rgba(241, 245, 249, 0.95);
+  background: color-mix(in srgb, var(--muted) 54%, transparent);
+  border: 3px solid var(--bg);
   border-radius: 999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(100, 116, 139, 0.55);
+  background: color-mix(in srgb, var(--muted) 72%, transparent);
+}
+
+input,
+textarea,
+select,
+button,
+dialog {
+  color-scheme: inherit;
+}
+
+input,
+textarea,
+select {
+  background-color: var(--card);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--subtle);
+}
+
+/* Compatibility layer while older component classes are migrated to tokens. */
+[data-theme="dark"] .bg-white,
+[data-theme="dark"] .bg-white\/95,
+[data-theme="dark"] .bg-white\/98 {
+  background-color: var(--card) !important;
+}
+
+[data-theme="dark"] .bg-slate-50,
+[data-theme="dark"] .bg-slate-50\/80,
+[data-theme="dark"] .bg-slate-50\/90,
+[data-theme="dark"] .bg-slate-100 {
+  background-color: var(--card-soft) !important;
+}
+
+[data-theme="dark"] .bg-blue-50,
+[data-theme="dark"] .bg-blue-50\/50,
+[data-theme="dark"] .bg-blue-50\/70 {
+  background-color: var(--accent-soft) !important;
+}
+
+[data-theme="dark"] .bg-orange-50,
+[data-theme="dark"] .bg-orange-50\/70 {
+  background-color: var(--orange-soft) !important;
+}
+
+[data-theme="dark"] .bg-rose-50 {
+  background-color: var(--danger-soft) !important;
+}
+
+[data-theme="dark"] .border-slate-100,
+[data-theme="dark"] .border-slate-200,
+[data-theme="dark"] .border-slate-300,
+[data-theme="dark"] .border-blue-100,
+[data-theme="dark"] .border-blue-200,
+[data-theme="dark"] .border-sky-100 {
+  border-color: var(--border) !important;
+}
+
+[data-theme="dark"] .text-slate-950,
+[data-theme="dark"] .text-slate-900,
+[data-theme="dark"] .text-slate-800 {
+  color: var(--text) !important;
+}
+
+[data-theme="dark"] .text-slate-700,
+[data-theme="dark"] .text-slate-600,
+[data-theme="dark"] .text-slate-500 {
+  color: var(--muted) !important;
+}
+
+[data-theme="dark"] .text-slate-400 {
+  color: var(--subtle) !important;
+}
+
+[data-theme="dark"] .text-blue-500,
+[data-theme="dark"] .text-blue-600,
+[data-theme="dark"] .text-blue-700,
+[data-theme="dark"] .text-blue-800 {
+  color: var(--accent) !important;
+}
+
+[data-theme="dark"] .text-orange-700 {
+  color: var(--orange) !important;
+}
+
+[data-theme="dark"] .text-rose-500,
+[data-theme="dark"] .text-rose-600,
+[data-theme="dark"] .text-rose-700 {
+  color: var(--danger) !important;
 }
 
 .line-clamp-2 {
