@@ -461,6 +461,7 @@ const DOMAIN_SYMBOLS: Record<Exclude<CGMPDomain, "">, string> = {
 };
 
 const WEEKDAY_LABELS = ["日曜日", "月曜日", "火曜日", "水曜日", "木曜日", "金曜日", "土曜日"];
+const WEEKDAY_MINI_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 function startOfDay(date: Date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
@@ -547,6 +548,18 @@ function getActionSymbol(record: CGMPRecord) {
 function getDomainSymbol(domain: CGMPDomain | string) {
   const normalized = normalizeDomain(domain);
   return DOMAIN_SYMBOLS[(normalized || "other") as Exclude<CGMPDomain, "">] || DOMAIN_SYMBOLS.other;
+}
+
+function getMinimapSymbol(record: CGMPRecord) {
+  const timeline = getRecordTimeline(record);
+  if (record.action === "unclear") return "?";
+  if (record.action === "reminder") return "・";
+  if (record.action === "calendar" || timeline.sourceLabel === "scheduled") return "●";
+  return "·";
+}
+
+function scrollToElementById(id: string, block: ScrollLogicalPosition = "start") {
+  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block });
 }
 
 function Badge({
@@ -1283,10 +1296,17 @@ function WeekRecordItem({
   const taskProcessing = externalProcessingKey === `task-status:${record.id}`;
 
   return (
-    <button
-      type="button"
+    <div
+      id={`week-item-${record.id}`}
+      role="button"
+      tabIndex={0}
       onClick={() => onOpen(record.id)}
-      className="group w-full max-w-full overflow-hidden rounded-[22px] border border-[color:var(--border)] bg-[var(--card)] p-4 text-left transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)] sm:rounded-[24px] sm:p-5"
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        onOpen(record.id);
+      }}
+      className="group w-full max-w-full cursor-pointer overflow-hidden rounded-[22px] border border-[color:var(--border)] bg-[var(--card)] p-4 text-left transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] sm:rounded-[24px] sm:p-5"
     >
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <span className="shrink-0 font-mono text-base font-semibold leading-6 text-[var(--text)] sm:text-lg">
@@ -1336,7 +1356,95 @@ function WeekRecordItem({
           <ImageAttachmentGrid attachments={record.attachments} compact maxItems={1} onOpen={onOpenImage} />
         </div>
       ) : null}
-    </button>
+    </div>
+  );
+}
+
+function WeeklyMinimap({
+  days,
+  activeDay,
+  todayKey,
+}: {
+  days: Array<{ date: Date; dateKey: string; records: CGMPRecord[] }>;
+  activeDay: number;
+  todayKey: string;
+}) {
+  return (
+    <aside
+      className="fixed right-1 top-28 bottom-32 z-30 w-10 overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-1.5 py-2 shadow-[0_14px_38px_var(--shadow-soft)] opacity-90 backdrop-blur-xl sm:right-3 sm:w-12"
+      aria-label="Weekly Minimap"
+    >
+      <div className="flex h-full flex-col gap-1 overflow-hidden">
+        {days.map((day, index) => {
+          const isActive = activeDay === index;
+          const isToday = day.dateKey === todayKey;
+          return (
+            <div
+              key={day.dateKey}
+              onClick={() => scrollToElementById(`week-day-${index}`)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                scrollToElementById(`week-day-${index}`);
+              }}
+              role="button"
+              tabIndex={0}
+              className={`min-h-0 flex-1 rounded-xl border px-1 py-1 text-left transition ${
+                isActive
+                  ? "border-[color:var(--accent)] bg-[var(--accent-soft)]"
+                  : "border-transparent hover:border-[color:var(--border)] hover:bg-[var(--card-soft)]"
+              }`}
+              aria-label={`${WEEKDAY_MINI_LABELS[index]}へ移動`}
+            >
+              <div
+                className={`mx-auto mb-1 w-fit rounded-full px-1 text-[9px] font-semibold leading-4 ${
+                  isToday
+                    ? "ring-1 ring-[color:var(--accent)] text-[var(--accent)]"
+                    : isActive
+                      ? "text-[var(--accent)]"
+                      : "text-[var(--subtle)]"
+                }`}
+              >
+                {WEEKDAY_MINI_LABELS[index]}
+              </div>
+              <div className="space-y-0.5">
+                {day.records.length > 0 ? (
+                  day.records.map((record) => {
+                    const color = getDomainColorVar(record.domain || "other");
+                    return (
+                      <button
+                        key={record.id}
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          scrollToElementById(`week-item-${record.id}`, "center");
+                        }}
+                        className="flex h-2.5 w-full items-center gap-0.5 overflow-hidden rounded-sm"
+                        aria-label="recordへ移動"
+                        title=""
+                      >
+                        <span
+                          className="w-2 shrink-0 text-[8px] leading-none"
+                          style={{ color } as CSSProperties}
+                        >
+                          {getMinimapSymbol(record)}
+                        </span>
+                        <span
+                          className="h-0.5 min-w-0 flex-1 rounded-full opacity-80"
+                          style={{ backgroundColor: color } as CSSProperties}
+                        />
+                      </button>
+                    );
+                  })
+                ) : (
+                  <div className="mx-auto h-0.5 w-3 rounded-full bg-[var(--border)] opacity-60" />
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </aside>
   );
 }
 
@@ -1361,25 +1469,58 @@ function WeeklyView({
   onToggleGoogleTaskStatus: (id: string) => void;
   externalProcessingKey: string;
 }) {
+  const [activeDay, setActiveDay] = useState(0);
   const todayKey = dateKeyFromDate(new Date());
-  const days = Array.from({ length: 7 }, (_, index) => {
-    const date = addDays(weekStart, index);
-    const dateKey = dateKeyFromDate(date);
-    const dayRecords = records
-      .filter((record) => getRecordTimeline(record).dateKey === dateKey)
-      .sort((left, right) => {
-        const leftTimeline = getRecordTimeline(left);
-        const rightTimeline = getRecordTimeline(right);
-        if (leftTimeline.sortValue !== rightTimeline.sortValue) {
-          return leftTimeline.sortValue - rightTimeline.sortValue;
-        }
-        return String(left.created_at || left.updated_at).localeCompare(String(right.created_at || right.updated_at));
-      });
-    return { date, dateKey, records: dayRecords };
-  });
+  const days = useMemo(
+    () =>
+      Array.from({ length: 7 }, (_, index) => {
+        const date = addDays(weekStart, index);
+        const dateKey = dateKeyFromDate(date);
+        const dayRecords = records
+          .filter((record) => getRecordTimeline(record).dateKey === dateKey)
+          .sort((left, right) => {
+            const leftTimeline = getRecordTimeline(left);
+            const rightTimeline = getRecordTimeline(right);
+            if (leftTimeline.sortValue !== rightTimeline.sortValue) {
+              return leftTimeline.sortValue - rightTimeline.sortValue;
+            }
+            return String(left.created_at || left.updated_at).localeCompare(String(right.created_at || right.updated_at));
+          });
+        return { date, dateKey, records: dayRecords };
+      }),
+    [records, weekStart]
+  );
+
+  useEffect(() => {
+    const sections = days
+      .map((_, index) => document.getElementById(`week-day-${index}`))
+      .filter((element): element is HTMLElement => Boolean(element));
+    if (sections.length === 0) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((left, right) => {
+            const leftTop = Math.abs(left.boundingClientRect.top - 140);
+            const rightTop = Math.abs(right.boundingClientRect.top - 140);
+            return leftTop - rightTop;
+          });
+        const target = visible[0]?.target;
+        if (!target?.id) return;
+        const index = Number(target.id.replace("week-day-", ""));
+        if (Number.isFinite(index)) setActiveDay(index);
+      },
+      { root: null, rootMargin: "-20% 0px -55% 0px", threshold: 0.08 }
+    );
+
+    sections.forEach((section) => observer.observe(section));
+    return () => observer.disconnect();
+  }, [days]);
 
   return (
-    <div className="grid max-w-full gap-3 overflow-hidden sm:gap-4">
+    <div className="grid max-w-full gap-3 overflow-hidden pr-11 sm:gap-4 sm:pr-14">
+      <WeeklyMinimap days={days} activeDay={activeDay} todayKey={todayKey} />
       <section className={panelClass}>
         <SectionHeading eyebrow="Week" title="週次ログビュー" />
         <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2">
@@ -1399,7 +1540,7 @@ function WeeklyView({
       </section>
 
       <section className="grid max-w-full gap-3 overflow-hidden">
-        {days.map(({ date, dateKey, records: dayRecords }) => {
+        {days.map(({ date, dateKey, records: dayRecords }, index) => {
           const day = date.getDay();
           const isToday = dateKey === todayKey;
           const weekendStyle =
@@ -1414,6 +1555,7 @@ function WeeklyView({
 
           return (
             <article
+              id={`week-day-${index}`}
               key={dateKey}
               className="max-w-full overflow-hidden rounded-[24px] border border-[color:var(--border)] bg-[var(--card)] p-4 shadow-[0_12px_34px_var(--shadow-soft)] sm:p-5"
               style={cardStyle}
