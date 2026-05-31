@@ -1286,61 +1286,53 @@ function WeekRecordItem({
     <button
       type="button"
       onClick={() => onOpen(record.id)}
-      className="group w-full rounded-[22px] border border-[color:var(--border)] bg-[var(--card)] p-5 text-left transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)] sm:rounded-[24px]"
+      className="group w-full max-w-full overflow-hidden rounded-[22px] border border-[color:var(--border)] bg-[var(--card)] p-4 text-left transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)] sm:rounded-[24px] sm:p-5"
     >
-      <div className="flex items-start gap-4">
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 flex-wrap items-center gap-2.5">
-            <span className="shrink-0 font-mono text-lg font-semibold leading-7 text-[var(--text)]">{timeline.timeLabel}</span>
-            <span className="shrink-0 rounded-full bg-[var(--card-soft)] px-2.5 py-1 text-xs text-[var(--subtle)]">
-              {timeline.sourceLabel}
-            </span>
-            <span className="shrink-0 text-xl leading-none">{getActionSymbol(record)}</span>
-            <span className="shrink-0 text-xl leading-none">{getDomainSymbol(record.domain)}</span>
-            <span className="min-w-0 flex-1 basis-[12rem] truncate text-lg font-semibold leading-7 text-[var(--text)]">
-              {record.title || "（無題）"}
-            </span>
-          </div>
-          <div className="mt-4 flex flex-wrap items-center gap-2.5 text-base text-[var(--muted)]">
-            <span className="line-clamp-2 min-w-[12rem] flex-1 leading-7">
-              {record.summary || record.body || record.raw_input || "内容なし"}
-            </span>
-            <Badge tone="slate">{getParaLabel(para)}</Badge>
-            {primaryTags.map((tag) => (
-              <Badge key={tag}>{`#${tag}`}</Badge>
-            ))}
-          </div>
-          {isTaskRegistered ? (
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onToggleGoogleTaskStatus(record.id);
-                }}
-                disabled={taskProcessing}
-                className={`rounded-full border px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                  record.google_task_status === "completed"
-                    ? "border-[color:var(--success)] bg-[var(--success-soft)] text-[var(--success)] hover:brightness-95"
-                    : "border-[color:var(--orange)] bg-[var(--orange-soft)] text-[var(--orange)] hover:brightness-95"
-                }`}
-              >
-                {taskProcessing ? "同期中..." : record.google_task_status === "completed" ? "完了済み" : "Doneにする"}
-              </button>
-            </div>
-          ) : null}
-        </div>
-        {(record.attachments || []).length > 0 ? (
-          <div
-            className="hidden shrink-0 sm:block"
-            onClick={(event) => event.stopPropagation()}
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <span className="shrink-0 font-mono text-base font-semibold leading-6 text-[var(--text)] sm:text-lg">
+          {timeline.timeLabel}
+        </span>
+        <span className="shrink-0 rounded-full bg-[var(--card-soft)] px-2.5 py-1 text-xs text-[var(--subtle)]">
+          {timeline.sourceLabel}
+        </span>
+        <span className="shrink-0 text-lg leading-none sm:text-xl">{getActionSymbol(record)}</span>
+        <span className="shrink-0 text-lg leading-none sm:text-xl">{getDomainSymbol(record.domain)}</span>
+      </div>
+
+      <h3 className="mt-3 line-clamp-2 break-words text-base font-semibold leading-7 text-[var(--text)] sm:text-lg">
+        {record.title || "（無題）"}
+      </h3>
+
+      <p className="mt-2 line-clamp-2 break-words text-sm leading-6 text-[var(--muted)] sm:text-base sm:leading-7">
+        {record.summary || record.body || record.raw_input || "内容なし"}
+      </p>
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <Badge compact tone="slate">{getParaLabel(para)}</Badge>
+        {primaryTags.map((tag) => (
+          <Badge key={tag} compact>{`#${tag}`}</Badge>
+        ))}
+        {isTaskRegistered ? (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleGoogleTaskStatus(record.id);
+            }}
+            disabled={taskProcessing}
+            className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+              record.google_task_status === "completed"
+                ? "border-[color:var(--success)] bg-[var(--success-soft)] text-[var(--success)] hover:brightness-95"
+                : "border-[color:var(--orange)] bg-[var(--orange-soft)] text-[var(--orange)] hover:brightness-95"
+            }`}
           >
-            <ImageAttachmentGrid attachments={record.attachments} compact maxItems={1} onOpen={onOpenImage} />
-          </div>
+            {taskProcessing ? "同期中..." : record.google_task_status === "completed" ? "完了済み" : "Doneにする"}
+          </button>
         ) : null}
       </div>
+
       {(record.attachments || []).length > 0 ? (
-        <div className="sm:hidden" onClick={(event) => event.stopPropagation()}>
+        <div onClick={(event) => event.stopPropagation()}>
           <ImageAttachmentGrid attachments={record.attachments} compact maxItems={1} onOpen={onOpenImage} />
         </div>
       ) : null}
@@ -1387,26 +1379,26 @@ function WeeklyView({
   });
 
   return (
-    <div className="grid gap-3 sm:gap-4">
+    <div className="grid max-w-full gap-3 overflow-hidden sm:gap-4">
       <section className={panelClass}>
         <SectionHeading eyebrow="Week" title="週次ログビュー" />
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2">
           <button type="button" onClick={onPreviousWeek} className={secondaryButtonClass}>
             前週
           </button>
-          <div className="min-w-0 flex-1 rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-4 py-2.5 text-center text-sm font-semibold text-[var(--text)]">
+          <div className="min-w-0 rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2.5 text-center text-sm font-semibold text-[var(--text)]">
             {formatWeekRange(weekStart)}
           </div>
           <button type="button" onClick={onNextWeek} className={secondaryButtonClass}>
             次週
           </button>
-          <button type="button" onClick={onThisWeek} className={primaryButtonClass}>
+          <button type="button" onClick={onThisWeek} className={`${primaryButtonClass} col-span-3`}>
             Today / This Week
           </button>
         </div>
       </section>
 
-      <section className="grid gap-3">
+      <section className="grid max-w-full gap-3 overflow-hidden">
         {days.map(({ date, dateKey, records: dayRecords }) => {
           const day = date.getDay();
           const isToday = dateKey === todayKey;
@@ -1423,7 +1415,7 @@ function WeeklyView({
           return (
             <article
               key={dateKey}
-              className="rounded-[24px] border border-[color:var(--border)] bg-[var(--card)] p-4 shadow-[0_12px_34px_var(--shadow-soft)] sm:p-5"
+              className="max-w-full overflow-hidden rounded-[24px] border border-[color:var(--border)] bg-[var(--card)] p-4 shadow-[0_12px_34px_var(--shadow-soft)] sm:p-5"
               style={cardStyle}
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2741,8 +2733,8 @@ export default function Page() {
   }
 
   return (
-    <main className="min-h-screen bg-[image:var(--app-bg)] text-[var(--text)]">
-      <div className="mx-auto flex min-h-screen max-w-7xl flex-col px-2 py-3 pb-28 sm:px-5 lg:px-7">
+    <main className="min-h-screen w-full overflow-x-hidden bg-[var(--bg)] bg-[image:var(--app-bg)] text-[var(--text)]">
+      <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col overflow-x-hidden px-2 py-3 pb-28 sm:px-5 lg:px-7">
         {notice ? (
           <div
             className={`mb-4 rounded-2xl border px-4 py-3 text-sm ${
