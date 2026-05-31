@@ -51,7 +51,7 @@ import {
 import type { CSSProperties, ReactNode, RefObject } from "react";
 import type { ImageAttachment, ImageVisionResult } from "@/types/image";
 
-type AppTab = "home" | "compose" | "settings";
+type AppTab = "home" | "week" | "compose" | "settings";
 type SortKey = "updated_at" | "datetime";
 type ThemeMode = "system" | "light" | "dark";
 type Notice = { kind: "info" | "error"; text: string } | null;
@@ -439,6 +439,114 @@ function getDomainLabel(domain: CGMPDomain | string) {
     other: "other",
   };
   return labels[domain || "other"] || String(domain || "other");
+}
+
+const ACTION_SYMBOLS: Record<CGMPAction, string> = {
+  note: "📝",
+  reminder: "✅",
+  calendar: "📅",
+  unclear: "❓",
+};
+
+const DOMAIN_SYMBOLS: Record<Exclude<CGMPDomain, "">, string> = {
+  work: "🏢",
+  family: "👨‍👩‍👧‍👦",
+  self: "🌱",
+  health: "🩺",
+  finance: "💰",
+  learning: "📚",
+  creation: "🎨",
+  life_admin: "🧾",
+  other: "📌",
+};
+
+const WEEKDAY_LABELS = ["日曜日", "月曜日", "火曜日", "水曜日", "木曜日", "金曜日", "土曜日"];
+
+function startOfDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function addDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function getMondayOfWeek(date: Date) {
+  const base = startOfDay(date);
+  const day = base.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  return addDays(base, diff);
+}
+
+function dateKeyFromDate(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatWeekDate(date: Date) {
+  return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`;
+}
+
+function formatWeekRange(start: Date) {
+  return `${formatWeekDate(start)} - ${formatWeekDate(addDays(start, 6))}`;
+}
+
+function getJstParts(value: string) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return { dateKey: "", time: "" };
+  const parts = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value || "";
+  return {
+    dateKey: `${get("year")}-${get("month")}-${get("day")}`,
+    time: `${get("hour")}:${get("minute")}`,
+  };
+}
+
+function minutesFromTime(value: string) {
+  const match = /^(\d{1,2}):(\d{2})/.exec(value || "");
+  if (!match) return Number.POSITIVE_INFINITY;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function getRecordTimeline(record: CGMPRecord) {
+  if (record.date) {
+    const hasTime = Boolean(record.time);
+    return {
+      dateKey: record.date,
+      timeLabel: record.all_day ? "終日" : hasTime ? record.time.slice(0, 5) : "No time",
+      sourceLabel: "scheduled" as const,
+      sortValue: record.all_day ? -1 : hasTime ? minutesFromTime(record.time) : Number.POSITIVE_INFINITY - 1,
+    };
+  }
+
+  const created = getJstParts(record.created_at || record.updated_at);
+  return {
+    dateKey: created.dateKey,
+    timeLabel: created.time || "No time",
+    sourceLabel: "created" as const,
+    sortValue: created.time ? minutesFromTime(created.time) : Number.POSITIVE_INFINITY,
+  };
+}
+
+function getActionSymbol(record: CGMPRecord) {
+  if ((record.attachments || []).some((attachment) => attachment.type === "image")) return "🖼️";
+  return ACTION_SYMBOLS[record.action || "note"] || ACTION_SYMBOLS.note;
+}
+
+function getDomainSymbol(domain: CGMPDomain | string) {
+  const normalized = normalizeDomain(domain);
+  return DOMAIN_SYMBOLS[(normalized || "other") as Exclude<CGMPDomain, "">] || DOMAIN_SYMBOLS.other;
 }
 
 function Badge({
@@ -1155,9 +1263,179 @@ function MiniRecordCard({
   );
 }
 
+function WeekRecordItem({
+  record,
+  onOpen,
+  onOpenImage,
+}: {
+  record: CGMPRecord;
+  onOpen: (id: string) => void;
+  onOpenImage: (attachment: ImageAttachment, imageUrl: string) => void;
+}) {
+  const timeline = getRecordTimeline(record);
+  const para = getEffectivePara(record);
+  const primaryTags = (record.tags || []).slice(0, 2);
+
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(record.id)}
+      className="group w-full rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-3 text-left transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)]"
+    >
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="shrink-0 font-mono text-sm font-semibold text-[var(--text)]">{timeline.timeLabel}</span>
+            <span className="shrink-0 text-[11px] text-[var(--subtle)]">{timeline.sourceLabel}</span>
+            <span className="shrink-0 text-base leading-none">{getActionSymbol(record)}</span>
+            <span className="shrink-0 text-base leading-none">{getDomainSymbol(record.domain)}</span>
+            <span className="min-w-0 truncate text-sm font-semibold text-[var(--text)]">
+              {record.title || "（無題）"}
+            </span>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-[var(--muted)]">
+            <span className="line-clamp-2 min-w-[12rem] flex-1 leading-5">
+              {record.summary || record.body || record.raw_input || "内容なし"}
+            </span>
+            <Badge compact tone="slate">{getParaLabel(para)}</Badge>
+            {primaryTags.map((tag) => (
+              <Badge key={tag} compact>{`#${tag}`}</Badge>
+            ))}
+          </div>
+        </div>
+        {(record.attachments || []).length > 0 ? (
+          <div
+            className="hidden shrink-0 sm:block"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <ImageAttachmentGrid attachments={record.attachments} compact maxItems={1} onOpen={onOpenImage} />
+          </div>
+        ) : null}
+      </div>
+      {(record.attachments || []).length > 0 ? (
+        <div className="sm:hidden" onClick={(event) => event.stopPropagation()}>
+          <ImageAttachmentGrid attachments={record.attachments} compact maxItems={1} onOpen={onOpenImage} />
+        </div>
+      ) : null}
+    </button>
+  );
+}
+
+function WeeklyView({
+  weekStart,
+  records,
+  onPreviousWeek,
+  onNextWeek,
+  onThisWeek,
+  onOpenRecord,
+  onOpenImage,
+}: {
+  weekStart: Date;
+  records: CGMPRecord[];
+  onPreviousWeek: () => void;
+  onNextWeek: () => void;
+  onThisWeek: () => void;
+  onOpenRecord: (id: string) => void;
+  onOpenImage: (attachment: ImageAttachment, imageUrl: string) => void;
+}) {
+  const todayKey = dateKeyFromDate(new Date());
+  const days = Array.from({ length: 7 }, (_, index) => {
+    const date = addDays(weekStart, index);
+    const dateKey = dateKeyFromDate(date);
+    const dayRecords = records
+      .filter((record) => getRecordTimeline(record).dateKey === dateKey)
+      .sort((left, right) => {
+        const leftTimeline = getRecordTimeline(left);
+        const rightTimeline = getRecordTimeline(right);
+        if (leftTimeline.sortValue !== rightTimeline.sortValue) {
+          return leftTimeline.sortValue - rightTimeline.sortValue;
+        }
+        return String(left.created_at || left.updated_at).localeCompare(String(right.created_at || right.updated_at));
+      });
+    return { date, dateKey, records: dayRecords };
+  });
+
+  return (
+    <div className="grid gap-3 sm:gap-4">
+      <section className={panelClass}>
+        <SectionHeading eyebrow="Week" title="週次ログビュー" />
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" onClick={onPreviousWeek} className={secondaryButtonClass}>
+            前週
+          </button>
+          <div className="min-w-0 flex-1 rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-4 py-2.5 text-center text-sm font-semibold text-[var(--text)]">
+            {formatWeekRange(weekStart)}
+          </div>
+          <button type="button" onClick={onNextWeek} className={secondaryButtonClass}>
+            次週
+          </button>
+          <button type="button" onClick={onThisWeek} className={primaryButtonClass}>
+            Today / This Week
+          </button>
+        </div>
+      </section>
+
+      <section className="grid gap-3">
+        {days.map(({ date, dateKey, records: dayRecords }) => {
+          const day = date.getDay();
+          const isToday = dateKey === todayKey;
+          const weekendStyle =
+            day === 6
+              ? { backgroundColor: "var(--week-saturday-bg)" }
+              : day === 0
+                ? { backgroundColor: "var(--week-sunday-bg)" }
+                : undefined;
+          const cardStyle = isToday
+            ? { backgroundColor: "var(--today-bg)", borderColor: "var(--accent)" }
+            : weekendStyle;
+
+          return (
+            <article
+              key={dateKey}
+              className="rounded-[24px] border border-[color:var(--border)] bg-[var(--card)] p-4 shadow-[0_12px_34px_var(--shadow-soft)]"
+              style={cardStyle}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-lg font-semibold text-[var(--text)]">{WEEKDAY_LABELS[day]}</h3>
+                    {isToday ? <Badge compact tone="cyan">Today</Badge> : null}
+                    {day === 6 ? <Badge compact tone="cyan">Sat</Badge> : null}
+                    {day === 0 ? <Badge compact tone="rose">Sun</Badge> : null}
+                  </div>
+                  <div className="mt-1 text-sm text-[var(--muted)]">{formatWeekDate(date)}</div>
+                </div>
+                <Badge tone={dayRecords.length > 0 ? "emerald" : "slate"}>{dayRecords.length}件</Badge>
+              </div>
+
+              <div className="mt-4 grid gap-2">
+                {dayRecords.length > 0 ? (
+                  dayRecords.map((record) => (
+                    <WeekRecordItem
+                      key={record.id}
+                      record={record}
+                      onOpen={onOpenRecord}
+                      onOpenImage={onOpenImage}
+                    />
+                  ))
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-[color:var(--border)] px-4 py-5 text-sm text-[var(--subtle)]">
+                    No records
+                  </div>
+                )}
+              </div>
+            </article>
+          );
+        })}
+      </section>
+    </div>
+  );
+}
+
 export default function Page() {
   const [tab, setTab] = useState<AppTab>("home");
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
+  const [weekStart, setWeekStart] = useState<Date>(() => getMondayOfWeek(new Date()));
   const [records, setRecords] = useState<CGMPRecord[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isReady, setIsReady] = useState(false);
@@ -2601,6 +2879,22 @@ export default function Page() {
           </div>
         ) : null}
 
+        {tab === "week" ? (
+          <WeeklyView
+            weekStart={weekStart}
+            records={filteredRecords}
+            onPreviousWeek={() => setWeekStart((current) => addDays(current, -7))}
+            onNextWeek={() => setWeekStart((current) => addDays(current, 7))}
+            onThisWeek={() => setWeekStart(getMondayOfWeek(new Date()))}
+            onOpenRecord={(id) => {
+              setSelectedId(id);
+              setTab("home");
+              setPendingMiniJumpId(id);
+            }}
+            onOpenImage={(attachment, imageUrl) => setLightbox({ imageUrl, title: attachment.summary_80 || "添付画像" })}
+          />
+        ) : null}
+
         {tab === "compose" ? (
           <div className="grid gap-5 xl:grid-cols-[1fr_1fr]">
             <section className={panelClass}>
@@ -3122,9 +3416,10 @@ export default function Page() {
       <AiProcessingOverlay state={aiProcessingOverlay} elapsedMs={aiProcessingElapsedMs} />
 
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-[color:var(--border)] bg-[var(--card)] px-4 py-3 backdrop-blur-xl">
-        <div className="mx-auto grid max-w-3xl grid-cols-3 gap-2">
+        <div className="mx-auto grid max-w-3xl grid-cols-4 gap-2">
           {[
             { key: "home", label: "Home" },
+            { key: "week", label: "Week" },
             { key: "compose", label: "Compose" },
             { key: "settings", label: "Settings" },
           ].map((item) => (

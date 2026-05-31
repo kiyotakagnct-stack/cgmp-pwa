@@ -18,6 +18,9 @@
   --danger-soft: #fff1f2;
   --success: #0f9f7a;
   --success-soft: #ecfdf5;
+  --week-saturday-bg: #eff6ff;
+  --week-sunday-bg: #fff1f2;
+  --today-bg: #eef6ff;
   --overlay: rgba(255, 255, 255, 0.68);
   --shadow-soft: rgba(15, 23, 42, 0.08);
   --app-bg:
@@ -54,6 +57,9 @@
   --danger-soft: rgba(251, 113, 133, 0.13);
   --success: #5eead4;
   --success-soft: rgba(94, 234, 212, 0.13);
+  --week-saturday-bg: rgba(96, 165, 250, 0.12);
+  --week-sunday-bg: rgba(251, 113, 133, 0.11);
+  --today-bg: rgba(96, 165, 250, 0.18);
   --overlay: rgba(2, 6, 23, 0.62);
   --shadow-soft: rgba(0, 0, 0, 0.26);
   --app-bg:
