@@ -20,6 +20,7 @@ export type BackupProcessItemResult = {
   recordId: string;
   title?: string;
   itemType?: "record" | "attachment" | "delete";
+  skipped?: boolean;
   attachmentId?: string;
   driveFileId?: string;
   previewDriveFileId?: string;
@@ -95,6 +96,8 @@ type TombstoneBackupResponse = {
   detail?: string;
 };
 
+const BACKUP_CONCURRENCY = 3;
+
 function nextRetryAt(retryCount: number) {
   const delaySeconds = Math.min(60 * 30, Math.max(10, 2 ** retryCount * 10));
   return new Date(Date.now() + delaySeconds * 1000).toISOString();
@@ -116,8 +119,158 @@ function backupItemPriority(item: { item_type: "record" | "attachment"; created_
   return item.item_type === "attachment" ? 0 : 1;
 }
 
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, entryValue]) => entryValue !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right));
+    return `{${entries
+      .map(([key, entryValue]) => `${JSON.stringify(key)}:${stableStringify(entryValue)}`)
+      .join(",")}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
+async function sha256Text(value: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function attachmentBackupSource(attachment: ImageAttachment) {
+  return {
+    id: attachment.id,
+    type: attachment.type,
+    previewBlobKey: attachment.previewBlobKey,
+    thumbnailBlobKey: attachment.thumbnailBlobKey || "",
+    originalFileName: attachment.originalFileName || "",
+    mimeType: attachment.mimeType,
+    previewSizeBytes: attachment.previewSizeBytes || 0,
+    thumbnailSizeBytes: attachment.thumbnailSizeBytes || 0,
+    previewWidth: attachment.previewWidth || 0,
+    previewHeight: attachment.previewHeight || 0,
+    thumbnailWidth: attachment.thumbnailWidth || 0,
+    thumbnailHeight: attachment.thumbnailHeight || 0,
+    created_at: attachment.created_at,
+    image_type: attachment.image_type,
+    summary_80: attachment.summary_80,
+    image_tags: attachment.image_tags || [],
+    visible_text: attachment.visible_text,
+    confidence: attachment.confidence,
+    analysis_status: attachment.analysis_status,
+    previewDriveFileId: attachment.previewDriveFileId || "",
+    thumbnailDriveFileId: attachment.thumbnailDriveFileId || "",
+    previewBlobPathname: attachment.previewBlobPathname || "",
+    previewBlobUrl: attachment.previewBlobUrl || "",
+    previewBlobDownloadUrl: attachment.previewBlobDownloadUrl || "",
+    thumbnailBlobPathname: attachment.thumbnailBlobPathname || "",
+    thumbnailBlobUrl: attachment.thumbnailBlobUrl || "",
+    thumbnailBlobDownloadUrl: attachment.thumbnailBlobDownloadUrl || "",
+  };
+}
+
+function recordBackupSource(record: CGMPRecord) {
+  return {
+    schema_version: record.schema_version,
+    id: record.id,
+    created_at: record.created_at,
+    updated_at: record.updated_at,
+    raw_input: record.raw_input,
+    title: record.title,
+    summary: record.summary,
+    body: record.body,
+    action: record.action,
+    tags: record.tags || [],
+    para: record.para,
+    domain: record.domain,
+    date: record.date,
+    time: record.time,
+    all_day: record.all_day,
+    duration_minutes: record.duration_minutes,
+    location: record.location,
+    confirmation: record.confirmation,
+    note_tags: record.note_tags,
+    note_index_line: record.note_index_line,
+    user_intent_summary: record.user_intent_summary,
+    ai_status: record.ai_status,
+    ai_error: record.ai_error,
+    external_action_status: record.external_action_status,
+    external_target: record.external_target,
+    external_registered_at: record.external_registered_at,
+    external_error: record.external_error,
+    google_task_id: record.google_task_id,
+    google_task_list_id: record.google_task_list_id,
+    google_task_status: record.google_task_status,
+    google_task_updated_at: record.google_task_updated_at,
+    google_calendar_event_id: record.google_calendar_event_id,
+    google_calendar_id: record.google_calendar_id,
+    google_calendar_updated_at: record.google_calendar_updated_at,
+    attachments: (record.attachments || []).map(attachmentBackupSource),
+    ai: record.ai,
+  };
+}
+
+async function getRecordBackupChecksum(record: CGMPRecord) {
+  return sha256Text(stableStringify(recordBackupSource(record)));
+}
+
+function hasBackupAfterLatestUpdate(record: CGMPRecord) {
+  const lastBackupAt = new Date(record.last_backup_at || "").getTime();
+  const updatedAt = new Date(record.updated_at || record.created_at || "").getTime();
+  return Number.isFinite(lastBackupAt) && Number.isFinite(updatedAt) && lastBackupAt >= updatedAt;
+}
+
+async function shouldSkipRecordUpload(record: CGMPRecord) {
+  const checksum = await getRecordBackupChecksum(record);
+  return {
+    checksum,
+    skip: Boolean(record.backup_checksum && record.backup_checksum === checksum && hasBackupAfterLatestUpdate(record)),
+  };
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>
+) {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+
+  async function runWorker() {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await worker(items[index], index);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => runWorker()));
+  return results;
+}
+
 async function backupRecord(record: CGMPRecord): Promise<BackupProcessItemResult> {
   const startedAt = performance.now();
+  const { skip, checksum } = await shouldSkipRecordUpload(record);
+  if (skip) {
+    return {
+      ok: true,
+      recordId: record.id,
+      title: record.title || record.summary || record.raw_input || record.id,
+      itemType: "record",
+      skipped: true,
+      driveFileId: record.drive_file_id,
+      checksum,
+      backedUpAt: record.last_backup_at,
+      elapsedMs: Math.round(performance.now() - startedAt),
+    };
+  }
+
   const response = await fetch("/api/blob/record", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -142,7 +295,7 @@ async function backupRecord(record: CGMPRecord): Promise<BackupProcessItemResult
     driveFileId: payload.blobPathname || payload.driveFileId,
     blobPathname: payload.blobPathname,
     blobUrl: payload.blobUrl,
-    checksum: payload.checksum,
+    checksum,
     backedUpAt: payload.backedUpAt,
     elapsedMs: Math.round(performance.now() - startedAt),
   };
@@ -174,6 +327,36 @@ async function backupDeletedRecord(tombstone: CGMPDeletedRecord): Promise<Backup
     backedUpAt: payload.backedUpAt,
     elapsedMs: Math.round(performance.now() - startedAt),
   };
+}
+
+async function processDeletedRecordBackup(tombstone: CGMPDeletedRecord) {
+  await upsertDeletedRecord({
+    ...tombstone,
+    drive_backup_status: "backing_up",
+    drive_backup_last_error: "",
+  });
+  const result = await backupDeletedRecord(tombstone);
+  if (result.ok) {
+    await upsertDeletedRecord({
+      ...tombstone,
+      drive_backup_status: "backed_up",
+      drive_backup_retry_count: 0,
+      drive_backup_last_error: "",
+      drive_backup_next_retry_at: "",
+      drive_backed_up_at: result.backedUpAt || new Date().toISOString(),
+    });
+    return result;
+  }
+
+  const retryCount = tombstone.drive_backup_retry_count + 1;
+  await upsertDeletedRecord({
+    ...tombstone,
+    drive_backup_status: "backup_failed",
+    drive_backup_retry_count: retryCount,
+    drive_backup_last_error: result.error || "DELETE_TOMBSTONE_BACKUP_FAILED",
+    drive_backup_next_retry_at: nextRetryAt(retryCount),
+  });
+  return result;
 }
 
 export async function backupAttachment(record: CGMPRecord, attachment: ImageAttachment): Promise<BackupProcessItemResult> {
@@ -254,6 +437,7 @@ export async function backupAttachment(record: CGMPRecord, attachment: ImageAtta
 
 export async function processBackupQueue() {
   const [records, queue, tombstones] = await Promise.all([loadAllRecords(), loadBackupQueue(), loadDeletedRecords()]);
+  const recordIds = new Set(records.map((record) => record.id));
   const queuedIds = new Set(queue.map((item) => item.id));
   const syntheticAttachmentItems = records.flatMap((record) =>
     (record.attachments || [])
@@ -286,142 +470,35 @@ export async function processBackupQueue() {
     .filter((item) => item.drive_backup_status !== "backed_up")
     .filter((item) => isRetryDue(item.drive_backup_next_retry_at || ""));
 
-  for (const tombstone of dueTombstones) {
-    await upsertDeletedRecord({
-      ...tombstone,
-      drive_backup_status: "backing_up",
-      drive_backup_last_error: "",
-    });
-    const result = await backupDeletedRecord(tombstone);
-    results.push(result);
-    if (result.ok) {
-      await upsertDeletedRecord({
-        ...tombstone,
-        drive_backup_status: "backed_up",
-        drive_backup_retry_count: 0,
-        drive_backup_last_error: "",
-        drive_backup_next_retry_at: "",
-        drive_backed_up_at: result.backedUpAt || new Date().toISOString(),
-      });
-      continue;
-    }
+  const tombstoneResults = await mapWithConcurrency(dueTombstones, BACKUP_CONCURRENCY, processDeletedRecordBackup);
+  results.push(...tombstoneResults);
 
-    const retryCount = tombstone.drive_backup_retry_count + 1;
-    await upsertDeletedRecord({
-      ...tombstone,
-      drive_backup_status: "backup_failed",
-      drive_backup_retry_count: retryCount,
-      drive_backup_last_error: result.error || "DELETE_TOMBSTONE_BACKUP_FAILED",
-      drive_backup_next_retry_at: nextRetryAt(retryCount),
-    });
-  }
-
+  const plannedRecordIds = new Map<string, string>();
   for (const item of dueItems) {
-    const record = await loadLatestRecord(item.record_id);
-    if (!record) {
+    if (!recordIds.has(item.record_id)) {
       await removeBackupQueueItem(item.id);
       continue;
     }
 
-    if (item.item_type === "attachment") {
-      const attachment = (record.attachments || []).find((candidate) => candidate.id === item.attachment_id);
-      if (!attachment) {
-        await removeBackupQueueItem(item.id);
-        continue;
-      }
-
-      await updateAttachmentBackupState(record.id, attachment.id, { backup_status: "backing_up" });
-      await updateBackupQueueItem({ ...item, status: "backing_up" });
-
-      const result = await backupAttachment(record, attachment);
-      results.push(result);
-
-      if (result.ok) {
-        await updateAttachmentBackupState(record.id, attachment.id, {
-          backup_status: "backed_up",
-          blob_upload_status: "backed_up",
-          backup_retry_count: 0,
-          backup_last_error: "",
-          backup_next_retry_at: "",
-          previewDriveFileId: result.previewDriveFileId || attachment.previewDriveFileId || "",
-          thumbnailDriveFileId: result.thumbnailDriveFileId || attachment.thumbnailDriveFileId || "",
-          previewBlobPathname: result.previewBlobPathname || attachment.previewBlobPathname || "",
-          previewBlobUrl: result.previewBlobUrl || attachment.previewBlobUrl || "",
-          previewBlobDownloadUrl: result.previewBlobDownloadUrl || attachment.previewBlobDownloadUrl || "",
-          thumbnailBlobPathname: result.thumbnailBlobPathname || attachment.thumbnailBlobPathname || "",
-          thumbnailBlobUrl: result.thumbnailBlobUrl || attachment.thumbnailBlobUrl || "",
-          thumbnailBlobDownloadUrl: result.thumbnailBlobDownloadUrl || attachment.thumbnailBlobDownloadUrl || "",
-          blob_uploaded_at: result.backedUpAt || new Date().toISOString(),
-          blob_upload_error: "",
-          last_backup_at: result.backedUpAt || new Date().toISOString(),
-          backup_checksum: result.checksum || attachment.backup_checksum || "",
-        });
-        await removeBackupQueueItem(item.id);
-        await enqueueBackup(record.id);
-        continue;
-      }
-
-      const retryCount = item.retry_count + 1;
-      const retryAt = nextRetryAt(retryCount);
-      await updateAttachmentBackupState(record.id, attachment.id, {
-        backup_status: "backup_failed",
-        blob_upload_status: "backup_failed",
-        backup_retry_count: retryCount,
-        backup_last_error: result.error || "ATTACHMENT_BACKUP_FAILED",
-        backup_next_retry_at: retryAt,
-        blob_upload_error: result.error || "ATTACHMENT_BACKUP_FAILED",
-      });
-      await updateBackupQueueItem({
-        ...item,
-        status: "backup_failed",
-        retry_count: retryCount,
-        last_error: result.error || "ATTACHMENT_BACKUP_FAILED",
-        next_retry_at: retryAt,
-      });
-      continue;
+    const currentCreatedAt = plannedRecordIds.get(item.record_id);
+    if (!currentCreatedAt || (item.created_at || "") < currentCreatedAt) {
+      plannedRecordIds.set(item.record_id, item.created_at || new Date().toISOString());
     }
-
-    await updateRecordBackupState(record.id, { backup_status: "backing_up" });
-    await updateBackupQueueItem({ ...item, status: "backing_up" });
-
-    const result = await backupRecord(record);
-    results.push(result);
-
-    if (result.ok) {
-      await updateRecordBackupState(record.id, {
-        backup_status: "backed_up",
-        backup_retry_count: 0,
-        backup_last_error: "",
-        backup_next_retry_at: "",
-        drive_file_id: result.driveFileId || record.drive_file_id,
-        last_backup_at: result.backedUpAt || new Date().toISOString(),
-        backup_checksum: result.checksum || record.backup_checksum,
-      });
-      await removeBackupQueueItem(item.id);
-      continue;
-    }
-
-    const retryCount = item.retry_count + 1;
-    const retryAt = nextRetryAt(retryCount);
-    await updateRecordBackupState(record.id, {
-      backup_status: "backup_failed",
-      backup_retry_count: retryCount,
-      backup_last_error: result.error || "BACKUP_FAILED",
-      backup_next_retry_at: retryAt,
-    });
-    await updateBackupQueueItem({
-      ...item,
-      status: "backup_failed",
-      retry_count: retryCount,
-      last_error: result.error || "BACKUP_FAILED",
-      next_retry_at: retryAt,
-    });
   }
+
+  const recordPlans = Array.from(plannedRecordIds.entries())
+    .sort(([, leftCreatedAt], [, rightCreatedAt]) => leftCreatedAt.localeCompare(rightCreatedAt))
+    .map(([recordId]) => recordId);
+
+  const recordResults = await mapWithConcurrency(recordPlans, BACKUP_CONCURRENCY, (recordId) =>
+    processSingleRecordBackup(recordId, { respectRetry: true })
+  );
+  results.push(...recordResults.flat());
 
   return results;
 }
 
-export async function processSingleRecordBackup(recordId: string) {
+export async function processSingleRecordBackup(recordId: string, options: { respectRetry?: boolean } = {}) {
   const results: BackupProcessItemResult[] = [];
   const record = await loadLatestRecord(recordId);
   if (!record) {
@@ -438,7 +515,13 @@ export async function processSingleRecordBackup(recordId: string) {
   }
 
   for (const attachment of record.attachments || []) {
+    const attachmentQueueId = `attachment:${record.id}:${attachment.id}`;
     if (attachment.backup_status === "backed_up" && (attachment.previewBlobPathname || attachment.previewBlobUrl)) {
+      await removeBackupQueueItem(attachmentQueueId);
+      continue;
+    }
+
+    if (options.respectRetry && !isRetryDue(attachment.backup_next_retry_at || "")) {
       continue;
     }
 
@@ -475,23 +558,50 @@ export async function processSingleRecordBackup(recordId: string) {
         last_backup_at: result.backedUpAt || new Date().toISOString(),
         backup_checksum: result.checksum || latestAttachment.backup_checksum || "",
       });
+      await removeBackupQueueItem(attachmentQueueId);
     } else {
       const retryCount = (latestAttachment.backup_retry_count || 0) + 1;
+      const retryAt = nextRetryAt(retryCount);
       await updateAttachmentBackupState(record.id, attachment.id, {
         backup_status: "backup_failed",
         blob_upload_status: "backup_failed",
         backup_retry_count: retryCount,
         backup_last_error: result.error || "ATTACHMENT_BACKUP_FAILED",
-        backup_next_retry_at: nextRetryAt(retryCount),
+        backup_next_retry_at: retryAt,
         blob_upload_error: result.error || "ATTACHMENT_BACKUP_FAILED",
+      });
+      await updateBackupQueueItem({
+        id: attachmentQueueId,
+        record_id: record.id,
+        item_type: "attachment",
+        attachment_id: attachment.id,
+        status: "backup_failed",
+        retry_count: retryCount,
+        last_error: result.error || "ATTACHMENT_BACKUP_FAILED",
+        next_retry_at: retryAt,
+        created_at: latestAttachment.created_at || record.created_at,
+        updated_at: new Date().toISOString(),
       });
     }
   }
 
   const latestRecord = (await loadLatestRecord(record.id)) || record;
+  const recordQueueId = `record:${record.id}`;
   await updateRecordBackupState(record.id, {
     backup_status: "backing_up",
     backup_last_error: "",
+  });
+  await updateBackupQueueItem({
+    id: recordQueueId,
+    record_id: record.id,
+    item_type: "record",
+    attachment_id: "",
+    status: "backing_up",
+    retry_count: latestRecord.backup_retry_count || 0,
+    last_error: "",
+    next_retry_at: "",
+    created_at: latestRecord.created_at,
+    updated_at: new Date().toISOString(),
   });
 
   const recordResult = await backupRecord(latestRecord);
@@ -507,14 +617,27 @@ export async function processSingleRecordBackup(recordId: string) {
       last_backup_at: recordResult.backedUpAt || new Date().toISOString(),
       backup_checksum: recordResult.checksum || latestRecord.backup_checksum,
     });
-    await removeBackupQueueItem(`record:${record.id}`);
+    await removeBackupQueueItem(recordQueueId);
   } else {
     const retryCount = (latestRecord.backup_retry_count || 0) + 1;
+    const retryAt = nextRetryAt(retryCount);
     await updateRecordBackupState(record.id, {
       backup_status: "backup_failed",
       backup_retry_count: retryCount,
       backup_last_error: recordResult.error || "BACKUP_FAILED",
-      backup_next_retry_at: nextRetryAt(retryCount),
+      backup_next_retry_at: retryAt,
+    });
+    await updateBackupQueueItem({
+      id: recordQueueId,
+      record_id: record.id,
+      item_type: "record",
+      attachment_id: "",
+      status: "backup_failed",
+      retry_count: retryCount,
+      last_error: recordResult.error || "BACKUP_FAILED",
+      next_retry_at: retryAt,
+      created_at: latestRecord.created_at,
+      updated_at: new Date().toISOString(),
     });
   }
 

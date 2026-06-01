@@ -38,6 +38,15 @@ function getJstStamp(date = new Date()) {
 function normalizeInputTimeToJstStamp(value: unknown) {
   const text = String(value || "").trim();
   if (!text) return getJstStamp();
+
+  const jstLike = text.match(
+    /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/
+  );
+  if (jstLike) {
+    const [, year, month, day, hour, minute, second = "00"] = jstLike;
+    return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+  }
+
   const parsed = new Date(text);
   if (Number.isFinite(parsed.getTime())) {
     return getJstStamp(parsed);
@@ -130,7 +139,14 @@ function hasCreationKeyword(text: string) {
 }
 
 function buildUserContent(originalInputTime: string, text: string) {
-  return ["Original input time:", originalInputTime, "", "User input:", text].join("\n");
+  return [
+    "Original input time timezone: Asia/Tokyo",
+    "Original input time:",
+    originalInputTime,
+    "",
+    "User input:",
+    text,
+  ].join("\n");
 }
 
 function buildActionPrompt() {
@@ -187,6 +203,8 @@ function buildDatetimePrompt() {
     "Return JSON only.",
     'Return exactly: {"date":"","time":"","duration_minutes":60,"all_day":false,"location":""}',
     "Use Original input time as the only base for relative dates.",
+    "Original input time is already expressed in Asia/Tokyo local time. Do not reinterpret it as UTC.",
+    "For relative words, use the date part of Original input time exactly as the user's today.",
     "date format YYYY-MM-DD, time format HH:mm.",
     "",
     "Core rule:",

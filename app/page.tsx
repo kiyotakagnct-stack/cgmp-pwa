@@ -169,6 +169,7 @@ type BackupSyncReportItem = {
   title: string;
   ok: boolean;
   itemType: string;
+  skipped: boolean;
   attachmentId: string;
   elapsedMs: number;
   blobElapsedMs: number;
@@ -1922,12 +1923,14 @@ export default function Page() {
       const reloadElapsedMs = Math.round(performance.now() - reloadStartedAt);
       const failed = results.filter((result) => !result.ok).length;
       const reportItems = backupResultsToReportItems(results);
+      const skipped = reportItems.filter((item) => item.skipped).length;
       if (showNotice) {
         const finishedAt = performance.now();
         console.table(
           reportItems.map((item) => ({
             title: item.title,
             ok: item.ok,
+            skipped: item.skipped,
             type: item.itemType,
             total_ms: item.elapsedMs,
             blob_ms: item.blobElapsedMs,
@@ -1952,7 +1955,9 @@ export default function Page() {
               ? "バックアップ待ちの記録はありません。"
               : failed > 0
                 ? `バックアップ完了: 成功${results.length - failed}件 / 失敗${failed}件`
-                : `バックアップ完了: 成功${results.length}件`,
+                : skipped > 0
+                  ? `バックアップ完了: 成功${results.length - skipped}件 / スキップ${skipped}件`
+                  : `バックアップ完了: 成功${results.length}件`,
           startedAt,
           finishedAt,
           total: results.length,
@@ -2006,6 +2011,7 @@ export default function Page() {
       title: result.title || result.recordId,
       ok: result.ok,
       itemType: result.itemType || "record",
+      skipped: Boolean(result.skipped),
       attachmentId: result.attachmentId || "",
       elapsedMs: Math.round(result.elapsedMs || 0),
       blobElapsedMs: Math.round(result.blobElapsedMs || 0),
@@ -2062,6 +2068,7 @@ export default function Page() {
         reportItems.map((item) => ({
           title: item.title,
           ok: item.ok,
+          skipped: item.skipped,
           type: item.itemType,
           attachment: item.attachmentId,
           total_ms: item.elapsedMs,
@@ -2118,6 +2125,7 @@ export default function Page() {
             title,
             ok: false,
             itemType: "record",
+            skipped: false,
             attachmentId: "",
             elapsedMs: Math.round(performance.now() - startedAt),
             blobElapsedMs: 0,
@@ -3994,7 +4002,7 @@ export default function Page() {
                                   {item.title}
                                 </div>
                                 <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
-                                  <span>{item.ok ? "OK" : "FAILED"}</span>
+                                  <span>{item.skipped ? "SKIP" : item.ok ? "OK" : "FAILED"}</span>
                                   <span>{item.itemType}</span>
                                   {item.attachmentId ? <span>attachment {item.attachmentId}</span> : null}
                                   <span>total {item.elapsedMs}ms</span>
