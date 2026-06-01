@@ -46,6 +46,18 @@ type DriveManifest = {
   deleted_records?: Record<string, CGMPDeletedRecord>;
 };
 
+export class GoogleDriveDownloadError extends Error {
+  status: number;
+  detail: string;
+
+  constructor(status: number, detail: string) {
+    super(`GOOGLE_DRIVE_DOWNLOAD_FAILED (${status}): ${detail}`);
+    this.name = "GoogleDriveDownloadError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
 function requiredEnv(name: string) {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name}_NOT_CONFIGURED`);
@@ -242,7 +254,8 @@ export async function downloadDriveFileBuffer(fileId: string) {
   });
 
   if (!response.ok) {
-    throw new Error("GOOGLE_DRIVE_DOWNLOAD_FAILED");
+    const text = await response.text().catch(() => "");
+    throw new GoogleDriveDownloadError(response.status, text.slice(0, 500) || response.statusText);
   }
 
   return {

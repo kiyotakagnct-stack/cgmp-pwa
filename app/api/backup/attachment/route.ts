@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 
-import { backupAttachmentToDrive, downloadDriveFileBuffer } from "@/lib/cgmp/drive-backup-server";
+import {
+  GoogleDriveDownloadError,
+  backupAttachmentToDrive,
+  downloadDriveFileBuffer,
+} from "@/lib/cgmp/drive-backup-server";
 import type { ImageAttachment } from "@/types/image";
 
 export const runtime = "nodejs";
@@ -21,13 +25,14 @@ export async function GET(request: Request) {
       },
     });
   } catch (error) {
+    const status = error instanceof GoogleDriveDownloadError ? error.status : 500;
     return NextResponse.json(
       {
         ok: false,
         error: "ATTACHMENT_DOWNLOAD_FAILED",
         detail: error instanceof Error ? error.message : String(error),
       },
-      { status: 500 }
+      { status }
     );
   }
 }

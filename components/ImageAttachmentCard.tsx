@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-import { getOrHydrateAttachmentImageBlob } from "@/lib/cgmp/image-hydration";
+import { ImageHydrationError, getOrHydrateAttachmentImageBlob } from "@/lib/cgmp/image-hydration";
 import type { ImageAttachment } from "@/types/image";
 
 type ImageAttachmentCardProps = {
@@ -60,6 +60,8 @@ export function ImageAttachmentCard({
 }: ImageAttachmentCardProps) {
   const [imageUrl, setImageUrl] = useState("");
   const [imageState, setImageState] = useState<"loading" | "hydrating" | "ready" | "missing" | "failed">("loading");
+  const [imageError, setImageError] = useState("");
+  const [retryToken, setRetryToken] = useState(0);
 
   useEffect(() => {
     let revoked = false;
@@ -68,6 +70,7 @@ export function ImageAttachmentCard({
     void (async () => {
       setImageUrl("");
       setImageState("loading");
+      setImageError("");
       try {
         const result = await getOrHydrateAttachmentImageBlob({ attachment, compact });
         if (!result.blob || revoked) {
@@ -87,11 +90,24 @@ export function ImageAttachmentCard({
         setImageUrl(objectUrl);
         setImageState("ready");
       } catch (error) {
+        const errorText =
+          error instanceof ImageHydrationError
+            ? `${error.status} ${error.code}: ${error.detail}`
+            : error instanceof Error
+              ? error.message
+              : String(error);
         console.debug("[cgmp:image] on-demand hydration failed", {
           attachmentId: attachment.id,
+          previewBlobKey: attachment.previewBlobKey,
+          thumbnailBlobKey: attachment.thumbnailBlobKey,
+          previewDriveFileId: attachment.previewDriveFileId,
+          thumbnailDriveFileId: attachment.thumbnailDriveFileId,
           error,
         });
-        if (!revoked) setImageState("failed");
+        if (!revoked) {
+          setImageError(errorText);
+          setImageState("failed");
+        }
       }
     })();
 
@@ -99,7 +115,7 @@ export function ImageAttachmentCard({
       revoked = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [attachment, compact]);
+  }, [attachment, compact, retryToken]);
 
   if (compact) {
     return (
@@ -157,6 +173,18 @@ export function ImageAttachmentCard({
           </span>
         )}
       </button>
+      {imageState === "failed" ? (
+        <div className="mt-2 rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-600">
+          <p className="line-clamp-3">取得エラー: {imageError || "unknown"}</p>
+          <button
+            type="button"
+            onClick={() => setRetryToken((value) => value + 1)}
+            className="mt-2 rounded-lg border border-rose-200 bg-white px-2.5 py-1 font-semibold text-rose-700 transition hover:bg-rose-100"
+          >
+            画像を再取得
+          </button>
+        </div>
+      ) : null}
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <span className={`rounded-full border px-2.5 py-1 text-xs ${statusClass(attachment.analysis_status)}`}>
