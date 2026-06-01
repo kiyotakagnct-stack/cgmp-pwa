@@ -215,6 +215,12 @@ type ExternalConfirmState = {
   action: "reminder" | "calendar";
   title: string;
 } | null;
+type BadgeInfo = {
+  title: string;
+  label: string;
+  description: string;
+  examples?: string[];
+} | null;
 
 type RecordFormState = {
   raw_input: string;
@@ -518,7 +524,7 @@ function getParaLabel(para: CGMPPara) {
   if (para === "project") return "P";
   if (para === "resource") return "R";
   if (para === "archive") return "Arc";
-  return "A";
+  return "Area";
 }
 
 function getDomainLabel(domain: CGMPDomain | string) {
@@ -534,6 +540,120 @@ function getDomainLabel(domain: CGMPDomain | string) {
     other: "other",
   };
   return labels[domain || "other"] || String(domain || "other");
+}
+
+function getActionInfo(action: CGMPAction): NonNullable<BadgeInfo> {
+  const info: Record<CGMPAction, NonNullable<BadgeInfo>> = {
+    note: {
+      title: "Action",
+      label: "Note",
+      description: "情報、気づき、メモ、ログとして残す記録です。Google Tasks/Calendar登録は基本しません。",
+      examples: ["会議メモ", "調査ログ", "思いつき"],
+    },
+    reminder: {
+      title: "Action",
+      label: "Reminder / Todo",
+      description: "やること・タスクです。必要に応じてGoogle Tasksへ登録し、完了/未完了を同期できます。",
+      examples: ["資料を送る", "買い物する", "確認する"],
+    },
+    calendar: {
+      title: "Action",
+      label: "Calendar",
+      description: "予定・スケジュールです。日時がある場合はGoogle Calendar登録の対象になります。",
+      examples: ["打ち合わせ", "通院予約", "イベント"],
+    },
+    unclear: {
+      title: "Action",
+      label: "Unclear",
+      description: "メモ、タスク、予定の判定が曖昧な記録です。後で確認して分類し直す想定です。",
+    },
+  };
+  return info[action || "note"] || info.note;
+}
+
+function getParaInfo(para: CGMPPara): NonNullable<BadgeInfo> {
+  const info: Record<Exclude<CGMPPara, "">, NonNullable<BadgeInfo>> = {
+    project: {
+      title: "PARA",
+      label: "P = Project",
+      description: "期限や成果物がある進行中の案件です。終わりがある仕事・家庭タスク・開発案件など。",
+      examples: ["PWA実装", "引越し準備", "旅行計画"],
+    },
+    area: {
+      title: "PARA",
+      label: "Area",
+      description: "継続的に管理する責任領域です。終わりが明確ではなく、生活や仕事の維持管理に近いもの。",
+      examples: ["家族", "健康", "仕事管理"],
+    },
+    resource: {
+      title: "PARA",
+      label: "R = Resource",
+      description: "後で参照したい知識・資料・アイデアです。すぐ実行するものではなく、検索で再利用する情報。",
+      examples: ["仕様メモ", "調査資料", "学び"],
+    },
+    archive: {
+      title: "PARA",
+      label: "Arc = Archive",
+      description: "完了済み、過去ログ、保存のみの記録です。AreaのAと混ざらないよう、このアプリではArc表記にしています。",
+      examples: ["完了した案件", "過去の記録", "保存ログ"],
+    },
+  };
+  return info[(para || "area") as Exclude<CGMPPara, "">] || info.area;
+}
+
+function getDomainInfo(domain: CGMPDomain | string): NonNullable<BadgeInfo> {
+  const normalized = normalizeDomain(domain) || "other";
+  const info: Record<Exclude<CGMPDomain, "">, NonNullable<BadgeInfo>> = {
+    work: { title: "Domain", label: "work", description: "仕事・業務・顧客・職場に関する記録です。" },
+    family: { title: "Domain", label: "family", description: "家族、子ども、家庭内の予定や相談に関する記録です。" },
+    self: { title: "Domain", label: "self", description: "自分自身の体調、考え、習慣、個人管理に関する記録です。" },
+    health: { title: "Domain", label: "health", description: "健康、医療、通院、体調管理に関する記録です。" },
+    finance: { title: "Domain", label: "finance", description: "お金、支払い、家計、費用、請求に関する記録です。" },
+    learning: { title: "Domain", label: "learning", description: "学習、読書、調査、勉強に関する記録です。" },
+    creation: { title: "Domain", label: "creation", description: "制作、開発、設計、アイデアづくりに関する記録です。" },
+    life_admin: { title: "Domain", label: "life_admin", description: "生活事務、手続き、買い物、予約、家の管理に関する記録です。" },
+    other: { title: "Domain", label: "other", description: "どの領域にも強く当てはまらない、または未分類の記録です。" },
+  };
+  return info[normalized as Exclude<CGMPDomain, "">] || info.other;
+}
+
+function getBackupInfo(record: CGMPRecord): NonNullable<BadgeInfo> {
+  return {
+    title: "Sync",
+    label: getBackupLabel(record),
+    description: "このメモ本文・メタデータのBlob同期状態です。画像の同期状態は別バッジで表示します。",
+    examples: [
+      "同期済: Blob側にも保存済み",
+      "未同期: まだアップロード待ち",
+      "失敗: 次回再同期または手動同期が必要",
+    ],
+  };
+}
+
+function getPhotoBackupInfo(record: CGMPRecord): NonNullable<BadgeInfo> {
+  const badge = getPhotoBackupBadge(record);
+  return {
+    title: "Photo Sync",
+    label: badge?.label || "写真なし",
+    description: "添付画像のBlob同期状態です。メモ本文とは別に、画像Blob本体のアップロード状況を管理しています。",
+    examples: ["写済: 画像同期済み", "写未: 未同期画像あり", "写失敗: 画像アップロードに失敗"],
+  };
+}
+
+function getTaskInfo(record: CGMPRecord): NonNullable<BadgeInfo> {
+  return {
+    title: "Google Tasks",
+    label: record.google_task_status === "completed" ? "Task完" : "Task未",
+    description: "Google Tasks側の完了状態です。Task未は未完了、Task完は完了済みを表します。",
+  };
+}
+
+function getCalendarInfo(): NonNullable<BadgeInfo> {
+  return {
+    title: "Google Calendar",
+    label: "GCal",
+    description: "Google Calendarへ登録済みの予定です。Calendar側の変更は同期時にCGMPへ反映されます。",
+  };
 }
 
 const ACTION_SYMBOLS: Record<CGMPAction, string> = {
@@ -659,10 +779,14 @@ function Badge({
   children,
   tone = "slate",
   compact = false,
+  onClick,
+  title,
 }: {
   children: ReactNode;
   tone?: "slate" | "cyan" | "emerald" | "amber" | "rose";
   compact?: boolean;
+  onClick?: () => void;
+  title?: string;
 }) {
   const toneClass =
     tone === "cyan"
@@ -674,11 +798,29 @@ function Badge({
           : tone === "rose"
             ? "border-[color:var(--danger)] bg-[var(--danger-soft)] text-[var(--danger)]"
             : "border-[color:var(--border)] bg-[var(--card-soft)] text-[var(--muted)]";
+  const className = `inline-flex items-center rounded-full border ${
+    compact ? "px-2 py-0.5 text-[11px] leading-5" : "px-2.5 py-1 text-xs"
+  } ${toneClass}`;
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        title={title}
+        onClick={(event) => {
+          event.stopPropagation();
+          onClick();
+        }}
+        onKeyDown={(event) => event.stopPropagation()}
+        className={`${className} cursor-help text-left transition hover:brightness-95 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]`}
+      >
+        {children}
+      </button>
+    );
+  }
   return (
     <span
-      className={`inline-flex items-center rounded-full border ${
-        compact ? "px-2 py-0.5 text-[11px] leading-5" : "px-2.5 py-1 text-xs"
-      } ${toneClass}`}
+      title={title}
+      className={className}
     >
       {children}
     </span>
@@ -691,21 +833,76 @@ function getDomainColorVar(domain: CGMPDomain | string) {
   return `var(--domain-${normalized})`;
 }
 
-function DomainBadge({ domain, compact = false }: { domain: CGMPDomain | string; compact?: boolean }) {
+function DomainBadge({
+  domain,
+  compact = false,
+  onClick,
+}: {
+  domain: CGMPDomain | string;
+  compact?: boolean;
+  onClick?: () => void;
+}) {
   const color = getDomainColorVar(domain);
+  const className = `inline-flex items-center rounded-full border text-[color:var(--domain-color)] ${
+    compact ? "px-2 py-0.5 text-[11px] leading-5" : "px-2.5 py-1 text-xs"
+  }`;
+  const style = {
+    "--domain-color": color,
+    backgroundColor: `color-mix(in srgb, ${color} 12%, var(--card))`,
+    borderColor: color,
+  } as CSSProperties;
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        title="Domainの意味を表示"
+        onClick={(event) => {
+          event.stopPropagation();
+          onClick();
+        }}
+        onKeyDown={(event) => event.stopPropagation()}
+        className={`${className} cursor-help text-left transition hover:brightness-95 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]`}
+        style={style}
+      >
+        {getDomainLabel(domain)}
+      </button>
+    );
+  }
   return (
     <span
-      className={`inline-flex items-center rounded-full border text-[color:var(--domain-color)] ${
-        compact ? "px-2 py-0.5 text-[11px] leading-5" : "px-2.5 py-1 text-xs"
-      }`}
-      style={{
-        "--domain-color": color,
-        backgroundColor: `color-mix(in srgb, ${color} 12%, var(--card))`,
-        borderColor: color,
-      } as CSSProperties}
+      className={className}
+      style={style}
     >
       {getDomainLabel(domain)}
     </span>
+  );
+}
+
+function BadgeInfoModal({ info, onClose }: { info: BadgeInfo; onClose: () => void }) {
+  if (!info) return null;
+  return (
+    <div className="fixed inset-0 z-[85] flex items-end justify-center bg-slate-950/24 px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] backdrop-blur-[2px] sm:items-center sm:pb-4">
+      <button type="button" className="absolute inset-0 cursor-default" aria-label="説明を閉じる" onClick={onClose} />
+      <section className="relative w-full max-w-md rounded-[28px] border border-[color:var(--border)] bg-[var(--card)] p-5 shadow-[0_24px_80px_var(--shadow-soft)]">
+        <div className="text-[11px] uppercase tracking-[0.34em] text-[var(--accent)]">{info.title}</div>
+        <h2 className="mt-2 text-2xl font-semibold text-[var(--text)]">{info.label}</h2>
+        <p className="mt-3 text-sm leading-7 text-[var(--muted)]">{info.description}</p>
+        {info.examples?.length ? (
+          <div className="mt-4 flex flex-wrap gap-2">
+            {info.examples.map((example) => (
+              <Badge key={example} compact>
+                {example}
+              </Badge>
+            ))}
+          </div>
+        ) : null}
+        <div className="mt-5 flex justify-end">
+          <button type="button" onClick={onClose} className={secondaryButtonClass}>
+            閉じる
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -1041,6 +1238,7 @@ function RecordCard({
   onDeleteAttachment,
   onAddPhotos,
   onSyncOne,
+  onShowBadgeInfo,
   externalProcessingKey = "",
   isPhotoProcessing = false,
   isBackupProcessing = false,
@@ -1060,6 +1258,7 @@ function RecordCard({
   onDeleteAttachment: (recordId: string, attachmentId: string) => void;
   onAddPhotos: (recordId: string, files: File[]) => void;
   onSyncOne: (recordId: string) => void;
+  onShowBadgeInfo: (info: NonNullable<BadgeInfo>) => void;
   externalProcessingKey?: string;
   isPhotoProcessing?: boolean;
   isBackupProcessing?: boolean;
@@ -1130,19 +1329,36 @@ function RecordCard({
           >
             ✓
           </span>
-          <Badge compact tone={record.action === "calendar" ? "amber" : record.action === "reminder" ? "rose" : record.action === "unclear" ? "slate" : "cyan"}>
+          <Badge
+            compact
+            tone={record.action === "calendar" ? "amber" : record.action === "reminder" ? "rose" : record.action === "unclear" ? "slate" : "cyan"}
+            title="Actionの意味を表示"
+            onClick={() => onShowBadgeInfo(getActionInfo(record.action))}
+          >
             {getActionLabel(record.action)}
           </Badge>
-          <DomainBadge compact domain={record.domain || "other"} />
-          <Badge compact tone="slate">{getParaLabel(para)}</Badge>
-          <Badge compact tone={getBackupTone(record)}>{getBackupLabel(record)}</Badge>
-          {photoBackupBadge ? <Badge compact tone={photoBackupBadge.tone}>{photoBackupBadge.label}</Badge> : null}
+          <DomainBadge compact domain={record.domain || "other"} onClick={() => onShowBadgeInfo(getDomainInfo(record.domain || "other"))} />
+          <Badge compact tone="slate" title="PARAの意味を表示" onClick={() => onShowBadgeInfo(getParaInfo(para))}>
+            {getParaLabel(para)}
+          </Badge>
+          <Badge compact tone={getBackupTone(record)} title="同期状態の意味を表示" onClick={() => onShowBadgeInfo(getBackupInfo(record))}>
+            {getBackupLabel(record)}
+          </Badge>
+          {photoBackupBadge ? (
+            <Badge compact tone={photoBackupBadge.tone} title="写真同期状態の意味を表示" onClick={() => onShowBadgeInfo(getPhotoBackupInfo(record))}>
+              {photoBackupBadge.label}
+            </Badge>
+          ) : null}
           {isTaskRegistered ? (
-            <Badge compact tone={record.google_task_status === "completed" ? "emerald" : "amber"}>
+            <Badge compact tone={record.google_task_status === "completed" ? "emerald" : "amber"} title="Google Tasks状態の意味を表示" onClick={() => onShowBadgeInfo(getTaskInfo(record))}>
               {record.google_task_status === "completed" ? "Task完" : "Task未"}
             </Badge>
           ) : null}
-          {isCalendarRegistered ? <Badge compact tone="amber">GCal</Badge> : null}
+          {isCalendarRegistered ? (
+            <Badge compact tone="amber" title="Google Calendar状態の意味を表示" onClick={() => onShowBadgeInfo(getCalendarInfo())}>
+              GCal
+            </Badge>
+          ) : null}
           {record.external_action_status === "failed" ? <Badge compact tone="rose">外部失敗</Badge> : null}
           <span className="min-w-0 max-w-full truncate text-[11px] text-[var(--subtle)]">
             {formatJstDateTime(record.updated_at)}
@@ -1404,17 +1620,18 @@ function WeekRecordItem({
   onOpen,
   onOpenImage,
   onToggleGoogleTaskStatus,
+  onShowBadgeInfo,
   externalProcessingKey,
 }: {
   record: CGMPRecord;
   onOpen: (id: string) => void;
   onOpenImage: (attachment: ImageAttachment, imageUrl: string) => void;
   onToggleGoogleTaskStatus: (id: string) => void;
+  onShowBadgeInfo: (info: NonNullable<BadgeInfo>) => void;
   externalProcessingKey: string;
 }) {
   const timeline = getRecordTimeline(record);
   const para = getEffectivePara(record);
-  const primaryTags = (record.tags || []).slice(0, 2);
   const isTaskRegistered = Boolean(record.google_task_id && record.google_task_list_id);
   const taskProcessing = externalProcessingKey === `task-status:${record.id}`;
 
@@ -1429,7 +1646,7 @@ function WeekRecordItem({
         event.preventDefault();
         onOpen(record.id);
       }}
-      className="group w-full max-w-full cursor-pointer overflow-hidden rounded-[22px] border border-[color:var(--border)] bg-[var(--card)] p-4 text-left transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] sm:rounded-[24px] sm:p-5"
+      className="group w-full max-w-full cursor-pointer overflow-hidden rounded-[22px] border border-[color:var(--border)] bg-[var(--card)] p-3 text-left transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] sm:rounded-[24px] sm:p-4"
     >
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <span className="shrink-0 font-mono text-base font-semibold leading-6 text-[var(--text)] sm:text-lg">
@@ -1440,21 +1657,6 @@ function WeekRecordItem({
         </span>
         <span className="shrink-0 text-lg leading-none sm:text-xl">{getActionSymbol(record)}</span>
         <span className="shrink-0 text-lg leading-none sm:text-xl">{getDomainSymbol(record.domain)}</span>
-      </div>
-
-      <h3 className="mt-3 line-clamp-2 break-words text-base font-semibold leading-7 text-[var(--text)] sm:text-lg">
-        {record.title || "（無題）"}
-      </h3>
-
-      <p className="mt-2 line-clamp-2 break-words text-sm leading-6 text-[var(--muted)] sm:text-base sm:leading-7">
-        {record.summary || record.body || record.raw_input || "内容なし"}
-      </p>
-
-      <div className="mt-4 flex flex-wrap items-center gap-2">
-        <Badge compact tone="slate">{getParaLabel(para)}</Badge>
-        {primaryTags.map((tag) => (
-          <Badge key={tag} compact>{`#${tag}`}</Badge>
-        ))}
         {isTaskRegistered ? (
           <button
             type="button"
@@ -1463,15 +1665,31 @@ function WeekRecordItem({
               onToggleGoogleTaskStatus(record.id);
             }}
             disabled={taskProcessing}
-            className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+            className={`ml-auto shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-semibold leading-5 transition disabled:cursor-not-allowed disabled:opacity-50 ${
               record.google_task_status === "completed"
                 ? "border-[color:var(--success)] bg-[var(--success-soft)] text-[var(--success)] hover:brightness-95"
                 : "border-[color:var(--orange)] bg-[var(--orange-soft)] text-[var(--orange)] hover:brightness-95"
             }`}
           >
-            {taskProcessing ? "同期中..." : record.google_task_status === "completed" ? "完了済み" : "Doneにする"}
+            {taskProcessing ? "同期中" : record.google_task_status === "completed" ? "完了" : "未完"}
           </button>
         ) : null}
+      </div>
+
+      <h3 className="mt-2 line-clamp-2 break-words text-base font-semibold leading-7 text-[var(--text)] sm:text-lg">
+        {record.title || "（無題）"}
+      </h3>
+
+      {record.summary ? (
+        <p className="mt-1 line-clamp-1 break-words text-sm leading-6 text-[var(--muted)] sm:text-base">
+          {record.summary}
+        </p>
+      ) : null}
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Badge compact tone="slate" title="PARAの意味を表示" onClick={() => onShowBadgeInfo(getParaInfo(para))}>
+          {getParaLabel(para)}
+        </Badge>
       </div>
 
       {(record.attachments || []).length > 0 ? (
@@ -1602,6 +1820,7 @@ function WeeklyView({
   onOpenRecord,
   onOpenImage,
   onToggleGoogleTaskStatus,
+  onShowBadgeInfo,
   externalProcessingKey,
 }: {
   weekStart: Date;
@@ -1612,6 +1831,7 @@ function WeeklyView({
   onOpenRecord: (id: string) => void;
   onOpenImage: (attachment: ImageAttachment, imageUrl: string) => void;
   onToggleGoogleTaskStatus: (id: string) => void;
+  onShowBadgeInfo: (info: NonNullable<BadgeInfo>) => void;
   externalProcessingKey: string;
 }) {
   const [activeDay, setActiveDay] = useState(0);
@@ -1727,6 +1947,7 @@ function WeeklyView({
                       onOpen={onOpenRecord}
                       onOpenImage={onOpenImage}
                       onToggleGoogleTaskStatus={onToggleGoogleTaskStatus}
+                      onShowBadgeInfo={onShowBadgeInfo}
                       externalProcessingKey={externalProcessingKey}
                     />
                   ))
@@ -1803,6 +2024,7 @@ export default function Page() {
   const [embeddingProgress, setEmbeddingProgress] = useState<EmbeddingProgressState | null>(null);
   const [embeddingIndexStats, setEmbeddingIndexStats] = useState<EmbeddingIndexStats | null>(null);
   const [relatedCandidates, setRelatedCandidates] = useState<SimilarRecord[]>([]);
+  const [badgeInfo, setBadgeInfo] = useState<BadgeInfo>(null);
   const initialDriveImportDoneRef = useRef(false);
   const initialExternalSyncDoneRef = useRef(false);
   const aiProcessingIdRef = useRef(0);
@@ -4183,6 +4405,7 @@ export default function Page() {
                     onDeleteAttachment={handleDeleteAttachment}
                     onAddPhotos={handleAddPhotos}
                     onSyncOne={runSingleRecordBackup}
+                    onShowBadgeInfo={setBadgeInfo}
                     externalProcessingKey={externalProcessingKey}
                     isPhotoProcessing={photoProcessingCount > 0}
                     isBackupProcessing={backupProcessing}
@@ -4214,6 +4437,7 @@ export default function Page() {
             }}
             onOpenImage={(attachment, imageUrl) => setLightbox({ imageUrl, title: attachment.summary_80 || "添付画像" })}
             onToggleGoogleTaskStatus={toggleGoogleTaskStatus}
+            onShowBadgeInfo={setBadgeInfo}
             externalProcessingKey={externalProcessingKey}
           />
         ) : null}
@@ -4720,11 +4944,17 @@ export default function Page() {
                   {selectedRecord.title || "（無題）"}
                 </h2>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <Badge tone={selectedRecord.action === "calendar" ? "amber" : selectedRecord.action === "reminder" ? "rose" : "cyan"}>
+                  <Badge
+                    tone={selectedRecord.action === "calendar" ? "amber" : selectedRecord.action === "reminder" ? "rose" : "cyan"}
+                    title="Actionの意味を表示"
+                    onClick={() => setBadgeInfo(getActionInfo(selectedRecord.action))}
+                  >
                     {selectedRecord.action}
                   </Badge>
-                  <DomainBadge domain={selectedRecord.domain || "other"} />
-                  <Badge>{getEffectivePara(selectedRecord)}</Badge>
+                  <DomainBadge domain={selectedRecord.domain || "other"} onClick={() => setBadgeInfo(getDomainInfo(selectedRecord.domain || "other"))} />
+                  <Badge title="PARAの意味を表示" onClick={() => setBadgeInfo(getParaInfo(getEffectivePara(selectedRecord)))}>
+                    {getEffectivePara(selectedRecord)}
+                  </Badge>
                 </div>
               </div>
               <button
@@ -4875,6 +5105,8 @@ export default function Page() {
           onClose={() => setLightbox(null)}
         />
       ) : null}
+
+      <BadgeInfoModal info={badgeInfo} onClose={() => setBadgeInfo(null)} />
 
       <AiProcessingOverlay state={aiProcessingOverlay} elapsedMs={aiProcessingElapsedMs} />
 
