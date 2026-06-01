@@ -160,6 +160,39 @@ async function registerExternalIfNeeded(record: CGMPRecord) {
   return record;
 }
 
+function applyBlobBackupMetadata(
+  record: CGMPRecord,
+  backup: Awaited<ReturnType<typeof saveRecordToVercelBlob>>
+): CGMPRecord {
+  return {
+    ...record,
+    drive_file_id: backup.blobPathname,
+    backup_checksum: backup.checksum,
+    last_backup_at: backup.backedUpAt,
+    backup_status: "backed_up",
+    backup_retry_count: 0,
+    backup_last_error: "",
+    backup_next_retry_at: "",
+  };
+}
+
+async function settleWithTiming<T>(promise: Promise<T>) {
+  const startedAt = Date.now();
+  try {
+    return {
+      status: "fulfilled" as const,
+      value: await promise,
+      elapsedMs: Date.now() - startedAt,
+    };
+  } catch (reason) {
+    return {
+      status: "rejected" as const,
+      reason,
+      elapsedMs: Date.now() - startedAt,
+    };
+  }
+}
+
 export async function createRecordFromShortcutWebhook({
   request,
   body,
@@ -213,7 +246,7 @@ export async function createRecordFromShortcutWebhook({
     result: analysisPayload.result,
   });
 
-  let record = buildRecordFromAnalysis({
+  const record = buildRecordFromAnalysis({
     analysis: analysisPayload.result,
     rawInput: text,
     existingId: recordId,
@@ -223,56 +256,109 @@ export async function createRecordFromShortcutWebhook({
     },
   });
 
-  try {
-    record = await registerExternalIfNeeded(record);
-  } catch (error) {
-    record = {
+  const [externalResult, initialBackupResult] = await Promise.all([
+    settleWithTiming(registerExternalIfNeeded(record)),
+    settleWithTiming(saveRecordToVercelBlob(record)),
+  ]);
+
+  console.info("[cgmp:shortcut-webhook] parallel phase completed", {
+    clientRequestId,
+    recordId: record.id,
+    externalOk: externalResult.status === "fulfilled",
+    initialBackupOk: initialBackupResult.status === "fulfilled",
+    externalElapsedMs: externalResult.elapsedMs,
+    initialBackupElapsedMs: initialBackupResult.elapsedMs,
+  });
+
+  if (externalResult.status === "rejected") {
+    let failedRecord: CGMPRecord = {
       ...record,
       external_action_status: "failed",
       external_target: record.action === "calendar" ? "calendar" : record.action === "reminder" ? "reminder" : "",
-      external_error: error instanceof Error ? error.message : "EXTERNAL_REGISTER_FAILED",
+      external_error: externalResult.reason instanceof Error ? externalResult.reason.message : "EXTERNAL_REGISTER_FAILED",
     };
-    await saveRecordToVercelBlob(record);
+
+    if (initialBackupResult.status === "fulfilled") {
+      failedRecord = applyBlobBackupMetadata(failedRecord, initialBackupResult.value);
+    }
+
+    try {
+      const failedBackup = await saveRecordToVercelBlob(failedRecord);
+      failedRecord = applyBlobBackupMetadata(failedRecord, failedBackup);
+    } catch (backupError) {
+      console.error("[cgmp:shortcut-webhook] failed-state backup failed", {
+        clientRequestId,
+        recordId: record.id,
+        backupError,
+      });
+    }
+
     console.error("[cgmp:shortcut-webhook] external register failed", {
       clientRequestId,
       recordId: record.id,
-      error,
+      error: externalResult.reason,
     });
     return {
       ok: false,
       message: "外部登録に失敗しました",
-      errorCode: record.action === "calendar" ? "GOOGLE_CALENDAR_REGISTER_FAILED" : "GOOGLE_TASK_REGISTER_FAILED",
-      action: record.action,
-      title: record.title,
-      summary: record.summary,
-      recordId: record.id,
-      date: record.date,
-      time: record.time,
-      confirmationText: `${record.title || "（無題）"}の解析と保存は完了しましたが、Google側の登録に失敗しました。CGMPアプリで確認してください。`,
+      errorCode: failedRecord.action === "calendar" ? "GOOGLE_CALENDAR_REGISTER_FAILED" : "GOOGLE_TASK_REGISTER_FAILED",
+      action: failedRecord.action,
+      title: failedRecord.title,
+      summary: failedRecord.summary,
+      recordId: failedRecord.id,
+      date: failedRecord.date,
+      time: failedRecord.time,
+      confirmationText: `${failedRecord.title || "（無題）"}の解析と保存は完了しましたが、Google側の登録に失敗しました。CGMPアプリで確認してください。`,
       source,
       clientRequestId,
     };
   }
 
-  const backup = await saveRecordToVercelBlob(record);
-  record = {
-    ...record,
-    drive_file_id: backup.blobPathname,
-    backup_checksum: backup.checksum,
-    last_backup_at: backup.backedUpAt,
-    backup_status: "backed_up",
-  };
-  await saveRecordToVercelBlob(record);
+  let finalRecord = externalResult.value;
+  if (initialBackupResult.status === "fulfilled") {
+    finalRecord = applyBlobBackupMetadata(finalRecord, initialBackupResult.value);
+  } else {
+    console.error("[cgmp:shortcut-webhook] initial backup failed", {
+      clientRequestId,
+      recordId: record.id,
+      error: initialBackupResult.reason,
+    });
+  }
+
+  try {
+    const finalBackup = await saveRecordToVercelBlob(finalRecord);
+    finalRecord = applyBlobBackupMetadata(finalRecord, finalBackup);
+  } catch (error) {
+    console.error("[cgmp:shortcut-webhook] final backup failed", {
+      clientRequestId,
+      recordId: finalRecord.id,
+      error,
+    });
+    return {
+      ok: false,
+      message: "バックアップに失敗しました",
+      errorCode: "BLOB_BACKUP_FAILED",
+      action: finalRecord.action,
+      title: finalRecord.title,
+      summary: finalRecord.summary,
+      recordId: finalRecord.id,
+      date: finalRecord.date,
+      time: finalRecord.time,
+      confirmationText: `${finalRecord.title || "（無題）"}のGoogle登録は完了しましたが、CGMPへの保存に失敗しました。CGMPアプリで確認してください。`,
+      source,
+      clientRequestId,
+    };
+  }
 
   console.info("[cgmp:shortcut-webhook] succeeded", {
     source,
     clientRequestId,
-    recordId: record.id,
-    action: record.action,
+    recordId: finalRecord.id,
+    action: finalRecord.action,
   });
 
   return {
-    ...summarizeRecord(record),
+    ...summarizeRecord(finalRecord),
     source,
     clientRequestId,
   };
