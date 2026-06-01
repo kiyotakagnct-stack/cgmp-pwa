@@ -240,9 +240,9 @@ const fieldClass =
   "mt-2 w-full rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-4 py-3 text-sm text-[var(--text)] outline-none transition placeholder:text-[color:var(--subtle)] focus:border-[color:var(--accent)] focus:ring-4 focus:ring-[color:var(--accent-soft)]";
 const textareaClass = `${fieldClass} min-h-[120px] resize-y`;
 const panelClass =
-  "rounded-[24px] border border-[color:var(--border)] bg-[var(--card)] p-4 shadow-[0_18px_55px_var(--shadow-soft),0_2px_10px_var(--shadow-soft)] sm:rounded-[28px] sm:p-5";
+  "min-w-0 overflow-hidden rounded-[24px] border border-[color:var(--border)] bg-[var(--card)] p-4 shadow-[0_18px_55px_var(--shadow-soft),0_2px_10px_var(--shadow-soft)] sm:rounded-[28px] sm:p-5";
 const softPanelClass =
-  "rounded-[22px] border border-[color:var(--border)] bg-[var(--card-soft)] p-3 shadow-[0_10px_30px_var(--shadow-soft)] sm:rounded-[24px] sm:p-4";
+  "min-w-0 overflow-hidden rounded-[22px] border border-[color:var(--border)] bg-[var(--card-soft)] p-3 shadow-[0_10px_30px_var(--shadow-soft)] sm:rounded-[24px] sm:p-4";
 const primaryButtonClass =
   "rounded-2xl border border-[color:var(--accent)] bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-[var(--accent-contrast)] shadow-[0_10px_24px_var(--shadow-soft)] transition hover:brightness-95";
 const secondaryButtonClass =
@@ -781,7 +781,7 @@ function LabeledInput({
   type?: string;
 }) {
   return (
-    <label className="block text-sm font-medium text-[var(--text)]">
+    <label className="block min-w-0 text-sm font-medium text-[var(--text)]">
       {label}
       <input
         type={type}
@@ -804,7 +804,7 @@ function LabeledNumber({
   onChange: (value: number) => void;
 }) {
   return (
-    <label className="block text-sm font-medium text-[var(--text)]">
+    <label className="block min-w-0 text-sm font-medium text-[var(--text)]">
       {label}
       <input
         type="number"
@@ -833,7 +833,7 @@ function LabeledTextarea({
   inputRef?: RefObject<HTMLTextAreaElement | null>;
 }) {
   return (
-    <label className="block text-sm font-medium text-[var(--text)]">
+    <label className="block min-w-0 text-sm font-medium text-[var(--text)]">
       {label}
       <textarea
         value={value}
@@ -859,7 +859,7 @@ function LabeledSelect({
   options: { value: string; label: string }[];
 }) {
   return (
-    <label className="block text-sm font-medium text-[var(--text)]">
+    <label className="block min-w-0 text-sm font-medium text-[var(--text)]">
       {label}
       <select value={value} onChange={(event) => onChange(event.target.value)} className={fieldClass}>
         {options.map((option) => (
@@ -1094,11 +1094,11 @@ function RecordCard({
         onOpen(record.id);
       }}
       id={`record-card-${record.id}`}
-      className="group w-full scroll-mt-24 text-left"
+      className="group w-full min-w-0 overflow-hidden scroll-mt-24 text-left"
       aria-expanded={isSelected}
     >
       <div
-        className={`rounded-[22px] border p-3 transition duration-300 sm:rounded-[24px] sm:p-4 ${
+        className={`min-w-0 overflow-hidden rounded-[22px] border p-3 transition duration-300 sm:rounded-[24px] sm:p-4 ${
           isChecked
             ? "border-[color:var(--orange)] bg-[var(--orange-soft)] shadow-[0_16px_42px_var(--shadow-soft)]"
             : isSelected
@@ -1106,7 +1106,7 @@ function RecordCard({
             : "border-[color:var(--border)] bg-[var(--card)] group-hover:border-[color:var(--accent)] group-hover:bg-[var(--accent-soft)]"
         }`}
       >
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           <span
             role="checkbox"
             aria-checked={isChecked}
@@ -1144,8 +1144,8 @@ function RecordCard({
           ) : null}
           {isCalendarRegistered ? <Badge compact tone="amber">GCal</Badge> : null}
           {record.external_action_status === "failed" ? <Badge compact tone="rose">外部失敗</Badge> : null}
-          <span className="text-[11px] text-[var(--subtle)]">{formatJstDateTime(record.updated_at)}</span>
-          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          <span className="min-w-0 text-[11px] text-[var(--subtle)]">{formatJstDateTime(record.updated_at)}</span>
+          <div className="ml-auto flex max-w-full basis-full shrink-0 items-center justify-end gap-1.5 sm:basis-auto">
             <button
               type="button"
               disabled={isBackupProcessing}
@@ -1154,7 +1154,7 @@ function RecordCard({
                 onSyncOne(record.id);
               }}
               onKeyDown={(event) => event.stopPropagation()}
-              className="rounded-full border border-[color:var(--border)] bg-[var(--card)] px-2.5 py-1 text-[11px] font-semibold text-[var(--text)] shadow-[0_6px_16px_var(--shadow-soft)] transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50"
+              className="whitespace-nowrap rounded-full border border-[color:var(--border)] bg-[var(--card)] px-2.5 py-1 text-[11px] font-semibold text-[var(--text)] shadow-[0_6px_16px_var(--shadow-soft)] transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50"
             >
               同期
             </button>
@@ -1180,7 +1180,7 @@ function RecordCard({
                 photoInputRef.current?.click();
               }}
               onKeyDown={(event) => event.stopPropagation()}
-              className="rounded-full border border-[color:var(--accent)] bg-[var(--card)] px-2.5 py-1 text-[11px] font-semibold text-[var(--accent)] shadow-[0_6px_16px_var(--shadow-soft)] transition hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50"
+              className="whitespace-nowrap rounded-full border border-[color:var(--accent)] bg-[var(--card)] px-2.5 py-1 text-[11px] font-semibold text-[var(--accent)] shadow-[0_6px_16px_var(--shadow-soft)] transition hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50"
             >
               ＋写真
             </button>
@@ -1188,7 +1188,7 @@ function RecordCard({
         </div>
 
         <div className="mt-3">
-          <h3 className="text-base font-semibold text-[var(--text)]">{record.title || "（無題）"}</h3>
+          <h3 className="break-words text-base font-semibold text-[var(--text)]">{record.title || "（無題）"}</h3>
           <p className="mt-1 line-clamp-2 text-sm leading-6 text-[var(--muted)]">
             {record.summary || record.body || record.raw_input}
           </p>
@@ -4035,14 +4035,14 @@ export default function Page() {
         ) : null}
 
         {tab === "home" ? (
-          <div className="grid gap-3 sm:gap-4">
+          <div className="grid min-w-0 gap-3 sm:gap-4">
             <section className={panelClass}>
               <SectionHeading
                 eyebrow="Home"
                 title="一覧・検索・フィルター"
               />
 
-              <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+              <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
                 <LabeledInput label="Text search" value={query} onChange={setQuery} placeholder="title / summary / body" />
                 <div className="flex flex-wrap gap-2">
                   <button
@@ -4164,7 +4164,7 @@ export default function Page() {
               </div>
             </section>
 
-            <section className="grid gap-3">
+            <section className="grid min-w-0 gap-3 overflow-hidden">
               {filteredRecords.length > 0 ? (
                 filteredRecords.map((record) => (
                   <RecordCard
