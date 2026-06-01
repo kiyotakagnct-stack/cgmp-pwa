@@ -37,6 +37,7 @@ import {
   hydrateMissingAttachmentBlobs,
   importMissingRecordsFromDrive,
   processBackupQueue,
+  processSingleRecordBackup,
 } from "@/lib/cgmp/backup";
 import { importScriptableCgmpZip, type ScriptableImportResult } from "@/lib/cgmp/scriptable-import";
 import type {
@@ -1038,8 +1039,10 @@ function RecordCard({
   onReanalyzeAttachment,
   onDeleteAttachment,
   onAddPhotos,
+  onSyncOne,
   externalProcessingKey = "",
   isPhotoProcessing = false,
+  isBackupProcessing = false,
   isChecked = false,
   onToggleCheck,
   isSelected = false,
@@ -1055,8 +1058,10 @@ function RecordCard({
   onReanalyzeAttachment: (recordId: string, attachmentId: string) => void;
   onDeleteAttachment: (recordId: string, attachmentId: string) => void;
   onAddPhotos: (recordId: string, files: File[]) => void;
+  onSyncOne: (recordId: string) => void;
   externalProcessingKey?: string;
   isPhotoProcessing?: boolean;
+  isBackupProcessing?: boolean;
   isChecked?: boolean;
   onToggleCheck: (id: string) => void;
   isSelected?: boolean;
@@ -1139,7 +1144,19 @@ function RecordCard({
           {isCalendarRegistered ? <Badge compact tone="amber">GCal</Badge> : null}
           {record.external_action_status === "failed" ? <Badge compact tone="rose">外部失敗</Badge> : null}
           <span className="text-[11px] text-[var(--subtle)]">{formatJstDateTime(record.updated_at)}</span>
-          <div className="ml-auto shrink-0">
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+            <button
+              type="button"
+              disabled={isBackupProcessing}
+              onClick={(event) => {
+                event.stopPropagation();
+                onSyncOne(record.id);
+              }}
+              onKeyDown={(event) => event.stopPropagation()}
+              className="rounded-full border border-[color:var(--border)] bg-[var(--card)] px-2.5 py-1 text-[11px] font-semibold text-[var(--text)] shadow-[0_6px_16px_var(--shadow-soft)] transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              同期
+            </button>
             <input
               ref={photoInputRef}
               type="file"
@@ -1245,6 +1262,18 @@ function RecordCard({
                     {calendarProcessing ? "登録中..." : isCalendarRegistered ? "Cal登録済" : "Calendar登録"}
                   </button>
                 ) : null}
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onSyncOne(record.id);
+                  }}
+                  onKeyDown={(event) => event.stopPropagation()}
+                  className="rounded-xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--text)] transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={isBackupProcessing}
+                >
+                  1件同期
+                </button>
                 <button
                   type="button"
                   onClick={(event) => {
@@ -1892,19 +1921,7 @@ export default function Page() {
       await Promise.all([reloadRecords(), reloadBackupSummary()]);
       const reloadElapsedMs = Math.round(performance.now() - reloadStartedAt);
       const failed = results.filter((result) => !result.ok).length;
-      const reportItems: BackupSyncReportItem[] = results.map((result) => ({
-        recordId: result.recordId,
-        title: result.title || result.recordId,
-        ok: result.ok,
-        itemType: result.itemType || "record",
-        attachmentId: result.attachmentId || "",
-        elapsedMs: Math.round(result.elapsedMs || 0),
-        blobElapsedMs: Math.round(result.blobElapsedMs || 0),
-        uploadElapsedMs: Math.round(result.uploadElapsedMs || 0),
-        previewSizeBytes: result.previewSizeBytes || 0,
-        thumbnailSizeBytes: result.thumbnailSizeBytes || 0,
-        error: result.error || "",
-      }));
+      const reportItems = backupResultsToReportItems(results);
       if (showNotice) {
         const finishedAt = performance.now();
         console.table(
@@ -1978,6 +1995,140 @@ export default function Page() {
           text: error instanceof Error ? error.message : "バックアップに失敗しました",
         });
       }
+    } finally {
+      setBackupProcessing(false);
+    }
+  }
+
+  function backupResultsToReportItems(results: Awaited<ReturnType<typeof processBackupQueue>>): BackupSyncReportItem[] {
+    return results.map((result) => ({
+      recordId: result.recordId,
+      title: result.title || result.recordId,
+      ok: result.ok,
+      itemType: result.itemType || "record",
+      attachmentId: result.attachmentId || "",
+      elapsedMs: Math.round(result.elapsedMs || 0),
+      blobElapsedMs: Math.round(result.blobElapsedMs || 0),
+      uploadElapsedMs: Math.round(result.uploadElapsedMs || 0),
+      previewSizeBytes: result.previewSizeBytes || 0,
+      thumbnailSizeBytes: result.thumbnailSizeBytes || 0,
+      error: result.error || "",
+    }));
+  }
+
+  async function runSingleRecordBackup(recordId: string) {
+    if (backupProcessing) {
+      const now = performance.now();
+      setBackupSyncProgress({
+        phase: "processing",
+        message: "別の同期が実行中です。完了後にもう一度試してください。",
+        startedAt: now,
+        total: 0,
+        succeeded: 0,
+        failed: 0,
+        processElapsedMs: 0,
+        reloadElapsedMs: 0,
+        reportItems: [],
+      });
+      return;
+    }
+
+    const record = records.find((candidate) => candidate.id === recordId);
+    const title = record?.title || record?.summary || recordId;
+    const startedAt = performance.now();
+    setBackupSyncProgress({
+      phase: "processing",
+      message: `「${title}」だけをVercel Blobへ同期しています。`,
+      startedAt,
+      total: 1,
+      succeeded: 0,
+      failed: 0,
+      processElapsedMs: 0,
+      reloadElapsedMs: 0,
+      reportItems: [],
+    });
+    setBackupProcessing(true);
+    try {
+      const processStartedAt = performance.now();
+      const results = await processSingleRecordBackup(recordId);
+      const processElapsedMs = Math.round(performance.now() - processStartedAt);
+      const reloadStartedAt = performance.now();
+      await Promise.all([reloadRecords(), reloadBackupSummary()]);
+      const reloadElapsedMs = Math.round(performance.now() - reloadStartedAt);
+      const failed = results.filter((result) => !result.ok).length;
+      const reportItems = backupResultsToReportItems(results);
+      const finishedAt = performance.now();
+      console.table(
+        reportItems.map((item) => ({
+          title: item.title,
+          ok: item.ok,
+          type: item.itemType,
+          attachment: item.attachmentId,
+          total_ms: item.elapsedMs,
+          blob_ms: item.blobElapsedMs,
+          upload_ms: item.uploadElapsedMs,
+          preview_kb: Math.round(item.previewSizeBytes / 1024),
+          error: item.error,
+        }))
+      );
+      console.debug("[cgmp:blob-sync:single] report", {
+        recordId,
+        title,
+        total: results.length,
+        succeeded: results.length - failed,
+        failed,
+        processElapsedMs,
+        reloadElapsedMs,
+        totalElapsedMs: Math.round(finishedAt - startedAt),
+        items: reportItems,
+      });
+      setBackupSyncProgress({
+        phase: "done",
+        message:
+          failed > 0
+            ? `1件同期で失敗があります（成功${results.length - failed} / 失敗${failed}）。`
+            : `1件同期が完了しました（処理${results.length}件）。`,
+        startedAt,
+        finishedAt,
+        total: results.length,
+        succeeded: results.length - failed,
+        failed,
+        processElapsedMs,
+        reloadElapsedMs,
+        reportItems,
+      });
+      setNotice({
+        kind: failed > 0 ? "error" : "info",
+        text: failed > 0 ? "1件同期で失敗があります。詳細モーダルを確認してください。" : "1件同期が完了しました。",
+      });
+    } catch (error) {
+      setBackupSyncProgress({
+        phase: "error",
+        message: error instanceof Error ? error.message : "1件同期に失敗しました",
+        startedAt,
+        finishedAt: performance.now(),
+        total: 1,
+        succeeded: 0,
+        failed: 1,
+        processElapsedMs: Math.round(performance.now() - startedAt),
+        reloadElapsedMs: 0,
+        reportItems: [
+          {
+            recordId,
+            title,
+            ok: false,
+            itemType: "record",
+            attachmentId: "",
+            elapsedMs: Math.round(performance.now() - startedAt),
+            blobElapsedMs: 0,
+            uploadElapsedMs: 0,
+            previewSizeBytes: 0,
+            thumbnailSizeBytes: 0,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        ],
+      });
+      setNotice({ kind: "error", text: error instanceof Error ? error.message : "1件同期に失敗しました" });
     } finally {
       setBackupProcessing(false);
     }
@@ -3778,7 +3929,10 @@ export default function Page() {
             {(() => {
               const done = backupSyncProgress.phase === "done" || backupSyncProgress.phase === "error";
               const elapsed = Math.round((backupSyncProgress.finishedAt || performance.now()) - backupSyncProgress.startedAt);
-              const slowestItems = [...backupSyncProgress.reportItems].sort((a, b) => b.elapsedMs - a.elapsedMs).slice(0, 6);
+              const detailItems =
+                backupSyncProgress.reportItems.length <= 20
+                  ? backupSyncProgress.reportItems
+                  : [...backupSyncProgress.reportItems].sort((a, b) => b.elapsedMs - a.elapsedMs).slice(0, 20);
               return (
                 <section className="w-full max-w-md rounded-[28px] border border-[color:var(--border)] bg-[var(--card)] p-5 shadow-[0_28px_90px_var(--shadow-soft)]">
                   <div className="text-[11px] uppercase tracking-[0.34em] text-[var(--accent)]">Blob Sync</div>
@@ -3824,11 +3978,13 @@ export default function Page() {
                         <span>合計: {elapsed} ms</span>
                         <span>対象: {backupSyncProgress.total}件</span>
                       </div>
-                      {slowestItems.length > 0 ? (
+                      {detailItems.length > 0 ? (
                         <div className="mt-3">
-                          <div className="font-semibold text-[var(--text)]">遅い順</div>
+                          <div className="font-semibold text-[var(--text)]">
+                            {backupSyncProgress.reportItems.length <= 20 ? "処理詳細" : "遅い順 20件"}
+                          </div>
                           <div className="mt-2 max-h-44 space-y-2 overflow-auto pr-1">
-                            {slowestItems.map((item) => (
+                            {detailItems.map((item) => (
                               <div
                                 key={`${item.recordId}:${item.itemType}:${item.attachmentId}`}
                                 className="rounded-xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2"
@@ -3838,7 +3994,9 @@ export default function Page() {
                                   {item.title}
                                 </div>
                                 <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
+                                  <span>{item.ok ? "OK" : "FAILED"}</span>
                                   <span>{item.itemType}</span>
+                                  {item.attachmentId ? <span>attachment {item.attachmentId}</span> : null}
                                   <span>total {item.elapsedMs}ms</span>
                                   {item.blobElapsedMs > 0 ? <span>Blob {item.blobElapsedMs}ms</span> : null}
                                   {item.uploadElapsedMs > 0 ? <span>Upload {item.uploadElapsedMs}ms</span> : null}
@@ -4014,8 +4172,10 @@ export default function Page() {
                     onReanalyzeAttachment={handleReanalyzeAttachment}
                     onDeleteAttachment={handleDeleteAttachment}
                     onAddPhotos={handleAddPhotos}
+                    onSyncOne={runSingleRecordBackup}
                     externalProcessingKey={externalProcessingKey}
                     isPhotoProcessing={photoProcessingCount > 0}
+                    isBackupProcessing={backupProcessing}
                     isChecked={checkedRecordIds.includes(record.id)}
                     onToggleCheck={toggleCheckedRecord}
                     isSelected={record.id === selectedId}

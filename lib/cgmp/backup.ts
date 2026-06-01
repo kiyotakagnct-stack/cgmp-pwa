@@ -15,7 +15,7 @@ import { getImageBlob, putImageBlob } from "@/lib/db/imageBlobStore";
 import type { CGMPBackupSummary, CGMPDeletedRecord, CGMPRecord } from "./types";
 import type { ImageAttachment } from "@/types/image";
 
-type BackupProcessItemResult = {
+export type BackupProcessItemResult = {
   ok: boolean;
   recordId: string;
   title?: string;
@@ -415,6 +415,104 @@ export async function processBackupQueue() {
       retry_count: retryCount,
       last_error: result.error || "BACKUP_FAILED",
       next_retry_at: retryAt,
+    });
+  }
+
+  return results;
+}
+
+export async function processSingleRecordBackup(recordId: string) {
+  const results: BackupProcessItemResult[] = [];
+  const record = await loadLatestRecord(recordId);
+  if (!record) {
+    return [
+      {
+        ok: false,
+        recordId,
+        title: recordId,
+        itemType: "record" as const,
+        elapsedMs: 0,
+        error: "RECORD_NOT_FOUND",
+      },
+    ];
+  }
+
+  for (const attachment of record.attachments || []) {
+    if (attachment.backup_status === "backed_up" && attachment.previewBlobUrl) continue;
+
+    await updateAttachmentBackupState(record.id, attachment.id, {
+      backup_status: "backing_up",
+      blob_upload_status: "backing_up",
+      backup_last_error: "",
+      blob_upload_error: "",
+    });
+
+    const latestRecord = (await loadLatestRecord(record.id)) || record;
+    const latestAttachment =
+      (latestRecord.attachments || []).find((candidate) => candidate.id === attachment.id) || attachment;
+    const result = await backupAttachment(latestRecord, latestAttachment);
+    results.push(result);
+
+    if (result.ok) {
+      await updateAttachmentBackupState(record.id, attachment.id, {
+        backup_status: "backed_up",
+        blob_upload_status: "backed_up",
+        backup_retry_count: 0,
+        backup_last_error: "",
+        backup_next_retry_at: "",
+        previewDriveFileId: result.previewDriveFileId || latestAttachment.previewDriveFileId || "",
+        thumbnailDriveFileId: result.thumbnailDriveFileId || latestAttachment.thumbnailDriveFileId || "",
+        previewBlobPathname: result.previewBlobPathname || latestAttachment.previewBlobPathname || "",
+        previewBlobUrl: result.previewBlobUrl || latestAttachment.previewBlobUrl || "",
+        previewBlobDownloadUrl: result.previewBlobDownloadUrl || latestAttachment.previewBlobDownloadUrl || "",
+        thumbnailBlobPathname: result.thumbnailBlobPathname || latestAttachment.thumbnailBlobPathname || "",
+        thumbnailBlobUrl: result.thumbnailBlobUrl || latestAttachment.thumbnailBlobUrl || "",
+        thumbnailBlobDownloadUrl: result.thumbnailBlobDownloadUrl || latestAttachment.thumbnailBlobDownloadUrl || "",
+        blob_uploaded_at: result.backedUpAt || new Date().toISOString(),
+        blob_upload_error: "",
+        last_backup_at: result.backedUpAt || new Date().toISOString(),
+        backup_checksum: result.checksum || latestAttachment.backup_checksum || "",
+      });
+    } else {
+      const retryCount = (latestAttachment.backup_retry_count || 0) + 1;
+      await updateAttachmentBackupState(record.id, attachment.id, {
+        backup_status: "backup_failed",
+        blob_upload_status: "backup_failed",
+        backup_retry_count: retryCount,
+        backup_last_error: result.error || "ATTACHMENT_BACKUP_FAILED",
+        backup_next_retry_at: nextRetryAt(retryCount),
+        blob_upload_error: result.error || "ATTACHMENT_BACKUP_FAILED",
+      });
+    }
+  }
+
+  const latestRecord = (await loadLatestRecord(record.id)) || record;
+  await updateRecordBackupState(record.id, {
+    backup_status: "backing_up",
+    backup_last_error: "",
+  });
+
+  const recordResult = await backupRecord(latestRecord);
+  results.push(recordResult);
+
+  if (recordResult.ok) {
+    await updateRecordBackupState(record.id, {
+      backup_status: "backed_up",
+      backup_retry_count: 0,
+      backup_last_error: "",
+      backup_next_retry_at: "",
+      drive_file_id: recordResult.driveFileId || latestRecord.drive_file_id,
+      last_backup_at: recordResult.backedUpAt || new Date().toISOString(),
+      backup_checksum: recordResult.checksum || latestRecord.backup_checksum,
+    });
+    await removeBackupQueueItem(`record:${record.id}`);
+  } else {
+    const retryCount = (latestRecord.backup_retry_count || 0) + 1;
+    await updateRecordBackupState(record.id, {
+      backup_status: "backup_failed",
+      backup_retry_count: retryCount,
+      backup_last_error: recordResult.error || "BACKUP_FAILED",
+      backup_next_retry_at: nextRetryAt(retryCount),
     });
   }
 
