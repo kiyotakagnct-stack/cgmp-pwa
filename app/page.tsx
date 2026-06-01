@@ -1620,18 +1620,15 @@ function WeekRecordItem({
   onOpen,
   onOpenImage,
   onToggleGoogleTaskStatus,
-  onShowBadgeInfo,
   externalProcessingKey,
 }: {
   record: CGMPRecord;
   onOpen: (id: string) => void;
   onOpenImage: (attachment: ImageAttachment, imageUrl: string) => void;
   onToggleGoogleTaskStatus: (id: string) => void;
-  onShowBadgeInfo: (info: NonNullable<BadgeInfo>) => void;
   externalProcessingKey: string;
 }) {
   const timeline = getRecordTimeline(record);
-  const para = getEffectivePara(record);
   const isTaskRegistered = Boolean(record.google_task_id && record.google_task_list_id);
   const taskProcessing = externalProcessingKey === `task-status:${record.id}`;
 
@@ -1657,6 +1654,9 @@ function WeekRecordItem({
         </span>
         <span className="shrink-0 text-lg leading-none sm:text-xl">{getActionSymbol(record)}</span>
         <span className="shrink-0 text-lg leading-none sm:text-xl">{getDomainSymbol(record.domain)}</span>
+        <h3 className="min-w-[12rem] flex-1 truncate text-base font-semibold leading-7 text-[var(--text)] sm:text-lg">
+          {record.title || "（無題）"}
+        </h3>
         {isTaskRegistered ? (
           <button
             type="button"
@@ -1676,24 +1676,8 @@ function WeekRecordItem({
         ) : null}
       </div>
 
-      <h3 className="mt-2 line-clamp-2 break-words text-base font-semibold leading-7 text-[var(--text)] sm:text-lg">
-        {record.title || "（無題）"}
-      </h3>
-
-      {record.summary ? (
-        <p className="mt-1 line-clamp-1 break-words text-sm leading-6 text-[var(--muted)] sm:text-base">
-          {record.summary}
-        </p>
-      ) : null}
-
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <Badge compact tone="slate" title="PARAの意味を表示" onClick={() => onShowBadgeInfo(getParaInfo(para))}>
-          {getParaLabel(para)}
-        </Badge>
-      </div>
-
       {(record.attachments || []).length > 0 ? (
-        <div onClick={(event) => event.stopPropagation()}>
+        <div className="mt-2" onClick={(event) => event.stopPropagation()}>
           <ImageAttachmentGrid attachments={record.attachments} compact maxItems={1} onOpen={onOpenImage} />
         </div>
       ) : null}
@@ -1820,7 +1804,6 @@ function WeeklyView({
   onOpenRecord,
   onOpenImage,
   onToggleGoogleTaskStatus,
-  onShowBadgeInfo,
   externalProcessingKey,
 }: {
   weekStart: Date;
@@ -1831,7 +1814,6 @@ function WeeklyView({
   onOpenRecord: (id: string) => void;
   onOpenImage: (attachment: ImageAttachment, imageUrl: string) => void;
   onToggleGoogleTaskStatus: (id: string) => void;
-  onShowBadgeInfo: (info: NonNullable<BadgeInfo>) => void;
   externalProcessingKey: string;
 }) {
   const [activeDay, setActiveDay] = useState(0);
@@ -1947,7 +1929,6 @@ function WeeklyView({
                       onOpen={onOpenRecord}
                       onOpenImage={onOpenImage}
                       onToggleGoogleTaskStatus={onToggleGoogleTaskStatus}
-                      onShowBadgeInfo={onShowBadgeInfo}
                       externalProcessingKey={externalProcessingKey}
                     />
                   ))
@@ -4437,7 +4418,6 @@ export default function Page() {
             }}
             onOpenImage={(attachment, imageUrl) => setLightbox({ imageUrl, title: attachment.summary_80 || "添付画像" })}
             onToggleGoogleTaskStatus={toggleGoogleTaskStatus}
-            onShowBadgeInfo={setBadgeInfo}
             externalProcessingKey={externalProcessingKey}
           />
         ) : null}
