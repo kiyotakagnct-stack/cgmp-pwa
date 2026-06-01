@@ -160,6 +160,15 @@ select {
   border-color: var(--border);
 }
 
+@media (max-width: 640px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+    line-height: 1.5;
+  }
+}
+
 input::placeholder,
 textarea::placeholder {
   color: var(--subtle);
