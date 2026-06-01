@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-import { del, list, put } from "@vercel/blob";
+import { del, get, list, put } from "@vercel/blob";
 
 import type { CGMPDeletedRecord, CGMPRecord } from "./types";
 import type { ImageAttachment } from "@/types/image";
@@ -9,6 +9,7 @@ const ROOT_PREFIX = "cgmp";
 const RECORDS_PREFIX = `${ROOT_PREFIX}/records`;
 const ATTACHMENTS_PREFIX = `${ROOT_PREFIX}/attachments`;
 const TOMBSTONES_PREFIX = `${ROOT_PREFIX}/tombstones`;
+const BLOB_ACCESS = "private" as const;
 
 type BlobRecordEntry = {
   id: string;
@@ -78,19 +79,36 @@ async function listAllBlobs(prefix: string) {
   return blobs;
 }
 
-async function fetchJson<T>(url: string): Promise<T> {
-  const response = await fetch(url, { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error(`BLOB_JSON_FETCH_FAILED_${response.status}`);
+function assertCgmpPathname(pathname: string) {
+  if (!pathname || !pathname.startsWith(`${ROOT_PREFIX}/`)) {
+    throw new Error("BLOB_PATHNAME_NOT_ALLOWED");
   }
-  return (await response.json()) as T;
+}
+
+export async function getVercelBlobFile(pathname: string) {
+  assertCgmpPathname(pathname);
+  const result = await get(pathname, {
+    access: BLOB_ACCESS,
+    token: blobReadWriteToken(),
+    useCache: false,
+  });
+  if (!result || result.statusCode !== 200 || !result.stream) {
+    throw new Error("BLOB_FILE_NOT_FOUND");
+  }
+  return result;
+}
+
+async function fetchJson<T>(pathname: string): Promise<T> {
+  const result = await getVercelBlobFile(pathname);
+  const text = await new Response(result.stream).text();
+  return JSON.parse(text) as T;
 }
 
 export async function saveRecordToVercelBlob(record: CGMPRecord) {
   const now = new Date().toISOString();
   const payload = JSON.stringify(record, null, 2);
   const blob = await put(recordPath(record.id), payload, {
-    access: "public",
+    access: BLOB_ACCESS,
     addRandomSuffix: false,
     allowOverwrite: true,
     contentType: "application/json; charset=utf-8",
@@ -110,7 +128,7 @@ export async function saveDeletedRecordToVercelBlob(tombstone: CGMPDeletedRecord
   const now = new Date().toISOString();
   const payload = JSON.stringify(tombstone, null, 2);
   const blob = await put(tombstonePath(tombstone.record_id), payload, {
-    access: "public",
+    access: BLOB_ACCESS,
     addRandomSuffix: false,
     allowOverwrite: true,
     contentType: "application/json; charset=utf-8",
@@ -138,7 +156,7 @@ export async function uploadAttachmentToVercelBlob({
   thumbnail?: Buffer | null;
 }) {
   const previewBlob = await put(attachmentPath(recordId, attachment.id, "preview"), preview, {
-    access: "public",
+    access: BLOB_ACCESS,
     addRandomSuffix: false,
     allowOverwrite: true,
     contentType: "image/jpeg",
@@ -157,7 +175,7 @@ export async function uploadAttachmentToVercelBlob({
 
   if (thumbnail && thumbnail.length > 0) {
     const uploadedThumbnail = await put(attachmentPath(recordId, attachment.id, "thumbnail"), thumbnail, {
-      access: "public",
+      access: BLOB_ACCESS,
       addRandomSuffix: false,
       allowOverwrite: true,
       contentType: "image/jpeg",
@@ -191,7 +209,7 @@ export async function listVercelBlobRecords() {
       .filter((blob) => blob.pathname.endsWith(".json"))
       .map(async (blob) => {
         try {
-          const record = await fetchJson<CGMPRecord>(blob.url);
+          const record = await fetchJson<CGMPRecord>(blob.pathname);
           return {
             id: record.id || blob.pathname,
             pathname: blob.pathname,
@@ -216,7 +234,7 @@ export async function listVercelBlobRecords() {
       .filter((blob) => blob.pathname.endsWith(".json"))
       .map(async (blob) => {
         try {
-          const tombstone = await fetchJson<CGMPDeletedRecord>(blob.url);
+          const tombstone = await fetchJson<CGMPDeletedRecord>(blob.pathname);
           return {
             id: tombstone.record_id || blob.pathname,
             pathname: blob.pathname,

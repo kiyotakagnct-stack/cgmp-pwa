@@ -45,14 +45,21 @@ async function downloadDriveImageBlob(fileId: string) {
   return response.blob();
 }
 
-async function downloadVercelBlobImage(url: string) {
-  const response = await fetch(url, { cache: "no-store" });
+async function downloadVercelBlobImage({ pathname, url }: { pathname?: string; url?: string }) {
+  const source = pathname
+    ? `/api/blob/file?pathname=${encodeURIComponent(pathname)}`
+    : url || "";
+  const response = await fetch(source, { cache: "no-store" });
   if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
     throw new ImageHydrationError({
       status: response.status,
-      fileId: url,
+      fileId: pathname || url || "",
       code: "VERCEL_BLOB_IMAGE_DOWNLOAD_FAILED",
-      detail: response.statusText || "Vercel Blob image download failed",
+      detail:
+        typeof payload?.detail === "string"
+          ? payload.detail
+          : response.statusText || "Vercel Blob image download failed",
     });
   }
   return response.blob();
@@ -70,11 +77,13 @@ export async function getOrHydrateAttachmentImageBlob({
         {
           key: attachment.thumbnailBlobKey,
           driveFileId: attachment.thumbnailDriveFileId,
+          blobPathname: attachment.thumbnailBlobPathname,
           blobUrl: attachment.thumbnailBlobUrl,
         },
         {
           key: attachment.previewBlobKey,
           driveFileId: attachment.previewDriveFileId,
+          blobPathname: attachment.previewBlobPathname,
           blobUrl: attachment.previewBlobUrl,
         },
       ]
@@ -82,6 +91,7 @@ export async function getOrHydrateAttachmentImageBlob({
         {
           key: attachment.previewBlobKey,
           driveFileId: attachment.previewDriveFileId,
+          blobPathname: attachment.previewBlobPathname,
           blobUrl: attachment.previewBlobUrl,
         },
       ];
@@ -94,11 +104,11 @@ export async function getOrHydrateAttachmentImageBlob({
     if (localBlob) {
       return { blob: localBlob, hydrated: false, key: candidate.key };
     }
-    if (!candidate.blobUrl && !candidate.driveFileId) continue;
+    if (!candidate.blobPathname && !candidate.blobUrl && !candidate.driveFileId) continue;
 
     try {
-      const remoteBlob = candidate.blobUrl
-        ? await downloadVercelBlobImage(candidate.blobUrl)
+      const remoteBlob = candidate.blobPathname || candidate.blobUrl
+        ? await downloadVercelBlobImage({ pathname: candidate.blobPathname, url: candidate.blobUrl })
         : await downloadDriveImageBlob(candidate.driveFileId || "");
       await putImageBlob(candidate.key, remoteBlob);
       return { blob: remoteBlob, hydrated: true, key: candidate.key };
@@ -108,6 +118,7 @@ export async function getOrHydrateAttachmentImageBlob({
         attachmentId: attachment.id,
         key: candidate.key,
         driveFileId: candidate.driveFileId,
+        blobPathname: candidate.blobPathname,
         blobUrl: candidate.blobUrl,
         error,
       });

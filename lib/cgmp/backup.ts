@@ -438,7 +438,9 @@ export async function processSingleRecordBackup(recordId: string) {
   }
 
   for (const attachment of record.attachments || []) {
-    if (attachment.backup_status === "backed_up" && attachment.previewBlobUrl) continue;
+    if (attachment.backup_status === "backed_up" && (attachment.previewBlobPathname || attachment.previewBlobUrl)) {
+      continue;
+    }
 
     await updateAttachmentBackupState(record.id, attachment.id, {
       backup_status: "backing_up",
@@ -606,11 +608,13 @@ function enrichRemoteRecordAttachments(record: CGMPRecord, manifest?: DriveManif
       const previewDriveFileId = attachment.previewDriveFileId || manifestEntry?.preview_file_id || "";
       const thumbnailDriveFileId = attachment.thumbnailDriveFileId || manifestEntry?.thumbnail_file_id || "";
       const backedUpAt = attachment.last_backup_at || manifestEntry?.backed_up_at || "";
+      const hasBlobFile = Boolean(attachment.previewBlobPathname || attachment.previewBlobUrl);
       return {
         ...attachment,
         previewDriveFileId,
         thumbnailDriveFileId,
-        backup_status: previewDriveFileId ? "backed_up" : attachment.backup_status || "local_only",
+        backup_status: hasBlobFile || previewDriveFileId ? "backed_up" : attachment.backup_status || "local_only",
+        blob_upload_status: hasBlobFile ? "backed_up" : attachment.blob_upload_status || attachment.backup_status,
         backup_retry_count: attachment.backup_retry_count || 0,
         backup_last_error: attachment.backup_last_error || "",
         backup_next_retry_at: attachment.backup_next_retry_at || "",
@@ -631,6 +635,18 @@ async function downloadDriveImageBlob(fileId: string) {
 }
 
 async function downloadRemoteImageBlob(attachment: ImageAttachment, variant: "preview" | "thumbnail") {
+  const pathname = variant === "thumbnail" ? attachment.thumbnailBlobPathname : attachment.previewBlobPathname;
+  if (pathname) {
+    const response = await fetch(`/api/blob/file?pathname=${encodeURIComponent(pathname)}`, { cache: "no-store" });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(
+        typeof payload?.detail === "string" ? payload.detail : `VERCEL_BLOB_IMAGE_DOWNLOAD_FAILED_${response.status}`
+      );
+    }
+    return response.blob();
+  }
+
   const url = variant === "thumbnail" ? attachment.thumbnailBlobUrl : attachment.previewBlobUrl;
   if (url) {
     const response = await fetch(url, { cache: "no-store" });
@@ -652,14 +668,17 @@ async function hydrateAttachmentBlobsForRecord(record: CGMPRecord) {
   for (const attachment of record.attachments || []) {
     try {
       const hasPreview = await getImageBlob(attachment.previewBlobKey);
-      if (!hasPreview && (attachment.previewBlobUrl || attachment.previewDriveFileId)) {
+      if (!hasPreview && (attachment.previewBlobPathname || attachment.previewBlobUrl || attachment.previewDriveFileId)) {
         const blob = await downloadRemoteImageBlob(attachment, "preview");
         if (!blob) continue;
         await putImageBlob(attachment.previewBlobKey, blob);
         hydrated += 1;
       }
 
-      if (attachment.thumbnailBlobKey && (attachment.thumbnailBlobUrl || attachment.thumbnailDriveFileId)) {
+      if (
+        attachment.thumbnailBlobKey &&
+        (attachment.thumbnailBlobPathname || attachment.thumbnailBlobUrl || attachment.thumbnailDriveFileId)
+      ) {
         const hasThumbnail = await getImageBlob(attachment.thumbnailBlobKey);
         if (!hasThumbnail) {
           const blob = await downloadRemoteImageBlob(attachment, "thumbnail");
@@ -696,6 +715,14 @@ function mergeRemoteAttachments(localRecord: CGMPRecord, remoteRecord: CGMPRecor
       ...localAttachment,
       previewDriveFileId: localAttachment.previewDriveFileId || remoteAttachment.previewDriveFileId || "",
       thumbnailDriveFileId: localAttachment.thumbnailDriveFileId || remoteAttachment.thumbnailDriveFileId || "",
+      previewBlobPathname: localAttachment.previewBlobPathname || remoteAttachment.previewBlobPathname || "",
+      previewBlobUrl: localAttachment.previewBlobUrl || remoteAttachment.previewBlobUrl || "",
+      previewBlobDownloadUrl: localAttachment.previewBlobDownloadUrl || remoteAttachment.previewBlobDownloadUrl || "",
+      thumbnailBlobPathname: localAttachment.thumbnailBlobPathname || remoteAttachment.thumbnailBlobPathname || "",
+      thumbnailBlobUrl: localAttachment.thumbnailBlobUrl || remoteAttachment.thumbnailBlobUrl || "",
+      thumbnailBlobDownloadUrl: localAttachment.thumbnailBlobDownloadUrl || remoteAttachment.thumbnailBlobDownloadUrl || "",
+      blob_uploaded_at: localAttachment.blob_uploaded_at || remoteAttachment.blob_uploaded_at || "",
+      blob_upload_status: localAttachment.blob_upload_status || remoteAttachment.blob_upload_status,
       backup_status:
         localAttachment.backup_status === "backed_up" || remoteAttachment.backup_status === "backed_up"
           ? "backed_up"
