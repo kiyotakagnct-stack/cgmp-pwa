@@ -163,7 +163,7 @@ async function backupDeletedRecord(tombstone: CGMPDeletedRecord): Promise<Backup
       title: tombstone.title || tombstone.record_id,
       itemType: "delete",
       elapsedMs: Math.round(performance.now() - startedAt),
-      error: payload.error || "BLOB_DELETE_TOMBSTONE_SAVE_FAILED",
+      error: payload.detail || payload.error || "BLOB_DELETE_TOMBSTONE_SAVE_FAILED",
     };
   }
   return {

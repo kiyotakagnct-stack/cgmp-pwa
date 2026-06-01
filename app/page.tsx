@@ -1873,7 +1873,7 @@ export default function Page() {
     if (showNotice) {
       setBackupSyncProgress({
         phase: "processing",
-        message: "Google Driveバックアップを開始しています。",
+        message: "Vercel Blob同期を開始しています。",
         startedAt,
         total: 0,
         succeeded: 0,
@@ -1919,7 +1919,7 @@ export default function Page() {
             error: item.error,
           }))
         );
-        console.debug("[cgmp:drive-backup] report", {
+        console.debug("[cgmp:blob-sync] report", {
           total: results.length,
           succeeded: results.length - failed,
           failed,
@@ -3781,7 +3781,7 @@ export default function Page() {
               const slowestItems = [...backupSyncProgress.reportItems].sort((a, b) => b.elapsedMs - a.elapsedMs).slice(0, 6);
               return (
                 <section className="w-full max-w-md rounded-[28px] border border-[color:var(--border)] bg-[var(--card)] p-5 shadow-[0_28px_90px_var(--shadow-soft)]">
-                  <div className="text-[11px] uppercase tracking-[0.34em] text-[var(--accent)]">Drive Backup</div>
+                  <div className="text-[11px] uppercase tracking-[0.34em] text-[var(--accent)]">Blob Sync</div>
                   <div className="mt-3 flex items-start justify-between gap-3">
                     <div>
                       <h2 className="text-xl font-semibold text-[var(--text)]">
@@ -3789,7 +3789,7 @@ export default function Page() {
                           ? "バックアップが完了しました"
                           : backupSyncProgress.phase === "error"
                             ? "バックアップで停止しました"
-                            : "Google Driveへ同期中"}
+                            : "Vercel Blobへ同期中"}
                       </h2>
                       <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{backupSyncProgress.message}</p>
                     </div>
@@ -3817,7 +3817,7 @@ export default function Page() {
                   </div>
                   {done ? (
                     <div className="mt-4 rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] p-3 text-xs text-[var(--muted)]">
-                      <div className="font-semibold text-[var(--text)]">Drive同期レポート</div>
+                      <div className="font-semibold text-[var(--text)]">Blob同期レポート</div>
                       <div className="mt-2 grid grid-cols-2 gap-2">
                         <span>処理: {backupSyncProgress.processElapsedMs} ms</span>
                         <span>再読込: {backupSyncProgress.reloadElapsedMs} ms</span>
@@ -3851,7 +3851,7 @@ export default function Page() {
                         </div>
                       ) : null}
                       <p className="mt-3 text-[11px] leading-5 text-[var(--subtle)]">
-                        この内容はブラウザconsoleにも出力しています。Drive同期が遅い原因の切り分けに使えます。
+                        この内容はブラウザconsoleにも出力しています。Blob同期が遅い原因の切り分けに使えます。
                       </p>
                     </div>
                   ) : null}
@@ -4382,7 +4382,7 @@ export default function Page() {
                   ) : null}
                 </div>
                 <div className={softPanelClass}>
-                  <div className="text-sm font-medium text-slate-800">Google Drive バックアップ</div>
+                  <div className="text-sm font-medium text-slate-800">Vercel Blob 同期</div>
                   <dl className="mt-3 grid grid-cols-2 gap-3 text-xs text-slate-600">
                     <div>
                       <dt className="text-slate-400">未バックアップ</dt>

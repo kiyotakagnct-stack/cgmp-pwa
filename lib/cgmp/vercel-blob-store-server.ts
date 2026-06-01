@@ -46,6 +46,14 @@ function attachmentPath(recordId: string, attachmentId: string, variant: "previe
   return `${ATTACHMENTS_PREFIX}/${sanitizePathComponent(recordId)}/${sanitizePathComponent(attachmentId)}/${variant}.jpg`;
 }
 
+function blobReadWriteToken() {
+  const token = process.env.BLOB_READ_WRITE_TOKEN?.trim();
+  if (!token) {
+    throw new Error("BLOB_READ_WRITE_TOKEN_NOT_CONFIGURED");
+  }
+  return token;
+}
+
 function checksumBuffer(buffer: Buffer) {
   return crypto.createHash("sha256").update(buffer).digest("hex");
 }
@@ -62,6 +70,7 @@ async function listAllBlobs(prefix: string) {
       prefix,
       cursor,
       limit: 1000,
+      token: blobReadWriteToken(),
     });
     blobs.push(...result.blobs);
     cursor = result.cursor;
@@ -86,6 +95,7 @@ export async function saveRecordToVercelBlob(record: CGMPRecord) {
     allowOverwrite: true,
     contentType: "application/json; charset=utf-8",
     cacheControlMaxAge: 60,
+    token: blobReadWriteToken(),
   });
 
   return {
@@ -105,6 +115,7 @@ export async function saveDeletedRecordToVercelBlob(tombstone: CGMPDeletedRecord
     allowOverwrite: true,
     contentType: "application/json; charset=utf-8",
     cacheControlMaxAge: 60,
+    token: blobReadWriteToken(),
   });
 
   return {
@@ -132,6 +143,7 @@ export async function uploadAttachmentToVercelBlob({
     allowOverwrite: true,
     contentType: "image/jpeg",
     cacheControlMaxAge: 60 * 60 * 24 * 365,
+    token: blobReadWriteToken(),
   });
 
   let thumbnailBlob:
@@ -150,6 +162,7 @@ export async function uploadAttachmentToVercelBlob({
       allowOverwrite: true,
       contentType: "image/jpeg",
       cacheControlMaxAge: 60 * 60 * 24 * 365,
+      token: blobReadWriteToken(),
     });
     thumbnailBlob = uploadedThumbnail;
     checksum = checksumBuffer(Buffer.concat([preview, thumbnail]));
@@ -231,6 +244,6 @@ export async function deleteVercelBlobRecordFiles(recordId: string) {
   const attachmentBlobs = await listAllBlobs(prefix);
   const targets = [recordPath(recordId), ...attachmentBlobs.map((blob) => blob.pathname)];
   if (targets.length > 0) {
-    await del(targets);
+    await del(targets, { token: blobReadWriteToken() });
   }
 }
