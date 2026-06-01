@@ -161,7 +161,7 @@ export function ImageAttachmentCard({
           <img src={imageUrl} alt={attachment.summary_80 || "添付画像"} className="max-h-72 w-full object-contain" />
         ) : imageState === "failed" ? (
           <span className="flex h-36 w-full items-center justify-center px-4 text-center text-sm text-rose-500">
-            Driveから画像を取得できませんでした
+            画像正本から取得できませんでした
           </span>
         ) : imageState === "missing" ? (
           <span className="flex h-36 w-full items-center justify-center px-4 text-center text-sm text-slate-400">
@@ -169,7 +169,7 @@ export function ImageAttachmentCard({
           </span>
         ) : (
           <span className="flex h-36 w-full items-center justify-center text-sm text-slate-400">
-            {imageState === "hydrating" ? "Driveから画像を復元中..." : "画像を読み込み中..."}
+            {imageState === "hydrating" ? "画像正本から復元中..." : "画像を読み込み中..."}
           </span>
         )}
       </button>

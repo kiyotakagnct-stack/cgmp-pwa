@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 
-import { backupRecordToDrive, listBackedUpRecordDetails } from "./drive-backup-server";
 import { createGoogleCalendarEventFromRecord, createGoogleTaskFromRecord } from "./google-external-server";
 import type { CGMPAnalysisResponse, CGMPRecord } from "./types";
 import { buildRecordFromAnalysis } from "./utils";
+import { listVercelBlobRecords, saveRecordToVercelBlob } from "./vercel-blob-store-server";
 
 export type ShortcutWebhookRequest = {
   text?: string;
@@ -117,7 +117,7 @@ async function analyzeTextViaExistingApi({
 
 async function findExistingShortcutRecord(recordId: string) {
   try {
-    const details = await listBackedUpRecordDetails();
+    const details = await listVercelBlobRecords();
     const item = details.records.find((record) => record.id === recordId);
     const record = item?.record as Partial<CGMPRecord> | undefined;
     return record?.id ? (record as CGMPRecord) : null;
@@ -232,7 +232,7 @@ export async function createRecordFromShortcutWebhook({
       external_target: record.action === "calendar" ? "calendar" : record.action === "reminder" ? "reminder" : "",
       external_error: error instanceof Error ? error.message : "EXTERNAL_REGISTER_FAILED",
     };
-    await backupRecordToDrive(record);
+    await saveRecordToVercelBlob(record);
     console.error("[cgmp:shortcut-webhook] external register failed", {
       clientRequestId,
       recordId: record.id,
@@ -254,15 +254,15 @@ export async function createRecordFromShortcutWebhook({
     };
   }
 
-  const backup = await backupRecordToDrive(record);
+  const backup = await saveRecordToVercelBlob(record);
   record = {
     ...record,
-    drive_file_id: backup.driveFileId,
+    drive_file_id: backup.blobPathname,
     backup_checksum: backup.checksum,
     last_backup_at: backup.backedUpAt,
     backup_status: "backed_up",
   };
-  await backupRecordToDrive(record);
+  await saveRecordToVercelBlob(record);
 
   console.info("[cgmp:shortcut-webhook] succeeded", {
     source,

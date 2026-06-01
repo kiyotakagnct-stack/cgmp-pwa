@@ -47,6 +47,15 @@ export type ImageAttachment = {
   backup_next_retry_at?: string;
   previewDriveFileId?: string;
   thumbnailDriveFileId?: string;
+  previewBlobPathname?: string;
+  previewBlobUrl?: string;
+  previewBlobDownloadUrl?: string;
+  thumbnailBlobPathname?: string;
+  thumbnailBlobUrl?: string;
+  thumbnailBlobDownloadUrl?: string;
+  blob_uploaded_at?: string;
+  blob_upload_status?: ImageBackupStatus;
+  blob_upload_error?: string;
   last_backup_at?: string;
   backup_checksum?: string;
   error?: string;

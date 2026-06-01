@@ -45,6 +45,19 @@ async function downloadDriveImageBlob(fileId: string) {
   return response.blob();
 }
 
+async function downloadVercelBlobImage(url: string) {
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) {
+    throw new ImageHydrationError({
+      status: response.status,
+      fileId: url,
+      code: "VERCEL_BLOB_IMAGE_DOWNLOAD_FAILED",
+      detail: response.statusText || "Vercel Blob image download failed",
+    });
+  }
+  return response.blob();
+}
+
 export async function getOrHydrateAttachmentImageBlob({
   attachment,
   compact = false,
@@ -57,16 +70,19 @@ export async function getOrHydrateAttachmentImageBlob({
         {
           key: attachment.thumbnailBlobKey,
           driveFileId: attachment.thumbnailDriveFileId,
+          blobUrl: attachment.thumbnailBlobUrl,
         },
         {
           key: attachment.previewBlobKey,
           driveFileId: attachment.previewDriveFileId,
+          blobUrl: attachment.previewBlobUrl,
         },
       ]
     : [
         {
           key: attachment.previewBlobKey,
           driveFileId: attachment.previewDriveFileId,
+          blobUrl: attachment.previewBlobUrl,
         },
       ];
 
@@ -78,18 +94,21 @@ export async function getOrHydrateAttachmentImageBlob({
     if (localBlob) {
       return { blob: localBlob, hydrated: false, key: candidate.key };
     }
-    if (!candidate.driveFileId) continue;
+    if (!candidate.blobUrl && !candidate.driveFileId) continue;
 
     try {
-      const driveBlob = await downloadDriveImageBlob(candidate.driveFileId);
-      await putImageBlob(candidate.key, driveBlob);
-      return { blob: driveBlob, hydrated: true, key: candidate.key };
+      const remoteBlob = candidate.blobUrl
+        ? await downloadVercelBlobImage(candidate.blobUrl)
+        : await downloadDriveImageBlob(candidate.driveFileId || "");
+      await putImageBlob(candidate.key, remoteBlob);
+      return { blob: remoteBlob, hydrated: true, key: candidate.key };
     } catch (error) {
       lastError = error;
       console.debug("[cgmp:image] drive image hydration candidate failed", {
         attachmentId: attachment.id,
         key: candidate.key,
         driveFileId: candidate.driveFileId,
+        blobUrl: candidate.blobUrl,
         error,
       });
     }

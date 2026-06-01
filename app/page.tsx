@@ -79,17 +79,19 @@ type AiProcessingOverlayState = {
 };
 type DriveBackupRecordPreview = {
   id: string;
-  title: string;
-  summary: string;
-  action: string;
-  domain: string;
-  para: string;
-  updated_at: string;
-  backed_up_at: string;
-  checksum: string;
-  file_id: string;
+  title?: string;
+  summary?: string;
+  action?: string;
+  domain?: string;
+  para?: string;
+  updated_at?: string;
+  backed_up_at?: string;
+  checksum?: string;
+  file_id?: string;
+  pathname?: string;
+  uploaded_at?: string;
   record?: Partial<CGMPRecord>;
-  error?: boolean;
+  error?: boolean | string;
 };
 type GoogleTaskPayload = {
   ok?: boolean;
@@ -2570,7 +2572,7 @@ export default function Page() {
   async function loadDriveBackupList() {
     setDriveBackupLoading(true);
     try {
-      const response = await fetch("/api/backup/restore");
+      const response = await fetch("/api/blob/restore");
       const payload = (await response.json().catch(() => ({}))) as {
         ok?: boolean;
         records?: DriveBackupRecordPreview[];
@@ -2579,9 +2581,24 @@ export default function Page() {
       if (!response.ok || !payload.ok) {
         throw new Error(payload.error || "バックアップ一覧の取得に失敗しました");
       }
-      setDriveBackupRecords(Array.isArray(payload.records) ? payload.records : []);
+      const previews = (Array.isArray(payload.records) ? payload.records : []).map((item) => {
+        const record = item.record || {};
+        return {
+          ...item,
+          title: item.title || record.title || item.id,
+          summary: item.summary || record.summary || "",
+          action: item.action || record.action || "note",
+          domain: item.domain || record.domain || "other",
+          para: item.para || record.para || "",
+          updated_at: item.updated_at || record.updated_at || "",
+          backed_up_at: item.backed_up_at || item.uploaded_at || "",
+          file_id: item.file_id || item.pathname || "",
+          checksum: item.checksum || "",
+        };
+      });
+      setDriveBackupRecords(previews);
       setDriveBackupCheckedAt(new Date().toISOString());
-      setNotice({ kind: "info", text: "Drive上のバックアップ一覧を取得しました。" });
+      setNotice({ kind: "info", text: "Blob上の正本一覧を取得しました。" });
     } catch (error) {
       setNotice({
         kind: "error",
@@ -2603,15 +2620,15 @@ export default function Page() {
           kind: "info",
           text:
             result.imported.length > 0 || result.merged.length > 0 || result.deleted.length > 0 || result.hydratedAttachments > 0
-              ? `Drive同期: メモ追加${result.imported.length}件 / 削除反映${result.deleted.length}件 / 写真メタ更新${result.merged.length}件 / 画像復元${result.hydratedAttachments}件`
-              : "Driveから追加する未取り込みメモはありません。",
+              ? `Blob同期: メモ追加${result.imported.length}件 / 削除反映${result.deleted.length}件 / 写真メタ更新${result.merged.length}件 / 画像復元${result.hydratedAttachments}件`
+              : "Blobから追加する未取り込みメモはありません。",
         });
       }
     } catch (error) {
       if (showNotice) {
         setNotice({
           kind: "error",
-          text: error instanceof Error ? error.message : "Driveからの取り込みに失敗しました",
+          text: error instanceof Error ? error.message : "Blobからの取り込みに失敗しました",
         });
       }
     } finally {
@@ -4404,7 +4421,7 @@ export default function Page() {
                       全件を再同期
                     </button>
                     <button type="button" onClick={loadDriveBackupList} disabled={driveBackupLoading} className={secondaryButtonClass}>
-                      {driveBackupLoading ? "確認中..." : "Drive上の一覧を確認"}
+                      {driveBackupLoading ? "確認中..." : "Blob上の一覧を確認"}
                     </button>
                     <button type="button" onClick={() => importMissingFromDrive(true)} disabled={driveImporting} className={secondaryButtonClass}>
                       {driveImporting ? "取り込み中..." : "未取り込みを追加"}
@@ -4421,7 +4438,7 @@ export default function Page() {
                   <div className={softPanelClass}>
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
-                        <div className="text-sm font-medium text-slate-800">Drive上に実在するバックアップ</div>
+                        <div className="text-sm font-medium text-slate-800">Blob上に実在する正本</div>
                         <p className="mt-1 text-xs text-slate-400">
                           {driveBackupCheckedAt ? `${formatJstDateTime(driveBackupCheckedAt)} に確認` : ""}
                         </p>
@@ -4432,7 +4449,7 @@ export default function Page() {
                       {driveBackupRecords.length > 0 ? (
                         driveBackupRecords.map((backup) => (
                           <div
-                            key={`${backup.id}:${backup.file_id}`}
+                            key={`${backup.id}:${backup.file_id || backup.pathname || ""}`}
                             className={`rounded-2xl border p-3 ${
                               backup.error ? "border-rose-200 bg-rose-50" : "border-slate-200 bg-white"
                             }`}
@@ -4451,12 +4468,12 @@ export default function Page() {
                               <span>backup: {backup.backed_up_at ? formatJstDateTime(backup.backed_up_at) : "不明"}</span>
                               <span>record: {backup.id}</span>
                               <span>file: {backup.file_id}</span>
-                              <span>checksum: {backup.checksum.slice(0, 16)}...</span>
+                              <span>checksum: {backup.checksum ? `${backup.checksum.slice(0, 16)}...` : "不明"}</span>
                             </div>
                           </div>
                         ))
                       ) : (
-                        <p className="text-sm text-slate-500">Drive上のバックアップはまだありません。</p>
+                        <p className="text-sm text-slate-500">Blob上の正本はまだありません。</p>
                       )}
                     </div>
                   </div>

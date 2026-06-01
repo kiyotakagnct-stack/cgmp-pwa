@@ -92,6 +92,7 @@ export async function createImageAttachmentFromFile(
     confidence: fallback.confidence,
     analysis_status: "pending",
     backup_status: "pending_backup",
+    blob_upload_status: "pending_backup",
     backup_retry_count: 0,
     backup_last_error: "",
     backup_next_retry_at: "",

@@ -24,6 +24,14 @@ type BackupProcessItemResult = {
   driveFileId?: string;
   previewDriveFileId?: string;
   thumbnailDriveFileId?: string;
+  blobPathname?: string;
+  blobUrl?: string;
+  previewBlobPathname?: string;
+  previewBlobUrl?: string;
+  previewBlobDownloadUrl?: string;
+  thumbnailBlobPathname?: string;
+  thumbnailBlobUrl?: string;
+  thumbnailBlobDownloadUrl?: string;
   checksum?: string;
   backedUpAt?: string;
   elapsedMs?: number;
@@ -38,6 +46,7 @@ type BackupProcessResponse = {
   ok: boolean;
   results?: BackupProcessItemResult[];
   error?: string;
+  detail?: string;
 };
 
 type DriveBackupRecord = {
@@ -47,6 +56,9 @@ type DriveBackupRecord = {
   backed_up_at: string;
   checksum: string;
   file_id: string;
+  pathname?: string;
+  url?: string;
+  uploaded_at?: string;
   record?: Partial<CGMPRecord>;
   error?: boolean;
 };
@@ -69,6 +81,7 @@ type DriveManifest = {
 type RestoreResponse = {
   ok?: boolean;
   records?: DriveBackupRecord[];
+  tombstones?: Array<{ id: string; tombstone?: CGMPDeletedRecord; error?: string }>;
   manifest?: DriveManifest;
   error?: string;
 };
@@ -76,7 +89,10 @@ type RestoreResponse = {
 type TombstoneBackupResponse = {
   ok?: boolean;
   backedUpAt?: string;
+  blobPathname?: string;
+  blobUrl?: string;
   error?: string;
+  detail?: string;
 };
 
 function nextRetryAt(retryCount: number) {
@@ -102,7 +118,7 @@ function backupItemPriority(item: { item_type: "record" | "attachment"; created_
 
 async function backupRecord(record: CGMPRecord): Promise<BackupProcessItemResult> {
   const startedAt = performance.now();
-  const response = await fetch("/api/backup/record", {
+  const response = await fetch("/api/blob/record", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ record }),
@@ -115,7 +131,7 @@ async function backupRecord(record: CGMPRecord): Promise<BackupProcessItemResult
       title: record.title || record.summary || record.raw_input || record.id,
       itemType: "record",
       elapsedMs: Math.round(performance.now() - startedAt),
-      error: payload.error || "BACKUP_REQUEST_FAILED",
+      error: payload.detail || payload.error || "BLOB_RECORD_SAVE_FAILED",
     };
   }
   return {
@@ -123,7 +139,9 @@ async function backupRecord(record: CGMPRecord): Promise<BackupProcessItemResult
     recordId: record.id,
     title: record.title || record.summary || record.raw_input || record.id,
     itemType: "record",
-    driveFileId: payload.driveFileId,
+    driveFileId: payload.blobPathname || payload.driveFileId,
+    blobPathname: payload.blobPathname,
+    blobUrl: payload.blobUrl,
     checksum: payload.checksum,
     backedUpAt: payload.backedUpAt,
     elapsedMs: Math.round(performance.now() - startedAt),
@@ -132,7 +150,7 @@ async function backupRecord(record: CGMPRecord): Promise<BackupProcessItemResult
 
 async function backupDeletedRecord(tombstone: CGMPDeletedRecord): Promise<BackupProcessItemResult> {
   const startedAt = performance.now();
-  const response = await fetch("/api/backup/delete", {
+  const response = await fetch("/api/blob/delete", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ tombstone }),
@@ -145,7 +163,7 @@ async function backupDeletedRecord(tombstone: CGMPDeletedRecord): Promise<Backup
       title: tombstone.title || tombstone.record_id,
       itemType: "delete",
       elapsedMs: Math.round(performance.now() - startedAt),
-      error: payload.error || "DELETE_TOMBSTONE_BACKUP_FAILED",
+      error: payload.error || "BLOB_DELETE_TOMBSTONE_SAVE_FAILED",
     };
   }
   return {
@@ -186,7 +204,7 @@ export async function backupAttachment(record: CGMPRecord, attachment: ImageAtta
   }
 
   const uploadStartedAt = performance.now();
-  const response = await fetch("/api/backup/attachment", {
+  const response = await fetch("/api/blob/attachment", {
     method: "POST",
     body: formData,
   });
@@ -214,10 +232,16 @@ export async function backupAttachment(record: CGMPRecord, attachment: ImageAtta
     ok: true,
     recordId: record.id,
     title: record.title || record.summary || record.raw_input || record.id,
-    itemType: "attachment",
-    attachmentId: attachment.id,
-    previewDriveFileId: payload.previewDriveFileId,
-    thumbnailDriveFileId: payload.thumbnailDriveFileId,
+      itemType: "attachment",
+      attachmentId: attachment.id,
+      previewDriveFileId: payload.previewBlobPathname || payload.previewDriveFileId,
+      thumbnailDriveFileId: payload.thumbnailBlobPathname || payload.thumbnailDriveFileId,
+      previewBlobPathname: payload.previewBlobPathname,
+      previewBlobUrl: payload.previewBlobUrl,
+      previewBlobDownloadUrl: payload.previewBlobDownloadUrl,
+      thumbnailBlobPathname: payload.thumbnailBlobPathname,
+      thumbnailBlobUrl: payload.thumbnailBlobUrl,
+      thumbnailBlobDownloadUrl: payload.thumbnailBlobDownloadUrl,
     checksum: payload.checksum,
     backedUpAt: payload.backedUpAt,
     elapsedMs: Math.round(performance.now() - startedAt),
@@ -315,11 +339,20 @@ export async function processBackupQueue() {
       if (result.ok) {
         await updateAttachmentBackupState(record.id, attachment.id, {
           backup_status: "backed_up",
+          blob_upload_status: "backed_up",
           backup_retry_count: 0,
           backup_last_error: "",
           backup_next_retry_at: "",
           previewDriveFileId: result.previewDriveFileId || attachment.previewDriveFileId || "",
           thumbnailDriveFileId: result.thumbnailDriveFileId || attachment.thumbnailDriveFileId || "",
+          previewBlobPathname: result.previewBlobPathname || attachment.previewBlobPathname || "",
+          previewBlobUrl: result.previewBlobUrl || attachment.previewBlobUrl || "",
+          previewBlobDownloadUrl: result.previewBlobDownloadUrl || attachment.previewBlobDownloadUrl || "",
+          thumbnailBlobPathname: result.thumbnailBlobPathname || attachment.thumbnailBlobPathname || "",
+          thumbnailBlobUrl: result.thumbnailBlobUrl || attachment.thumbnailBlobUrl || "",
+          thumbnailBlobDownloadUrl: result.thumbnailBlobDownloadUrl || attachment.thumbnailBlobDownloadUrl || "",
+          blob_uploaded_at: result.backedUpAt || new Date().toISOString(),
+          blob_upload_error: "",
           last_backup_at: result.backedUpAt || new Date().toISOString(),
           backup_checksum: result.checksum || attachment.backup_checksum || "",
         });
@@ -332,9 +365,11 @@ export async function processBackupQueue() {
       const retryAt = nextRetryAt(retryCount);
       await updateAttachmentBackupState(record.id, attachment.id, {
         backup_status: "backup_failed",
+        blob_upload_status: "backup_failed",
         backup_retry_count: retryCount,
         backup_last_error: result.error || "ATTACHMENT_BACKUP_FAILED",
         backup_next_retry_at: retryAt,
+        blob_upload_error: result.error || "ATTACHMENT_BACKUP_FAILED",
       });
       await updateBackupQueueItem({
         ...item,
@@ -452,7 +487,7 @@ export async function backupDeleteTombstoneNow(tombstone: CGMPDeletedRecord) {
 }
 
 export async function restoreFromDrive() {
-  const response = await fetch("/api/backup/restore");
+  const response = await fetch("/api/blob/restore");
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(typeof payload?.error === "string" ? payload.error : "RESTORE_FAILED");
@@ -497,6 +532,21 @@ async function downloadDriveImageBlob(fileId: string) {
   return response.blob();
 }
 
+async function downloadRemoteImageBlob(attachment: ImageAttachment, variant: "preview" | "thumbnail") {
+  const url = variant === "thumbnail" ? attachment.thumbnailBlobUrl : attachment.previewBlobUrl;
+  if (url) {
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`VERCEL_BLOB_IMAGE_DOWNLOAD_FAILED_${response.status}`);
+    }
+    return response.blob();
+  }
+
+  const driveFileId = variant === "thumbnail" ? attachment.thumbnailDriveFileId : attachment.previewDriveFileId;
+  if (driveFileId) return downloadDriveImageBlob(driveFileId);
+  return null;
+}
+
 async function hydrateAttachmentBlobsForRecord(record: CGMPRecord) {
   let hydrated = 0;
   const failed: { attachmentId: string; error: string }[] = [];
@@ -504,16 +554,18 @@ async function hydrateAttachmentBlobsForRecord(record: CGMPRecord) {
   for (const attachment of record.attachments || []) {
     try {
       const hasPreview = await getImageBlob(attachment.previewBlobKey);
-      if (!hasPreview && attachment.previewDriveFileId) {
-        const blob = await downloadDriveImageBlob(attachment.previewDriveFileId);
+      if (!hasPreview && (attachment.previewBlobUrl || attachment.previewDriveFileId)) {
+        const blob = await downloadRemoteImageBlob(attachment, "preview");
+        if (!blob) continue;
         await putImageBlob(attachment.previewBlobKey, blob);
         hydrated += 1;
       }
 
-      if (attachment.thumbnailBlobKey && attachment.thumbnailDriveFileId) {
+      if (attachment.thumbnailBlobKey && (attachment.thumbnailBlobUrl || attachment.thumbnailDriveFileId)) {
         const hasThumbnail = await getImageBlob(attachment.thumbnailBlobKey);
         if (!hasThumbnail) {
-          const blob = await downloadDriveImageBlob(attachment.thumbnailDriveFileId);
+          const blob = await downloadRemoteImageBlob(attachment, "thumbnail");
+          if (!blob) continue;
           await putImageBlob(attachment.thumbnailBlobKey, blob);
           hydrated += 1;
         }
@@ -585,7 +637,7 @@ export async function importMissingRecordsFromDrive() {
   const [localRecords, localTombstones, response] = await Promise.all([
     loadAllRecords(),
     loadDeletedRecords(),
-    fetch("/api/backup/restore"),
+    fetch("/api/blob/restore"),
   ]);
   const payload = (await response.json().catch(() => ({}))) as RestoreResponse;
   if (!response.ok || !payload.ok) {
@@ -594,7 +646,12 @@ export async function importMissingRecordsFromDrive() {
 
   const localIds = new Set(localRecords.map((record) => record.id));
   const localById = new Map(localRecords.map((record) => [record.id, record]));
-  const deletedRecords = payload.manifest?.deleted_records || {};
+  const deletedRecords = Object.fromEntries(
+    (payload.tombstones || [])
+      .map((item) => item.tombstone)
+      .filter((item): item is CGMPDeletedRecord => Boolean(item?.record_id))
+      .map((item) => [item.record_id, item])
+  );
   const localDeletedById = new Map(localTombstones.map((tombstone) => [tombstone.record_id, tombstone]));
   const imported: CGMPRecord[] = [];
   const merged: CGMPRecord[] = [];
@@ -627,8 +684,8 @@ export async function importMissingRecordsFromDrive() {
       backup_retry_count: 0,
       backup_last_error: "",
       backup_next_retry_at: "",
-      drive_file_id: item.file_id,
-      last_backup_at: item.backed_up_at,
+      drive_file_id: item.pathname || item.file_id,
+      last_backup_at: item.uploaded_at || item.backed_up_at,
       backup_checksum: item.checksum,
     }, payload.manifest);
 
