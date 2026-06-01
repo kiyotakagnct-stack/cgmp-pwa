@@ -675,6 +675,18 @@ const DOMAIN_SYMBOLS: Record<Exclude<CGMPDomain, "">, string> = {
   other: "📌",
 };
 
+const DOMAIN_FILTER_OPTIONS: Array<{ value: Exclude<CGMPDomain, "">; label: string }> = [
+  { value: "work", label: "work" },
+  { value: "family", label: "fam" },
+  { value: "self", label: "self" },
+  { value: "health", label: "hlth" },
+  { value: "finance", label: "fin" },
+  { value: "learning", label: "learn" },
+  { value: "creation", label: "make" },
+  { value: "life_admin", label: "admin" },
+  { value: "other", label: "other" },
+];
+
 const WEEKDAY_LABELS = ["日曜日", "月曜日", "火曜日", "水曜日", "木曜日", "金曜日", "土曜日"];
 const WEEKDAY_MINI_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -4286,6 +4298,39 @@ export default function Page() {
                     {semanticStatusText}
                   </span>
                 ) : null}
+              </div>
+
+              <div className="mt-3 min-w-0">
+                <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                  <span className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.22em] text-[var(--subtle)]">
+                    Domain
+                  </span>
+                  {DOMAIN_FILTER_OPTIONS.map((item) => {
+                    const isActive = domainFilter === item.value;
+                    const color = getDomainColorVar(item.value);
+                    return (
+                      <button
+                        key={item.value}
+                        type="button"
+                        onClick={() => setDomainFilter(isActive ? "all" : item.value)}
+                        className={`shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-semibold leading-5 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] ${
+                          isActive ? "shadow-[0_8px_18px_var(--shadow-soft)]" : "opacity-70 hover:opacity-100"
+                        }`}
+                        style={{
+                          color,
+                          borderColor: color,
+                          backgroundColor: isActive
+                            ? `color-mix(in srgb, ${color} 18%, var(--card))`
+                            : `color-mix(in srgb, ${color} 7%, var(--card))`,
+                        }}
+                        aria-pressed={isActive}
+                        title={`${item.value}で絞り込み${isActive ? "を解除" : ""}`}
+                      >
+                        {item.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               <div
