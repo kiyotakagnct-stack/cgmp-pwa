@@ -1144,8 +1144,10 @@ function RecordCard({
           ) : null}
           {isCalendarRegistered ? <Badge compact tone="amber">GCal</Badge> : null}
           {record.external_action_status === "failed" ? <Badge compact tone="rose">外部失敗</Badge> : null}
-          <span className="min-w-0 text-[11px] text-[var(--subtle)]">{formatJstDateTime(record.updated_at)}</span>
-          <div className="ml-auto flex max-w-full basis-full shrink-0 items-center justify-end gap-1.5 sm:basis-auto">
+          <span className="min-w-0 max-w-full truncate text-[11px] text-[var(--subtle)]">
+            {formatJstDateTime(record.updated_at)}
+          </span>
+          <div className="flex w-full max-w-full shrink-0 items-center justify-end gap-1.5 sm:ml-auto sm:w-auto">
             <button
               type="button"
               disabled={isBackupProcessing}
@@ -4675,7 +4677,7 @@ export default function Page() {
         ) : null}
       </div>
 
-      <div className="fixed bottom-24 right-5 z-50 flex flex-col items-end gap-3 sm:right-6">
+      <div className="fixed bottom-[calc(6rem+env(safe-area-inset-bottom))] right-[max(1rem,env(safe-area-inset-right))] z-50 flex flex-col items-end gap-3 sm:right-[max(1.5rem,env(safe-area-inset-right))]">
         <button
           type="button"
           onClick={() => {
@@ -4850,7 +4852,7 @@ export default function Page() {
       ) : null}
 
       {checkedCount > 0 ? (
-        <div className="fixed inset-x-0 bottom-24 z-50 flex justify-center px-4">
+        <div className="fixed inset-x-0 bottom-[calc(6rem+env(safe-area-inset-bottom))] z-50 flex justify-center px-4">
           <div className="flex max-w-[calc(100vw-2rem)] flex-wrap items-center justify-center gap-2 rounded-[24px] border border-[color:var(--border)] bg-[var(--card)] px-3 py-3 shadow-[0_18px_55px_var(--shadow-soft)] backdrop-blur-xl">
             <span className="px-2 text-sm font-semibold text-[var(--text)]">{checkedCount}件選択中</span>
             <button type="button" onClick={toggleAllFilteredRecords} className={secondaryButtonClass}>
@@ -4876,7 +4878,7 @@ export default function Page() {
 
       <AiProcessingOverlay state={aiProcessingOverlay} elapsedMs={aiProcessingElapsedMs} />
 
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-[color:var(--border)] bg-[var(--card)] px-4 py-3 backdrop-blur-xl">
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-[color:var(--border)] bg-[var(--card)] px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 backdrop-blur-xl">
         <div className="mx-auto grid max-w-3xl grid-cols-4 gap-2">
           {[
             { key: "home", label: "Home" },
