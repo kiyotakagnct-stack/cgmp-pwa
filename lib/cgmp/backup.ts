@@ -437,9 +437,10 @@ export async function backupAttachment(record: CGMPRecord, attachment: ImageAtta
 
 export async function processBackupQueue() {
   const [records, queue, tombstones] = await Promise.all([loadAllRecords(), loadBackupQueue(), loadDeletedRecords()]);
-  const recordIds = new Set(records.map((record) => record.id));
+  const backupableRecords = records.filter((record) => record.ai_status !== "pending_ai");
+  const recordIds = new Set(backupableRecords.map((record) => record.id));
   const queuedIds = new Set(queue.map((item) => item.id));
-  const syntheticAttachmentItems = records.flatMap((record) =>
+  const syntheticAttachmentItems = backupableRecords.flatMap((record) =>
     (record.attachments || [])
       .filter((attachment) => attachment.backup_status !== "backed_up")
       .filter((attachment) => isRetryDue(attachment.backup_next_retry_at || ""))
@@ -510,6 +511,22 @@ export async function processSingleRecordBackup(recordId: string, options: { res
         itemType: "record" as const,
         elapsedMs: 0,
         error: "RECORD_NOT_FOUND",
+      },
+    ];
+  }
+  if (record.ai_status === "pending_ai") {
+    await removeBackupQueueItem(record.id);
+    for (const attachment of record.attachments || []) {
+      await removeBackupQueueItem(`attachment:${record.id}:${attachment.id}`);
+    }
+    return [
+      {
+        ok: true,
+        recordId,
+        title: record.title || record.summary || record.raw_input || record.id,
+        itemType: "record" as const,
+        skipped: true,
+        elapsedMs: 0,
       },
     ];
   }
@@ -646,12 +663,14 @@ export async function processSingleRecordBackup(recordId: string, options: { res
 
 export async function enqueueAllRecordsForBackup() {
   const records = await loadAllRecords();
-  await Promise.all(records.map((record) => enqueueBackup(record.id)));
-  return records.length;
+  const backupableRecords = records.filter((record) => record.ai_status !== "pending_ai");
+  await Promise.all(backupableRecords.map((record) => enqueueBackup(record.id)));
+  return backupableRecords.length;
 }
 
 export async function getBackupStatus(): Promise<CGMPBackupSummary> {
-  const [records, queue] = await Promise.all([loadAllRecords(), loadBackupQueue()]);
+  const [allRecords, queue] = await Promise.all([loadAllRecords(), loadBackupQueue()]);
+  const records = allRecords.filter((record) => record.ai_status !== "pending_ai");
   const summary: CGMPBackupSummary = {
     localOnly: 0,
     pending: 0,

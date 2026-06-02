@@ -42,6 +42,7 @@ import {
 import { importScriptableCgmpZip, type ScriptableImportResult } from "@/lib/cgmp/scriptable-import";
 import type {
   CGMPAction,
+  CGMPAnalysis,
   CGMPAnalysisResponse,
   CGMPBackupSummary,
   CGMPDeletedRecord,
@@ -331,6 +332,7 @@ function formToRecord(
     aiStatus?: CGMPRecord["ai_status"];
     aiError?: string;
     aiMeta?: { model: string; generated_at: string } | null;
+    backupStatus?: CGMPRecord["backup_status"];
   }
 ): CGMPRecord {
   const stamp = new Date().toISOString();
@@ -376,7 +378,7 @@ function formToRecord(
     google_calendar_event_id: existing?.google_calendar_event_id ?? "",
     google_calendar_id: existing?.google_calendar_id ?? "",
     google_calendar_updated_at: existing?.google_calendar_updated_at ?? "",
-    backup_status: existing?.backup_status ?? "pending_backup",
+    backup_status: options.backupStatus ?? existing?.backup_status ?? "pending_backup",
     backup_retry_count: existing?.backup_retry_count ?? 0,
     backup_last_error: existing?.backup_last_error ?? "",
     backup_next_retry_at: existing?.backup_next_retry_at ?? "",
@@ -439,6 +441,33 @@ function getMiniListText(record: CGMPRecord) {
   ]
     .map((value) => String(value || "").toLowerCase())
     .join("\n");
+}
+
+function applyAnalysisToDraft(draft: RecordFormState, rawInput: string, analysis: CGMPAnalysis): RecordFormState {
+  return {
+    ...draft,
+    raw_input: rawInput,
+    title: analysis.title || makePreviewTitle(rawInput),
+    summary: analysis.summary || analysis.user_intent_summary || "",
+    body: analysis.body || rawInput,
+    tagsText: (analysis.tags || []).join(" "),
+    action: normalizeAction(analysis.action),
+    para: normalizePara(analysis.para),
+    domain: normalizeDomain(analysis.domain),
+    date: analysis.date || "",
+    time: analysis.time || "",
+    all_day: Boolean(analysis.all_day),
+    duration_minutes: Number(analysis.duration_minutes || 60),
+    location: analysis.location || "",
+    confirmation: analysis.confirmation || "",
+    note_tags: analysis.note_tags || "",
+    note_index_line: analysis.note_index_line || "",
+    user_intent_summary: analysis.user_intent_summary || analysis.summary || "",
+  };
+}
+
+function getDraftRecordTitle(rawInput: string) {
+  return makePreviewTitle(rawInput) || "下書き";
 }
 
 function getDateSortValue(record: CGMPRecord) {
@@ -1250,6 +1279,7 @@ function RecordCard({
   onDeleteAttachment,
   onAddPhotos,
   onSyncOne,
+  onAnalyzeDraft,
   onShowBadgeInfo,
   externalProcessingKey = "",
   isPhotoProcessing = false,
@@ -1270,6 +1300,7 @@ function RecordCard({
   onDeleteAttachment: (recordId: string, attachmentId: string) => void;
   onAddPhotos: (recordId: string, files: File[]) => void;
   onSyncOne: (recordId: string) => void;
+  onAnalyzeDraft: (recordId: string) => void;
   onShowBadgeInfo: (info: NonNullable<BadgeInfo>) => void;
   externalProcessingKey?: string;
   isPhotoProcessing?: boolean;
@@ -1286,6 +1317,8 @@ function RecordCard({
   const photoBackupBadge = getPhotoBackupBadge(record);
   const taskProcessing = externalProcessingKey === `task:${record.id}` || externalProcessingKey === `task-status:${record.id}`;
   const calendarProcessing = externalProcessingKey === `calendar:${record.id}`;
+  const draftProcessing = externalProcessingKey === `draft-ai:${record.id}`;
+  const isDraft = record.ai_status === "pending_ai";
   const isTaskRegistered = Boolean(record.google_task_id && record.google_task_list_id);
   const isCalendarRegistered = Boolean(record.google_calendar_event_id);
 
@@ -1341,79 +1374,102 @@ function RecordCard({
           >
             ✓
           </span>
-          <Badge
-            compact
-            tone={record.action === "calendar" ? "amber" : record.action === "reminder" ? "rose" : record.action === "unclear" ? "slate" : "cyan"}
-            title="Actionの意味を表示"
-            onClick={() => onShowBadgeInfo(getActionInfo(record.action))}
-          >
-            {getActionLabel(record.action)}
-          </Badge>
-          <DomainBadge compact domain={record.domain || "other"} onClick={() => onShowBadgeInfo(getDomainInfo(record.domain || "other"))} />
-          <Badge compact tone="slate" title="PARAの意味を表示" onClick={() => onShowBadgeInfo(getParaInfo(para))}>
-            {getParaLabel(para)}
-          </Badge>
-          <Badge compact tone={getBackupTone(record)} title="同期状態の意味を表示" onClick={() => onShowBadgeInfo(getBackupInfo(record))}>
-            {getBackupLabel(record)}
-          </Badge>
-          {photoBackupBadge ? (
+          {isDraft ? (
+            <Badge compact tone="amber">下書き</Badge>
+          ) : (
+            <>
+              <Badge
+                compact
+                tone={record.action === "calendar" ? "amber" : record.action === "reminder" ? "rose" : record.action === "unclear" ? "slate" : "cyan"}
+                title="Actionの意味を表示"
+                onClick={() => onShowBadgeInfo(getActionInfo(record.action))}
+              >
+                {getActionLabel(record.action)}
+              </Badge>
+              <DomainBadge compact domain={record.domain || "other"} onClick={() => onShowBadgeInfo(getDomainInfo(record.domain || "other"))} />
+              <Badge compact tone="slate" title="PARAの意味を表示" onClick={() => onShowBadgeInfo(getParaInfo(para))}>
+                {getParaLabel(para)}
+              </Badge>
+              <Badge compact tone={getBackupTone(record)} title="同期状態の意味を表示" onClick={() => onShowBadgeInfo(getBackupInfo(record))}>
+                {getBackupLabel(record)}
+              </Badge>
+            </>
+          )}
+          {!isDraft && photoBackupBadge ? (
             <Badge compact tone={photoBackupBadge.tone} title="写真同期状態の意味を表示" onClick={() => onShowBadgeInfo(getPhotoBackupInfo(record))}>
               {photoBackupBadge.label}
             </Badge>
           ) : null}
-          {isTaskRegistered ? (
+          {!isDraft && isTaskRegistered ? (
             <Badge compact tone={record.google_task_status === "completed" ? "emerald" : "amber"} title="Google Tasks状態の意味を表示" onClick={() => onShowBadgeInfo(getTaskInfo(record))}>
               {record.google_task_status === "completed" ? "Task完" : "Task未"}
             </Badge>
           ) : null}
-          {isCalendarRegistered ? (
+          {!isDraft && isCalendarRegistered ? (
             <Badge compact tone="amber" title="Google Calendar状態の意味を表示" onClick={() => onShowBadgeInfo(getCalendarInfo())}>
               GCal
             </Badge>
           ) : null}
-          {record.external_action_status === "failed" ? <Badge compact tone="rose">外部失敗</Badge> : null}
+          {!isDraft && record.external_action_status === "failed" ? <Badge compact tone="rose">外部失敗</Badge> : null}
           <span className="min-w-0 max-w-full truncate text-[11px] text-[var(--subtle)]">
-            {formatJstDateTime(record.updated_at)}
+            {isDraft ? `created ${formatJstDateTime(record.created_at)}` : formatJstDateTime(record.updated_at)}
           </span>
           <div className="flex w-full max-w-full shrink-0 items-center justify-end gap-1.5 sm:ml-auto sm:w-auto">
-            <button
-              type="button"
-              disabled={isBackupProcessing}
-              onClick={(event) => {
-                event.stopPropagation();
-                onSyncOne(record.id);
-              }}
-              onKeyDown={(event) => event.stopPropagation()}
-              className="whitespace-nowrap rounded-full border border-[color:var(--border)] bg-[var(--card)] px-2.5 py-1 text-[11px] font-semibold text-[var(--text)] shadow-[0_6px_16px_var(--shadow-soft)] transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              同期
-            </button>
-            <input
-              ref={photoInputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              className="hidden"
-              onClick={(event) => event.stopPropagation()}
-              onChange={(event) => {
-                event.stopPropagation();
-                const files = Array.from(event.target.files || []);
-                event.target.value = "";
-                handlePhotoFiles(files);
-              }}
-            />
-            <button
-              type="button"
-              disabled={isPhotoProcessing}
-              onClick={(event) => {
-                event.stopPropagation();
-                photoInputRef.current?.click();
-              }}
-              onKeyDown={(event) => event.stopPropagation()}
-              className="whitespace-nowrap rounded-full border border-[color:var(--accent)] bg-[var(--card)] px-2.5 py-1 text-[11px] font-semibold text-[var(--accent)] shadow-[0_6px_16px_var(--shadow-soft)] transition hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              ＋写真
-            </button>
+            {isDraft ? (
+              <button
+                type="button"
+                disabled={draftProcessing}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onAnalyzeDraft(record.id);
+                }}
+                onKeyDown={(event) => event.stopPropagation()}
+                className="whitespace-nowrap rounded-full border border-[color:var(--accent)] bg-[var(--accent)] px-3 py-1 text-[11px] font-semibold text-[var(--accent-contrast)] shadow-[0_6px_16px_var(--shadow-soft)] transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {draftProcessing ? "解析中..." : "AI解析"}
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  disabled={isBackupProcessing}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onSyncOne(record.id);
+                  }}
+                  onKeyDown={(event) => event.stopPropagation()}
+                  className="whitespace-nowrap rounded-full border border-[color:var(--border)] bg-[var(--card)] px-2.5 py-1 text-[11px] font-semibold text-[var(--text)] shadow-[0_6px_16px_var(--shadow-soft)] transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  同期
+                </button>
+                <input
+                  ref={photoInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onClick={(event) => event.stopPropagation()}
+                  onChange={(event) => {
+                    event.stopPropagation();
+                    const files = Array.from(event.target.files || []);
+                    event.target.value = "";
+                    handlePhotoFiles(files);
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={isPhotoProcessing}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    photoInputRef.current?.click();
+                  }}
+                  onKeyDown={(event) => event.stopPropagation()}
+                  className="whitespace-nowrap rounded-full border border-[color:var(--accent)] bg-[var(--card)] px-2.5 py-1 text-[11px] font-semibold text-[var(--accent)] shadow-[0_6px_16px_var(--shadow-soft)] transition hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  ＋写真
+                </button>
+              </>
+            )}
           </div>
         </div>
 
@@ -1431,10 +1487,16 @@ function RecordCard({
         </div>
 
         <div className="mt-4 flex flex-wrap gap-2 text-xs text-[var(--subtle)]">
-          <span>{record.date || "未設定日付"}</span>
-          <span>{record.time || "未設定時刻"}</span>
-          <span>{record.external_action_status}</span>
-          {record.last_backup_at ? <span>backup {formatJstDateTime(record.last_backup_at)}</span> : null}
+          {isDraft ? (
+            <span>created {formatJstDateTime(record.created_at)}</span>
+          ) : (
+            <>
+              <span>{record.date || "未設定日付"}</span>
+              <span>{record.time || "未設定時刻"}</span>
+              <span>{record.external_action_status}</span>
+              {record.last_backup_at ? <span>backup {formatJstDateTime(record.last_backup_at)}</span> : null}
+            </>
+          )}
         </div>
 
         <ImageAttachmentGrid attachments={record.attachments} compact maxItems={3} onOpen={onOpenImage} />
@@ -1450,7 +1512,21 @@ function RecordCard({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="text-[11px] uppercase tracking-[0.28em] text-[var(--accent)]">Detail</div>
               <div className="flex flex-wrap gap-2">
-                {record.action === "reminder" ? (
+                {isDraft ? (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onAnalyzeDraft(record.id);
+                    }}
+                    onKeyDown={(event) => event.stopPropagation()}
+                    className="rounded-xl border border-[color:var(--accent)] bg-[var(--accent)] px-3 py-1.5 text-xs font-semibold text-[var(--accent-contrast)] transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={draftProcessing}
+                  >
+                    {draftProcessing ? "解析中..." : "AI解析"}
+                  </button>
+                ) : null}
+                {!isDraft && record.action === "reminder" ? (
                   isTaskRegistered ? (
                     <button
                       type="button"
@@ -1479,7 +1555,7 @@ function RecordCard({
                     </button>
                   )
                 ) : null}
-                {record.action === "calendar" ? (
+                {!isDraft && record.action === "calendar" ? (
                   <button
                     type="button"
                     onClick={(event) => {
@@ -1493,30 +1569,34 @@ function RecordCard({
                     {calendarProcessing ? "登録中..." : isCalendarRegistered ? "Cal登録済" : "Calendar登録"}
                   </button>
                 ) : null}
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onSyncOne(record.id);
-                  }}
-                  onKeyDown={(event) => event.stopPropagation()}
-                  className="rounded-xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--text)] transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={isBackupProcessing}
-                >
-                  1件同期
-                </button>
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    photoInputRef.current?.click();
-                  }}
-                  onKeyDown={(event) => event.stopPropagation()}
-                  className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-700 transition hover:border-orange-300 hover:bg-orange-100 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={isPhotoProcessing}
-                >
-                  写真追加
-                </button>
+                {!isDraft ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onSyncOne(record.id);
+                      }}
+                      onKeyDown={(event) => event.stopPropagation()}
+                      className="rounded-xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--text)] transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={isBackupProcessing}
+                    >
+                      1件同期
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        photoInputRef.current?.click();
+                      }}
+                      onKeyDown={(event) => event.stopPropagation()}
+                      className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-700 transition hover:border-orange-300 hover:bg-orange-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={isPhotoProcessing}
+                    >
+                      写真追加
+                    </button>
+                  </>
+                ) : null}
                 <button
                   type="button"
                   onClick={(event) => {
@@ -3646,6 +3726,99 @@ export default function Page() {
     }));
   }
 
+  async function requestTextAnalysis(rawInput: string) {
+    const controller = new AbortController();
+    const timeoutMs = 45000;
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          text: rawInput,
+          input_at: new Date().toISOString(),
+          model: settingsDraft?.openai_model || "gpt-4.1-nano",
+        }),
+      });
+
+      const payload = (await response.json().catch(() => ({}))) as Partial<CGMPAnalysisResponse> & { detail?: string };
+      if (!response.ok || !payload.ok || !payload.result) {
+        throw new Error(payload.error || payload.detail || "AI解析に失敗しました");
+      }
+
+      return payload as CGMPAnalysisResponse;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw new Error(`AI解析がタイムアウトしました（${timeoutMs / 1000}秒）`);
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  }
+
+  async function saveComposeDraft(reason = "") {
+    const rawInput = composeDraft.raw_input.trim();
+    if (!rawInput) {
+      setNotice({ kind: "error", text: "下書きにする入力テキストがありません。" });
+      return null;
+    }
+
+    const stamp = new Date().toISOString();
+    const draftForm = {
+      ...blankForm(rawInput),
+      title: getDraftRecordTitle(rawInput),
+      summary: rawInput.slice(0, 120),
+      body: rawInput,
+    };
+    const draftRecord: CGMPRecord = {
+      ...formToRecord(draftForm, {
+        aiStatus: "pending_ai",
+        aiError: reason,
+        aiMeta: null,
+        backupStatus: "local_only",
+      }),
+      created_at: stamp,
+      updated_at: stamp,
+      date: "",
+      time: "",
+      all_day: false,
+      external_action_status: "none",
+      external_target: "",
+      external_registered_at: "",
+      external_error: "",
+      google_task_id: "",
+      google_task_list_id: "",
+      google_task_status: "",
+      google_task_updated_at: "",
+      google_calendar_event_id: "",
+      google_calendar_id: "",
+      google_calendar_updated_at: "",
+      backup_status: "local_only",
+      backup_retry_count: 0,
+      backup_last_error: "",
+      backup_next_retry_at: "",
+      drive_file_id: "",
+      last_backup_at: "",
+      backup_checksum: "",
+      attachments: [],
+    };
+
+    const saved = await putRecordWithoutBackup(draftRecord);
+    await Promise.all([reloadRecords(saved.id), reloadBackupSummary()]);
+    setComposeDraft(blankForm(""));
+    setComposeAiStatus("none");
+    setComposeAiError("");
+    setComposeAiMeta(null);
+    setTab("home");
+    setNotice({
+      kind: "info",
+      text: reason ? "AI解析に失敗したため、下書きとして保存しました。" : "下書きとして保存しました。",
+    });
+    return saved;
+  }
+
   async function handleAnalyze() {
     const rawInput = composeDraft.raw_input.trim();
     if (!rawInput) {
@@ -3657,42 +3830,9 @@ export default function Page() {
     setComposeAiError("");
     const processingId = beginAiProcessing("text", "テキストAI解析中");
     try {
-      const response = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text: rawInput,
-          input_at: new Date().toISOString(),
-          model: settingsDraft?.openai_model || "gpt-4.1-nano",
-        }),
-      });
-
-      const payload = (await response.json()) as CGMPAnalysisResponse & { detail?: string };
-      if (!response.ok || !payload.ok) {
-        throw new Error(payload.error || payload.detail || "AI解析に失敗しました");
-      }
-
+      const payload = await requestTextAnalysis(rawInput);
       const analysis = payload.result;
-      setComposeDraft((prev) => ({
-        ...prev,
-        raw_input: rawInput,
-        title: analysis.title || makePreviewTitle(rawInput),
-        summary: analysis.summary || analysis.user_intent_summary || "",
-        body: analysis.body || rawInput,
-        tagsText: (analysis.tags || []).join(" "),
-        action: normalizeAction(analysis.action),
-        para: normalizePara(analysis.para),
-        domain: normalizeDomain(analysis.domain),
-        date: analysis.date || "",
-        time: analysis.time || "",
-        all_day: Boolean(analysis.all_day),
-        duration_minutes: Number(analysis.duration_minutes || 60),
-        location: analysis.location || "",
-        confirmation: analysis.confirmation || "",
-        note_tags: analysis.note_tags || "",
-        note_index_line: analysis.note_index_line || "",
-        user_intent_summary: analysis.user_intent_summary || analysis.summary || "",
-      }));
+      setComposeDraft((prev) => applyAnalysisToDraft(prev, rawInput, analysis));
       setComposeAiStatus("done");
       setComposeAiMeta({ model: payload.model || settingsDraft?.openai_model || "gpt-4.1-nano", generated_at: payload.generated_at });
       setNotice({ kind: "info", text: "AI解析が完了しました。" });
@@ -3704,9 +3844,84 @@ export default function Page() {
       const message = error instanceof Error ? error.message : "AI解析に失敗しました";
       setComposeAiError(message);
       setNotice({ kind: "error", text: message });
+      try {
+        await saveComposeDraft(message);
+      } catch (draftError) {
+        setNotice({
+          kind: "error",
+          text: `AI解析に失敗し、下書き保存にも失敗しました: ${
+            draftError instanceof Error ? draftError.message : String(draftError)
+          }`,
+        });
+      }
     } finally {
       finishAiProcessing(processingId);
       setComposeLoading(false);
+    }
+  }
+
+  async function analyzeDraftRecord(recordId: string) {
+    if (externalProcessingKey) return;
+    const latestRecords = await loadAllRecords();
+    const draftRecord = latestRecords.find((record) => record.id === recordId);
+    if (!draftRecord) {
+      setNotice({ kind: "error", text: "下書きが見つかりません。" });
+      return;
+    }
+    const rawInput = draftRecord.raw_input.trim();
+    if (!rawInput) {
+      setNotice({ kind: "error", text: "下書きのRaw inputが空です。" });
+      return;
+    }
+
+    setExternalProcessingKey(`draft-ai:${recordId}`);
+    const processingId = beginAiProcessing("text", "下書きAI解析中");
+    try {
+      const payload = await requestTextAnalysis(rawInput);
+      const analyzedForm = applyAnalysisToDraft(formFromRecord(draftRecord), rawInput, payload.result);
+      const nextRecord = formToRecord(analyzedForm, {
+        existing: draftRecord,
+        aiStatus: "done",
+        aiError: "",
+        aiMeta: {
+          model: payload.model || settingsDraft?.openai_model || "gpt-4.1-nano",
+          generated_at: payload.generated_at || new Date().toISOString(),
+        },
+        backupStatus: "pending_backup",
+      });
+      const savedRecord = await upsertRecord({
+        ...nextRecord,
+        backup_retry_count: 0,
+        backup_last_error: "",
+        backup_next_retry_at: "",
+      });
+      await Promise.all([reloadRecords(savedRecord.id), reloadBackupSummary()]);
+      setNotice({ kind: "info", text: "下書きをAI解析して通常メモにしました。" });
+      if (savedRecord.action === "reminder") {
+        setExternalConfirm({ recordId: savedRecord.id, action: "reminder", title: savedRecord.title || "（無題）" });
+      } else if (savedRecord.action === "calendar") {
+        setExternalConfirm({ recordId: savedRecord.id, action: "calendar", title: savedRecord.title || "（無題）" });
+      }
+      window.setTimeout(() => {
+        void runBackupQueue(false);
+      }, 0);
+      window.setTimeout(() => {
+        void suggestRelatedRecords(savedRecord);
+      }, 0);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "下書きのAI解析に失敗しました";
+      const failedDraft = await putRecordWithoutBackup({
+        ...draftRecord,
+        ai_status: "pending_ai",
+        ai_error: message,
+        backup_status: "local_only",
+        updated_at: draftRecord.updated_at,
+      });
+      setRecords((current) => current.map((record) => (record.id === failedDraft.id ? failedDraft : record)));
+      setNotice({ kind: "error", text: `下書きのAI解析に失敗しました: ${message}` });
+    } finally {
+      finishAiProcessing(processingId);
+      setExternalProcessingKey("");
     }
   }
 
@@ -4431,6 +4646,7 @@ export default function Page() {
                     onDeleteAttachment={handleDeleteAttachment}
                     onAddPhotos={handleAddPhotos}
                     onSyncOne={runSingleRecordBackup}
+                    onAnalyzeDraft={analyzeDraftRecord}
                     onShowBadgeInfo={setBadgeInfo}
                     externalProcessingKey={externalProcessingKey}
                     isPhotoProcessing={photoProcessingCount > 0}
@@ -4491,6 +4707,9 @@ export default function Page() {
                   </button>
                   <button type="button" onClick={() => saveCompose(true)} className={secondaryButtonClass}>
                     AIなしで保存
+                  </button>
+                  <button type="button" onClick={() => void saveComposeDraft()} className={secondaryButtonClass}>
+                    下書きとして保存
                   </button>
                   <button
                     type="button"
