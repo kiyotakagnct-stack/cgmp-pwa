@@ -1709,13 +1709,17 @@ function MiniRecordCard({
 
 function WeekRecordItem({
   record,
-  onOpen,
+  isExpanded,
+  onToggleExpanded,
+  onOpenHome,
   onOpenImage,
   onToggleGoogleTaskStatus,
   externalProcessingKey,
 }: {
   record: CGMPRecord;
-  onOpen: (id: string) => void;
+  isExpanded: boolean;
+  onToggleExpanded: (id: string) => void;
+  onOpenHome: (id: string) => void;
   onOpenImage: (attachment: ImageAttachment, imageUrl: string) => void;
   onToggleGoogleTaskStatus: (id: string) => void;
   externalProcessingKey: string;
@@ -1723,19 +1727,26 @@ function WeekRecordItem({
   const timeline = getRecordTimeline(record);
   const isTaskRegistered = Boolean(record.google_task_id && record.google_task_list_id);
   const taskProcessing = externalProcessingKey === `task-status:${record.id}`;
+  const detailBody = record.body || record.raw_input || "";
+  const detailIntent = record.user_intent_summary || record.confirmation || "";
 
   return (
     <div
       id={`week-item-${record.id}`}
       role="button"
       tabIndex={0}
-      onClick={() => onOpen(record.id)}
+      onClick={() => onToggleExpanded(record.id)}
       onKeyDown={(event) => {
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
-        onOpen(record.id);
+        onToggleExpanded(record.id);
       }}
-      className="group w-full max-w-full cursor-pointer overflow-hidden rounded-[22px] border border-[color:var(--border)] bg-[var(--card)] p-3 text-left transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] sm:rounded-[24px] sm:p-4"
+      className={`group w-full max-w-full cursor-pointer overflow-hidden rounded-[22px] border bg-[var(--card)] p-3 text-left transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] sm:rounded-[24px] sm:p-4 ${
+        isExpanded
+          ? "border-[color:var(--accent)] shadow-[0_12px_34px_var(--shadow-soft)]"
+          : "border-[color:var(--border)]"
+      }`}
+      aria-expanded={isExpanded}
     >
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <span className="shrink-0 font-mono text-base font-semibold leading-6 text-[var(--text)] sm:text-lg">
@@ -1768,11 +1779,65 @@ function WeekRecordItem({
         ) : null}
       </div>
 
-      {(record.attachments || []).length > 0 ? (
+      {!isExpanded && (record.attachments || []).length > 0 ? (
         <div className="mt-2" onClick={(event) => event.stopPropagation()}>
           <ImageAttachmentGrid attachments={record.attachments} compact maxItems={1} onOpen={onOpenImage} />
         </div>
       ) : null}
+
+      <div
+        className={`overflow-hidden transition-[max-height,opacity,margin-top] duration-300 ease-out ${
+          isExpanded ? "mt-3 max-h-[42rem] opacity-100" : "mt-0 max-h-0 opacity-0"
+        }`}
+      >
+        <div className="space-y-3 rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-3 text-sm leading-6 text-[var(--text)]">
+          <section>
+            <div className="text-[10px] uppercase tracking-[0.24em] text-[var(--subtle)]">Summary</div>
+            <p className="mt-1 whitespace-pre-wrap break-words">{record.summary || "（要約なし）"}</p>
+          </section>
+          {detailIntent ? (
+            <section>
+              <div className="text-[10px] uppercase tracking-[0.24em] text-[var(--subtle)]">Intent</div>
+              <p className="mt-1 whitespace-pre-wrap break-words">{detailIntent}</p>
+            </section>
+          ) : null}
+          {detailBody ? (
+            <section>
+              <div className="text-[10px] uppercase tracking-[0.24em] text-[var(--subtle)]">
+                {record.body ? "Body" : "Raw input"}
+              </div>
+              <pre className="mt-1 m-0 max-h-48 overflow-auto whitespace-pre-wrap break-words font-sans">{detailBody}</pre>
+            </section>
+          ) : null}
+          <section className="flex flex-wrap gap-2 text-xs text-[var(--muted)]">
+            <span>created {formatJstDateTime(record.created_at)}</span>
+            <span>updated {formatJstDateTime(record.updated_at)}</span>
+            {record.date ? <span>date {record.date}</span> : null}
+            {record.time ? <span>time {record.time}</span> : null}
+          </section>
+          {(record.attachments || []).length > 0 ? (
+            <section onClick={(event) => event.stopPropagation()}>
+              <div className="text-[10px] uppercase tracking-[0.24em] text-[var(--subtle)]">Images</div>
+              <div className="mt-2">
+                <ImageAttachmentGrid attachments={record.attachments} compact maxItems={3} onOpen={onOpenImage} />
+              </div>
+            </section>
+          ) : null}
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onOpenHome(record.id);
+              }}
+              onKeyDown={(event) => event.stopPropagation()}
+              className="rounded-full border border-[color:var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs font-semibold text-[var(--text)] transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)]"
+            >
+              Homeで開く
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1909,6 +1974,7 @@ function WeeklyView({
   externalProcessingKey: string;
 }) {
   const [activeDay, setActiveDay] = useState(0);
+  const [expandedRecordId, setExpandedRecordId] = useState<string | null>(null);
   const todayKey = dateKeyFromDate(new Date());
   const days = useMemo(
     () =>
@@ -1956,6 +2022,10 @@ function WeeklyView({
     sections.forEach((section) => observer.observe(section));
     return () => observer.disconnect();
   }, [days]);
+
+  useEffect(() => {
+    setExpandedRecordId(null);
+  }, [weekStart]);
 
   return (
     <div className="grid max-w-full gap-3 overflow-hidden sm:gap-4">
@@ -2018,7 +2088,11 @@ function WeeklyView({
                     <WeekRecordItem
                       key={record.id}
                       record={record}
-                      onOpen={onOpenRecord}
+                      isExpanded={expandedRecordId === record.id}
+                      onToggleExpanded={(id) => {
+                        setExpandedRecordId((current) => (current === id ? null : id));
+                      }}
+                      onOpenHome={onOpenRecord}
                       onOpenImage={onOpenImage}
                       onToggleGoogleTaskStatus={onToggleGoogleTaskStatus}
                       externalProcessingKey={externalProcessingKey}
@@ -3322,7 +3396,7 @@ export default function Page() {
 
   useEffect(() => {
     if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(null), 3500);
+    const timer = window.setTimeout(() => setNotice(null), notice.kind === "error" ? 9000 : 3500);
     return () => window.clearTimeout(timer);
   }, [notice]);
 
@@ -4158,14 +4232,35 @@ export default function Page() {
     <main className="min-h-screen w-full overflow-x-hidden bg-[var(--bg)] bg-[image:var(--app-bg)] text-[var(--text)]">
       <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col overflow-x-hidden px-2 py-3 pb-28 sm:px-5 lg:px-7">
         {notice ? (
-          <div
-            className={`mb-4 rounded-2xl border px-4 py-3 text-sm ${
-              notice.kind === "info"
-                ? "border-[color:var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
-                : "border-[color:var(--danger)] bg-[var(--danger-soft)] text-[var(--danger)]"
-            }`}
-          >
-            {notice.text}
+          <div className="pointer-events-none fixed inset-x-0 top-[max(0.75rem,env(safe-area-inset-top))] z-[110] flex justify-center px-3 sm:justify-end sm:px-5">
+            <div
+              className={`pointer-events-auto flex max-w-[min(34rem,calc(100vw-1.5rem))] items-start gap-3 rounded-2xl border px-4 py-3 text-sm shadow-[0_18px_50px_var(--shadow-soft)] backdrop-blur-xl ${
+                notice.kind === "info"
+                  ? "border-[color:var(--accent)] bg-[color-mix(in_srgb,var(--card)_88%,var(--accent-soft))] text-[var(--text)]"
+                  : "border-[color:var(--danger)] bg-[color-mix(in_srgb,var(--card)_86%,var(--danger-soft))] text-[var(--text)]"
+              }`}
+              role={notice.kind === "error" ? "alert" : "status"}
+            >
+              <span
+                className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+                  notice.kind === "info"
+                    ? "bg-[var(--accent-soft)] text-[var(--accent)]"
+                    : "bg-[var(--danger-soft)] text-[var(--danger)]"
+                }`}
+                aria-hidden="true"
+              >
+                {notice.kind === "info" ? "✓" : "!"}
+              </span>
+              <p className="min-w-0 flex-1 leading-6">{notice.text}</p>
+              <button
+                type="button"
+                onClick={() => setNotice(null)}
+                className="rounded-full px-1.5 text-base leading-5 text-[var(--muted)] transition hover:bg-[var(--card-soft)] hover:text-[var(--text)]"
+                aria-label="通知を閉じる"
+              >
+                ×
+              </button>
+            </div>
           </div>
         ) : null}
 
