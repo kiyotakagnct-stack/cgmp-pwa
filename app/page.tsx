@@ -650,9 +650,9 @@ function getBackupInfo(record: CGMPRecord): NonNullable<BadgeInfo> {
   return {
     title: "Sync",
     label: getBackupLabel(record),
-    description: "このメモ本文・メタデータのBlob同期状態です。画像の同期状態は別バッジで表示します。",
+    description: "このメモ本文・メタデータのGoogle Drive同期状態です。画像の同期状態は別バッジで表示します。",
     examples: [
-      "同期済: Blob側にも保存済み",
+      "同期済: Google Drive側にも保存済み",
       "未同期: まだアップロード待ち",
       "失敗: 次回再同期または手動同期が必要",
     ],
@@ -664,7 +664,7 @@ function getPhotoBackupInfo(record: CGMPRecord): NonNullable<BadgeInfo> {
   return {
     title: "Photo Sync",
     label: badge?.label || "写真なし",
-    description: "添付画像のBlob同期状態です。メモ本文とは別に、画像Blob本体のアップロード状況を管理しています。",
+    description: "添付画像のGoogle Drive同期状態です。メモ本文とは別に、画像本体のアップロード状況を管理しています。",
     examples: ["写済: 画像同期済み", "写未: 未同期画像あり", "写失敗: 画像アップロードに失敗"],
   };
 }
@@ -2274,7 +2274,7 @@ export default function Page() {
     if (showNotice) {
       setBackupSyncProgress({
         phase: "processing",
-        message: "Vercel Blob同期を開始しています。",
+        message: "Google Drive同期を開始しています。",
         startedAt,
         total: 0,
         succeeded: 0,
@@ -2310,7 +2310,7 @@ export default function Page() {
             error: item.error,
           }))
         );
-        console.debug("[cgmp:blob-sync] report", {
+        console.debug("[cgmp:drive-sync] report", {
           total: results.length,
           succeeded: results.length - failed,
           failed,
@@ -2415,7 +2415,7 @@ export default function Page() {
     const startedAt = performance.now();
     setBackupSyncProgress({
       phase: "processing",
-      message: `「${title}」だけをVercel Blobへ同期しています。`,
+      message: `「${title}」だけをGoogle Driveへ同期しています。`,
       startedAt,
       total: 1,
       succeeded: 0,
@@ -2449,7 +2449,7 @@ export default function Page() {
           error: item.error,
         }))
       );
-      console.debug("[cgmp:blob-sync:single] report", {
+      console.debug("[cgmp:drive-sync:single] report", {
         recordId,
         title,
         total: results.length,
@@ -3102,7 +3102,7 @@ export default function Page() {
   async function loadDriveBackupList() {
     setDriveBackupLoading(true);
     try {
-      const response = await fetch("/api/blob/restore");
+      const response = await fetch("/api/backup/restore");
       const payload = (await response.json().catch(() => ({}))) as {
         ok?: boolean;
         records?: DriveBackupRecordPreview[];
@@ -3128,7 +3128,7 @@ export default function Page() {
       });
       setDriveBackupRecords(previews);
       setDriveBackupCheckedAt(new Date().toISOString());
-      setNotice({ kind: "info", text: "Blob上の正本一覧を取得しました。" });
+      setNotice({ kind: "info", text: "Google Drive上の正本一覧を取得しました。" });
     } catch (error) {
       setNotice({
         kind: "error",
@@ -3150,15 +3150,15 @@ export default function Page() {
           kind: "info",
           text:
             result.imported.length > 0 || result.merged.length > 0 || result.deleted.length > 0 || result.hydratedAttachments > 0
-              ? `Blob同期: メモ追加${result.imported.length}件 / 削除反映${result.deleted.length}件 / 写真メタ更新${result.merged.length}件 / 画像復元${result.hydratedAttachments}件`
-              : "Blobから追加する未取り込みメモはありません。",
+              ? `Drive同期: メモ追加${result.imported.length}件 / 削除反映${result.deleted.length}件 / 写真メタ更新${result.merged.length}件 / 画像復元${result.hydratedAttachments}件`
+              : "Driveから追加する未取り込みメモはありません。",
         });
       }
     } catch (error) {
       if (showNotice) {
         setNotice({
           kind: "error",
-          text: error instanceof Error ? error.message : "Blobからの取り込みに失敗しました",
+          text: error instanceof Error ? error.message : "Driveからの取り込みに失敗しました",
         });
       }
     } finally {
@@ -4470,7 +4470,7 @@ export default function Page() {
                   : [...backupSyncProgress.reportItems].sort((a, b) => b.elapsedMs - a.elapsedMs).slice(0, 20);
               return (
                 <section className="w-full max-w-md rounded-[28px] border border-[color:var(--border)] bg-[var(--card)] p-5 shadow-[0_28px_90px_var(--shadow-soft)]">
-                  <div className="text-[11px] uppercase tracking-[0.34em] text-[var(--accent)]">Blob Sync</div>
+                  <div className="text-[11px] uppercase tracking-[0.34em] text-[var(--accent)]">Drive Backup</div>
                   <div className="mt-3 flex items-start justify-between gap-3">
                     <div>
                       <h2 className="text-xl font-semibold text-[var(--text)]">
@@ -4478,7 +4478,7 @@ export default function Page() {
                           ? "バックアップが完了しました"
                           : backupSyncProgress.phase === "error"
                             ? "バックアップで停止しました"
-                            : "Vercel Blobへ同期中"}
+                            : "Google Driveへ同期中"}
                       </h2>
                       <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{backupSyncProgress.message}</p>
                     </div>
@@ -4506,7 +4506,7 @@ export default function Page() {
                   </div>
                   {done ? (
                     <div className="mt-4 rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] p-3 text-xs text-[var(--muted)]">
-                      <div className="font-semibold text-[var(--text)]">Blob同期レポート</div>
+                      <div className="font-semibold text-[var(--text)]">Drive同期レポート</div>
                       <div className="mt-2 grid grid-cols-2 gap-2">
                         <span>処理: {backupSyncProgress.processElapsedMs} ms</span>
                         <span>再読込: {backupSyncProgress.reloadElapsedMs} ms</span>
@@ -4533,7 +4533,7 @@ export default function Page() {
                                   <span>{item.itemType}</span>
                                   {item.attachmentId ? <span>attachment {item.attachmentId}</span> : null}
                                   <span>total {item.elapsedMs}ms</span>
-                                  {item.blobElapsedMs > 0 ? <span>Blob {item.blobElapsedMs}ms</span> : null}
+                                  {item.blobElapsedMs > 0 ? <span>画像読込 {item.blobElapsedMs}ms</span> : null}
                                   {item.uploadElapsedMs > 0 ? <span>Upload {item.uploadElapsedMs}ms</span> : null}
                                   {item.previewSizeBytes > 0 ? <span>{Math.round(item.previewSizeBytes / 1024)}KB</span> : null}
                                 </div>
@@ -4544,7 +4544,7 @@ export default function Page() {
                         </div>
                       ) : null}
                       <p className="mt-3 text-[11px] leading-5 text-[var(--subtle)]">
-                        この内容はブラウザconsoleにも出力しています。Blob同期が遅い原因の切り分けに使えます。
+                        この内容はブラウザconsoleにも出力しています。Drive同期が遅い原因の切り分けに使えます。
                       </p>
                     </div>
                   ) : null}
@@ -5115,7 +5115,7 @@ export default function Page() {
                   ) : null}
                 </div>
                 <div className={softPanelClass}>
-                  <div className="text-sm font-medium text-slate-800">Vercel Blob 同期</div>
+                  <div className="text-sm font-medium text-slate-800">Google Drive 同期</div>
                   <dl className="mt-3 grid grid-cols-2 gap-3 text-xs text-slate-600">
                     <div>
                       <dt className="text-slate-400">未バックアップ</dt>
@@ -5154,7 +5154,7 @@ export default function Page() {
                       全件を再同期
                     </button>
                     <button type="button" onClick={loadDriveBackupList} disabled={driveBackupLoading} className={secondaryButtonClass}>
-                      {driveBackupLoading ? "確認中..." : "Blob上の一覧を確認"}
+                      {driveBackupLoading ? "確認中..." : "Drive上の一覧を確認"}
                     </button>
                     <button type="button" onClick={() => importMissingFromDrive(true)} disabled={driveImporting} className={secondaryButtonClass}>
                       {driveImporting ? "取り込み中..." : "未取り込みを追加"}
@@ -5171,7 +5171,7 @@ export default function Page() {
                   <div className={softPanelClass}>
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
-                        <div className="text-sm font-medium text-slate-800">Blob上に実在する正本</div>
+                        <div className="text-sm font-medium text-slate-800">Drive上に実在する正本</div>
                         <p className="mt-1 text-xs text-slate-400">
                           {driveBackupCheckedAt ? `${formatJstDateTime(driveBackupCheckedAt)} に確認` : ""}
                         </p>
@@ -5206,7 +5206,7 @@ export default function Page() {
                           </div>
                         ))
                       ) : (
-                        <p className="text-sm text-slate-500">Blob上の正本はまだありません。</p>
+                        <p className="text-sm text-slate-500">Drive上の正本はまだありません。</p>
                       )}
                     </div>
                   </div>

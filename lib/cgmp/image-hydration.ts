@@ -107,9 +107,9 @@ export async function getOrHydrateAttachmentImageBlob({
     if (!candidate.blobPathname && !candidate.blobUrl && !candidate.driveFileId) continue;
 
     try {
-      const remoteBlob = candidate.blobPathname || candidate.blobUrl
-        ? await downloadVercelBlobImage({ pathname: candidate.blobPathname, url: candidate.blobUrl })
-        : await downloadDriveImageBlob(candidate.driveFileId || "");
+      const remoteBlob = candidate.driveFileId
+        ? await downloadDriveImageBlob(candidate.driveFileId)
+        : await downloadVercelBlobImage({ pathname: candidate.blobPathname, url: candidate.blobUrl });
       await putImageBlob(candidate.key, remoteBlob);
       return { blob: remoteBlob, hydrated: true, key: candidate.key };
     } catch (error) {

@@ -296,8 +296,8 @@ function checksumBuffer(value: Buffer) {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 
-async function upsertJsonFile(name: string, content: string) {
-  const existing = await findAppDataFile(name);
+async function upsertJsonFile(name: string, content: string, knownFile?: DriveFile | null) {
+  const existing = knownFile === undefined ? await findAppDataFile(name) : knownFile;
   const metadata = existing
     ? { name }
     : {
@@ -323,8 +323,8 @@ async function upsertJsonFile(name: string, content: string) {
   );
 }
 
-async function upsertBinaryFile(name: string, content: Buffer, mimeType: string) {
-  const existing = await findAppDataFile(name);
+async function upsertBinaryFile(name: string, content: Buffer, mimeType: string, knownFile?: DriveFile | null) {
+  const existing = knownFile === undefined ? await findAppDataFile(name) : knownFile;
   const metadata = existing
     ? { name }
     : {
@@ -382,9 +382,47 @@ async function loadManifest(): Promise<{ file: DriveFile | null; manifest: Drive
   };
 }
 
+function knownDriveFile(id: string | undefined, name: string): DriveFile | undefined {
+  const fileId = String(id || "").trim();
+  return fileId ? { id: fileId, name } : undefined;
+}
+
+async function upsertJsonFileWithFallback(name: string, content: string, knownFile?: DriveFile | null) {
+  if (!knownFile) return upsertJsonFile(name, content);
+  try {
+    return await upsertJsonFile(name, content, knownFile);
+  } catch (error) {
+    console.debug("[cgmp:drive] known json file id failed, falling back to name lookup", {
+      name,
+      fileId: knownFile.id,
+      error,
+    });
+    return upsertJsonFile(name, content);
+  }
+}
+
+async function upsertBinaryFileWithFallback(
+  name: string,
+  content: Buffer,
+  mimeType: string,
+  knownFile?: DriveFile | null
+) {
+  if (!knownFile) return upsertBinaryFile(name, content, mimeType);
+  try {
+    return await upsertBinaryFile(name, content, mimeType, knownFile);
+  } catch (error) {
+    console.debug("[cgmp:drive] known binary file id failed, falling back to name lookup", {
+      name,
+      fileId: knownFile.id,
+      error,
+    });
+    return upsertBinaryFile(name, content, mimeType);
+  }
+}
+
 export async function backupDeletedRecordToDrive(tombstone: CGMPDeletedRecord) {
   const backedUpAt = new Date().toISOString();
-  const { manifest } = await loadManifest();
+  const { file, manifest } = await loadManifest();
   manifest.updated_at = backedUpAt;
   manifest.deleted_records = manifest.deleted_records || {};
   manifest.deleted_records[tombstone.record_id] = {
@@ -392,7 +430,7 @@ export async function backupDeletedRecordToDrive(tombstone: CGMPDeletedRecord) {
     schema_version: 1,
     deleted_at: tombstone.deleted_at || backedUpAt,
   };
-  await upsertJsonFile("manifest.json", JSON.stringify(manifest, null, 2));
+  await upsertJsonFile("manifest.json", JSON.stringify(manifest, null, 2), file);
   return { backedUpAt };
 }
 
@@ -400,10 +438,10 @@ export async function backupRecordToDrive(record: CGMPRecord) {
   const content = stableRecordPayload(record);
   const recordChecksum = checksum(content);
   const fileName = `record_${record.id}.json`;
-  const recordFile = await upsertJsonFile(fileName, content);
+  const recordFile = await upsertJsonFileWithFallback(fileName, content, knownDriveFile(record.drive_file_id, fileName));
 
   const backedUpAt = new Date().toISOString();
-  const { manifest } = await loadManifest();
+  const { file, manifest } = await loadManifest();
   manifest.updated_at = backedUpAt;
   manifest.records[record.id] = {
     file_id: recordFile.id,
@@ -412,7 +450,7 @@ export async function backupRecordToDrive(record: CGMPRecord) {
     backed_up_at: backedUpAt,
   };
 
-  await upsertJsonFile("manifest.json", JSON.stringify(manifest, null, 2));
+  await upsertJsonFile("manifest.json", JSON.stringify(manifest, null, 2), file);
 
   return {
     driveFileId: recordFile.id,
@@ -442,19 +480,29 @@ export async function backupAttachmentToDrive({
   const safeRecordId = sanitizeFileComponent(recordId);
   const safeAttachmentId = sanitizeFileComponent(attachment.id);
   const previewFileName = `attachment_${safeRecordId}_${safeAttachmentId}_preview.jpg`;
-  const previewFile = await upsertBinaryFile(previewFileName, preview, "image/jpeg");
+  const previewFile = await upsertBinaryFileWithFallback(
+    previewFileName,
+    preview,
+    "image/jpeg",
+    knownDriveFile(attachment.previewDriveFileId, previewFileName)
+  );
   let thumbnailFileId = "";
   let attachmentChecksum = checksumBuffer(preview);
 
   if (thumbnail && thumbnail.length > 0) {
     const thumbnailFileName = `attachment_${safeRecordId}_${safeAttachmentId}_thumbnail.jpg`;
-    const thumbnailFile = await upsertBinaryFile(thumbnailFileName, thumbnail, "image/jpeg");
+    const thumbnailFile = await upsertBinaryFileWithFallback(
+      thumbnailFileName,
+      thumbnail,
+      "image/jpeg",
+      knownDriveFile(attachment.thumbnailDriveFileId, thumbnailFileName)
+    );
     thumbnailFileId = thumbnailFile.id;
     attachmentChecksum = checksumBuffer(Buffer.concat([preview, thumbnail]));
   }
 
   const backedUpAt = new Date().toISOString();
-  const { manifest } = await loadManifest();
+  const { file, manifest } = await loadManifest();
   manifest.updated_at = backedUpAt;
   manifest.attachments = manifest.attachments || {};
   manifest.attachments[`${recordId}:${attachment.id}`] = {
@@ -467,7 +515,7 @@ export async function backupAttachmentToDrive({
     backed_up_at: backedUpAt,
   };
 
-  await upsertJsonFile("manifest.json", JSON.stringify(manifest, null, 2));
+  await upsertJsonFile("manifest.json", JSON.stringify(manifest, null, 2), file);
 
   return {
     previewDriveFileId: previewFile.id,

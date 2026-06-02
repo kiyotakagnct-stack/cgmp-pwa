@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { createGoogleCalendarEventFromRecord, createGoogleTaskFromRecord } from "./google-external-server";
 import type { CGMPAnalysisResponse, CGMPRecord } from "./types";
 import { buildRecordFromAnalysis } from "./utils";
-import { listVercelBlobRecords, saveRecordToVercelBlob } from "./vercel-blob-store-server";
+import { backupRecordToDrive, listBackedUpRecordDetails } from "./drive-backup-server";
 
 export type ShortcutWebhookRequest = {
   text?: string;
@@ -117,7 +117,7 @@ async function analyzeTextViaExistingApi({
 
 async function findExistingShortcutRecord(recordId: string) {
   try {
-    const details = await listVercelBlobRecords();
+    const details = await listBackedUpRecordDetails();
     const item = details.records.find((record) => record.id === recordId);
     const record = item?.record as Partial<CGMPRecord> | undefined;
     return record?.id ? (record as CGMPRecord) : null;
@@ -160,13 +160,13 @@ async function registerExternalIfNeeded(record: CGMPRecord) {
   return record;
 }
 
-function applyBlobBackupMetadata(
+function applyDriveBackupMetadata(
   record: CGMPRecord,
-  backup: Awaited<ReturnType<typeof saveRecordToVercelBlob>>
+  backup: Awaited<ReturnType<typeof backupRecordToDrive>>
 ): CGMPRecord {
   return {
     ...record,
-    drive_file_id: backup.blobPathname,
+    drive_file_id: backup.driveFileId,
     backup_checksum: backup.checksum,
     last_backup_at: backup.backedUpAt,
     backup_status: "backed_up",
@@ -258,7 +258,7 @@ export async function createRecordFromShortcutWebhook({
 
   const [externalResult, initialBackupResult] = await Promise.all([
     settleWithTiming(registerExternalIfNeeded(record)),
-    settleWithTiming(saveRecordToVercelBlob(record)),
+    settleWithTiming(backupRecordToDrive(record)),
   ]);
 
   console.info("[cgmp:shortcut-webhook] parallel phase completed", {
@@ -279,12 +279,12 @@ export async function createRecordFromShortcutWebhook({
     };
 
     if (initialBackupResult.status === "fulfilled") {
-      failedRecord = applyBlobBackupMetadata(failedRecord, initialBackupResult.value);
+      failedRecord = applyDriveBackupMetadata(failedRecord, initialBackupResult.value);
     }
 
     try {
-      const failedBackup = await saveRecordToVercelBlob(failedRecord);
-      failedRecord = applyBlobBackupMetadata(failedRecord, failedBackup);
+      const failedBackup = await backupRecordToDrive(failedRecord);
+      failedRecord = applyDriveBackupMetadata(failedRecord, failedBackup);
     } catch (backupError) {
       console.error("[cgmp:shortcut-webhook] failed-state backup failed", {
         clientRequestId,
@@ -316,7 +316,7 @@ export async function createRecordFromShortcutWebhook({
 
   let finalRecord = externalResult.value;
   if (initialBackupResult.status === "fulfilled") {
-    finalRecord = applyBlobBackupMetadata(finalRecord, initialBackupResult.value);
+    finalRecord = applyDriveBackupMetadata(finalRecord, initialBackupResult.value);
   } else {
     console.error("[cgmp:shortcut-webhook] initial backup failed", {
       clientRequestId,
@@ -326,8 +326,8 @@ export async function createRecordFromShortcutWebhook({
   }
 
   try {
-    const finalBackup = await saveRecordToVercelBlob(finalRecord);
-    finalRecord = applyBlobBackupMetadata(finalRecord, finalBackup);
+    const finalBackup = await backupRecordToDrive(finalRecord);
+    finalRecord = applyDriveBackupMetadata(finalRecord, finalBackup);
   } catch (error) {
     console.error("[cgmp:shortcut-webhook] final backup failed", {
       clientRequestId,
@@ -337,7 +337,7 @@ export async function createRecordFromShortcutWebhook({
     return {
       ok: false,
       message: "バックアップに失敗しました",
-      errorCode: "BLOB_BACKUP_FAILED",
+      errorCode: "DRIVE_BACKUP_FAILED",
       action: finalRecord.action,
       title: finalRecord.title,
       summary: finalRecord.summary,
