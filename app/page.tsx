@@ -74,6 +74,18 @@ type ThemeMode = "system" | "light" | "dark";
 type Notice = { kind: "info" | "error"; text: string } | null;
 type LightboxState = { imageUrl: string; title: string } | null;
 type PromptEditorDefinition = Omit<CGMPPromptDefinition, "hiddenContract">;
+type DeployInfo = {
+  ok?: boolean;
+  commitMessage?: string;
+  commitSha?: string;
+  commitRef?: string;
+  repository?: string;
+  environment?: string;
+  deploymentUrl?: string;
+  deploymentId?: string;
+  region?: string;
+  generatedAt?: string;
+};
 type AiProcessingOverlayState = {
   id: number;
   kind: "text" | "image";
@@ -192,6 +204,35 @@ type BackupSyncProgressState = {
   processElapsedMs: number;
   reloadElapsedMs: number;
   reportItems: BackupSyncReportItem[];
+};
+type ShortcutWebhookTraceStep = {
+  id: string;
+  label: string;
+  status: "running" | "success" | "error" | "skipped";
+  startedAt: number;
+  endedAt?: number;
+  elapsedMs?: number;
+  detail?: string;
+  error?: string;
+};
+type ShortcutWebhookDebugTrace = {
+  enabled: true;
+  totalElapsedMs: number;
+  steps: ShortcutWebhookTraceStep[];
+};
+type ShortcutWebhookTestReport = {
+  ok?: boolean;
+  message?: string;
+  action?: string;
+  title?: string;
+  summary?: string;
+  recordId?: string;
+  date?: string;
+  time?: string;
+  confirmationText?: string;
+  errorCode?: string;
+  error?: string;
+  debugTrace?: ShortcutWebhookDebugTrace;
 };
 type EmbeddingProgressState = {
   running: boolean;
@@ -1004,6 +1045,52 @@ function SectionHeading({
       <h2 className="mt-2 text-xl font-semibold text-[var(--text)]">{title}</h2>
       {description ? <p className="mt-1 text-sm leading-6 text-[var(--muted)]">{description}</p> : null}
     </div>
+  );
+}
+
+function SettingsAccordion({
+  title,
+  summary,
+  badge,
+  defaultOpen = false,
+  children,
+}: {
+  title: string;
+  summary?: string;
+  badge?: ReactNode;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section className="overflow-hidden rounded-[24px] border border-[color:var(--border)] bg-[var(--card-soft)] shadow-[0_10px_30px_var(--shadow-soft)]">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-start justify-between gap-3 px-4 py-4 text-left transition hover:bg-[var(--accent-soft)]"
+        aria-expanded={open}
+      >
+        <span className="min-w-0">
+          <span className="flex flex-wrap items-center gap-2">
+            <span className="text-base font-semibold text-[var(--text)]">{title}</span>
+            {badge}
+          </span>
+          {summary ? <span className="mt-1 block text-sm leading-6 text-[var(--muted)]">{summary}</span> : null}
+        </span>
+        <span className="mt-0.5 shrink-0 rounded-full border border-[color:var(--border)] bg-[var(--card)] px-2 py-1 text-xs font-semibold text-[var(--muted)]">
+          {open ? "閉じる" : "開く"}
+        </span>
+      </button>
+      <div
+        className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
+          open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+        }`}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <div className="border-t border-[color:var(--border)] px-4 py-4">{children}</div>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -2140,6 +2227,8 @@ export default function Page() {
   const [composeLoading, setComposeLoading] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState<CGMPSettings | null>(null);
   const [settingsSaving, setSettingsSaving] = useState(false);
+  const [deployInfo, setDeployInfo] = useState<DeployInfo | null>(null);
+  const [deployInfoLoading, setDeployInfoLoading] = useState(false);
   const [isPromptEditorOpen, setIsPromptEditorOpen] = useState(false);
   const [promptDefinitions, setPromptDefinitions] = useState<PromptEditorDefinition[]>([]);
   const [promptConfigDraft, setPromptConfigDraft] = useState<CGMPPromptConfigFile | null>(null);
@@ -2176,6 +2265,13 @@ export default function Page() {
   const [externalSyncProgress, setExternalSyncProgress] = useState<ExternalSyncProgressState | null>(null);
   const [aiProcessingOverlay, setAiProcessingOverlay] = useState<AiProcessingOverlayState | null>(null);
   const [aiProcessingElapsedMs, setAiProcessingElapsedMs] = useState(0);
+  const [webhookTestText, setWebhookTestText] = useState("");
+  const [webhookTestToken, setWebhookTestToken] = useState("");
+  const [webhookTestRunning, setWebhookTestRunning] = useState(false);
+  const [webhookTestStartedAt, setWebhookTestStartedAt] = useState(0);
+  const [webhookTestElapsedMs, setWebhookTestElapsedMs] = useState(0);
+  const [webhookTestReport, setWebhookTestReport] = useState<ShortcutWebhookTestReport | null>(null);
+  const [isWebhookTestModalOpen, setIsWebhookTestModalOpen] = useState(false);
   const [scriptableImporting, setScriptableImporting] = useState(false);
   const [scriptableImportResult, setScriptableImportResult] = useState<ScriptableImportResult | null>(null);
   const [embeddingProgress, setEmbeddingProgress] = useState<EmbeddingProgressState | null>(null);
@@ -3582,6 +3678,31 @@ export default function Page() {
   }, [notice]);
 
   useEffect(() => {
+    if (tab !== "settings" || deployInfo || deployInfoLoading) return;
+    let cancelled = false;
+    setDeployInfoLoading(true);
+    fetch("/api/deploy-info")
+      .then((response) => response.json())
+      .then((payload: DeployInfo) => {
+        if (!cancelled) setDeployInfo(payload);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setDeployInfo({
+            ok: false,
+            commitMessage: error instanceof Error ? error.message : "更新情報を取得できませんでした",
+          });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setDeployInfoLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [deployInfo, deployInfoLoading, tab]);
+
+  useEffect(() => {
     if (!isPromptEditorOpen) return;
     const scrollY = window.scrollY;
     const originalPosition = document.body.style.position;
@@ -3628,6 +3749,17 @@ export default function Page() {
 
     return () => window.clearInterval(timer);
   }, [backupSyncProgress?.phase, backupSyncProgress?.startedAt]);
+
+  useEffect(() => {
+    if (!webhookTestRunning || !webhookTestStartedAt) return;
+
+    setWebhookTestElapsedMs(Math.round(performance.now() - webhookTestStartedAt));
+    const timer = window.setInterval(() => {
+      setWebhookTestElapsedMs(Math.round(performance.now() - webhookTestStartedAt));
+    }, 100);
+
+    return () => window.clearInterval(timer);
+  }, [webhookTestRunning, webhookTestStartedAt]);
 
   useEffect(() => {
     return () => {
@@ -4387,6 +4519,66 @@ export default function Page() {
     }
   }
 
+  async function runShortcutWebhookTest() {
+    const text = webhookTestText.trim();
+    if (!text) {
+      setNotice({ kind: "error", text: "Webhookテスト用のテキストを入力してください。" });
+      return;
+    }
+
+    const startedAt = performance.now();
+    setWebhookTestStartedAt(startedAt);
+    setWebhookTestElapsedMs(0);
+    setWebhookTestReport(null);
+    setWebhookTestRunning(true);
+    setIsWebhookTestModalOpen(true);
+
+    try {
+      const headers: HeadersInit = { "Content-Type": "application/json" };
+      const token = webhookTestToken.trim();
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+
+      const response = await fetch("/api/shortcut-webhook", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          text,
+          source: "cgmp_settings_test",
+          timezone: settingsDraft?.timezone || "Asia/Tokyo",
+          clientRequestId: `settings_test_${Date.now()}`,
+          debug: true,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as ShortcutWebhookTestReport;
+      setWebhookTestReport(payload);
+      console.info("[cgmp:webhook-test] report", payload);
+      if (!response.ok || !payload.ok) {
+        setNotice({
+          kind: "error",
+          text: payload.error || payload.errorCode || payload.message || "Webhookテストで失敗しました。",
+        });
+      }
+      await reloadRecords(payload.recordId);
+      await reloadBackupSummary();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Webhookテストに失敗しました";
+      const fallback: ShortcutWebhookTestReport = {
+        ok: false,
+        message: "Webhookテストに失敗しました",
+        error: message,
+        confirmationText: "テストに失敗しました。通信状態またはWebhook設定を確認してください。",
+      };
+      setWebhookTestReport(fallback);
+      console.error("[cgmp:webhook-test] failed", error);
+      setNotice({ kind: "error", text: message });
+    } finally {
+      setWebhookTestElapsedMs(Math.round(performance.now() - startedAt));
+      setWebhookTestRunning(false);
+    }
+  }
+
   async function loadPromptConfigForEditor() {
     setPromptConfigLoading(true);
     setPromptConfigError("");
@@ -4868,6 +5060,116 @@ export default function Page() {
           </div>
         ) : null}
 
+        {isWebhookTestModalOpen ? (
+          <div className="fixed inset-0 z-[95] flex items-end justify-center bg-white/65 px-4 py-5 backdrop-blur-sm dark:bg-slate-950/55 sm:items-center">
+            {(() => {
+              const trace = webhookTestReport?.debugTrace;
+              const steps =
+                trace?.steps ||
+                ([
+                  { id: "received", label: "Webhook受信", status: "running" },
+                  { id: "duplicate_lookup", label: "重複チェック", status: "running" },
+                  { id: "ai_analyze", label: "AI解析", status: "running" },
+                  { id: "external_register", label: "Google Tasks / Calendar登録", status: "running" },
+                  { id: "initial_drive_backup", label: "Drive初回バックアップ", status: "running" },
+                  { id: "final_drive_backup", label: "外部ID反映バックアップ", status: "running" },
+                ] as Array<Partial<ShortcutWebhookTraceStep> & { id: string; label: string; status: ShortcutWebhookTraceStep["status"] }>);
+              const done = !webhookTestRunning && Boolean(webhookTestReport);
+              const elapsed = trace?.totalElapsedMs ?? webhookTestElapsedMs;
+              const statusTone = webhookTestReport?.ok ? "text-[var(--accent)]" : webhookTestReport ? "text-[var(--danger)]" : "text-[var(--muted)]";
+              return (
+                <section className="w-full max-w-xl rounded-[28px] border border-[color:var(--border)] bg-[var(--card)] p-5 shadow-[0_28px_90px_var(--shadow-soft)]">
+                  <div className="text-[11px] uppercase tracking-[0.34em] text-[var(--accent)]">Webhook Test</div>
+                  <div className="mt-3 flex items-start justify-between gap-3">
+                    <div>
+                      <h2 className="text-xl font-semibold text-[var(--text)]">
+                        {done ? "Webhookテストが完了しました" : "Webhookと同じ処理を実行中"}
+                      </h2>
+                      <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                        同じ `/api/shortcut-webhook` にdebug付きでPOSTしています。新しい処理経路は使っていません。
+                      </p>
+                    </div>
+                    {!done ? (
+                      <div className="mt-1 h-9 w-9 shrink-0 animate-spin rounded-full border-4 border-[color:var(--accent-soft)] border-t-[color:var(--accent)]" />
+                    ) : (
+                      <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--card-soft)] text-sm font-bold ${statusTone}`}>
+                        {webhookTestReport?.ok ? "✓" : "!"}
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-4 grid grid-cols-2 gap-2 text-xs text-[var(--muted)]">
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
+                      経過 {elapsed} ms
+                    </div>
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
+                      結果 {webhookTestReport ? (webhookTestReport.ok ? "成功" : "失敗") : "実行中"}
+                    </div>
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
+                      Action {webhookTestReport?.action || "-"}
+                    </div>
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
+                      Date {webhookTestReport?.date || "-"} {webhookTestReport?.time || ""}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] p-3 text-xs text-[var(--muted)]">
+                    <div className="font-semibold text-[var(--text)]">処理ステップ</div>
+                    <div className="mt-3 max-h-72 space-y-2 overflow-auto pr-1">
+                      {steps.map((step) => {
+                        const stepStatus = step.status || "running";
+                        const badgeClass =
+                          stepStatus === "success"
+                            ? "border-[color:var(--accent)] text-[var(--accent)]"
+                            : stepStatus === "error"
+                              ? "border-[color:var(--danger)] text-[var(--danger)]"
+                              : stepStatus === "skipped"
+                                ? "border-[color:var(--border)] text-[var(--subtle)]"
+                                : "border-[color:var(--orange)] text-[var(--orange)]";
+                        return (
+                          <div key={step.id} className="rounded-xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="truncate font-semibold text-[var(--text)]">{step.label}</div>
+                                {step.detail ? <div className="mt-1 text-[11px] leading-4 text-[var(--subtle)]">{step.detail}</div> : null}
+                              </div>
+                              <div className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-semibold uppercase ${badgeClass}`}>
+                                {stepStatus}
+                              </div>
+                            </div>
+                            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
+                              {typeof step.startedAt === "number" ? <span>start {step.startedAt}ms</span> : null}
+                              {typeof step.elapsedMs === "number" ? <span>elapsed {step.elapsedMs}ms</span> : null}
+                            </div>
+                            {step.error ? <div className="mt-1 text-[11px] leading-5 text-[var(--danger)]">{step.error}</div> : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {webhookTestReport?.confirmationText ? (
+                      <div className="mt-3 rounded-xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2 text-sm leading-6 text-[var(--text)]">
+                        {webhookTestReport.confirmationText}
+                      </div>
+                    ) : null}
+                    {webhookTestReport?.error ? (
+                      <div className="mt-3 rounded-xl border border-[color:var(--danger)] bg-[var(--danger-soft)] px-3 py-2 text-xs leading-5 text-[var(--danger)]">
+                        {webhookTestReport.error}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {done ? (
+                    <div className="mt-5 flex justify-end">
+                      <button type="button" onClick={() => setIsWebhookTestModalOpen(false)} className={secondaryButtonClass}>
+                        閉じる
+                      </button>
+                    </div>
+                  ) : null}
+                </section>
+              );
+            })()}
+          </div>
+        ) : null}
+
         {isPromptEditorOpen ? (
           <div className="fixed inset-0 z-[96] overflow-y-auto overscroll-contain bg-white/70 px-3 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] backdrop-blur-sm dark:bg-slate-950/60 sm:px-4 sm:py-6">
             {(() => {
@@ -5314,358 +5616,10 @@ export default function Page() {
         ) : null}
 
         {tab === "settings" ? (
-          <div className="grid gap-5 xl:grid-cols-[1fr_1fr]">
+          <div className="grid gap-5">
             <section className={panelClass}>
-              <SectionHeading
-                eyebrow="Settings"
-                title="PWA と AI の設定"
-              />
-
-              <div className="space-y-4">
-                <LabeledInput
-                  label="OpenAI model"
-                  value={settingsDraft?.openai_model || ""}
-                  onChange={(value) => setSettingsDraft((prev) => (prev ? { ...prev, openai_model: value } : prev))}
-                  placeholder="gpt-4.1-nano"
-                />
-                <LabeledInput
-                  label="Timezone"
-                  value={settingsDraft?.timezone || "Asia/Tokyo"}
-                  onChange={(value) => setSettingsDraft((prev) => (prev ? { ...prev, timezone: value } : prev))}
-                  placeholder="Asia/Tokyo"
-                />
-                <div className={softPanelClass}>
-                  <div className="text-sm font-medium text-[var(--text)]">Theme</div>
-                  <div className="mt-3 grid grid-cols-3 gap-2">
-                    {[
-                      { value: "system", label: "System" },
-                      { value: "light", label: "Light" },
-                      { value: "dark", label: "Dark" },
-                    ].map((item) => (
-                      <button
-                        key={item.value}
-                        type="button"
-                        onClick={() => changeThemeMode(item.value as ThemeMode)}
-                        className={`rounded-2xl border px-3 py-2 text-sm font-semibold transition ${
-                          themeMode === item.value
-                            ? "border-[color:var(--accent)] bg-[var(--accent)] text-[var(--accent-contrast)]"
-                            : "border-[color:var(--border)] bg-[var(--card)] text-[var(--muted)] hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)]"
-                        }`}
-                        aria-pressed={themeMode === item.value}
-                      >
-                        <span className="mr-1">{themeMode === item.value ? "●" : "○"}</span>
-                        {item.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className={softPanelClass}>
-                  <p className="text-sm leading-6 text-slate-600">
-                    Vercel では `OPENAI_API_KEY` と Google連携用の環境変数を設定してください。クライアント側には渡しません。
-                  </p>
-                </div>
-                <div className={softPanelClass}>
-                  <div className="text-sm font-medium text-[var(--text)]">AIプロンプト</div>
-                  <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                    Title、Summary、Action分類などの方針テキストを編集します。JSON形式などの出力制約はアプリ側で隠して保持します。
-                  </p>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <button type="button" onClick={openPromptEditor} className={secondaryButtonClass}>
-                      AIプロンプトを編集
-                    </button>
-                  </div>
-                </div>
-                <div className={softPanelClass}>
-                  <div className="text-sm font-medium text-[var(--text)]">意味検索インデックス</div>
-                  <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                    既存メモにembeddingを作成します。未処理、または本文が変わったメモだけ処理できます。
-                  </p>
-                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-[var(--muted)]">
-                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
-                      <div className="text-[var(--subtle)]">index</div>
-                      <div className="mt-1 font-semibold text-[var(--text)]">{embeddingIndexStats?.count ?? 0}件</div>
-                    </div>
-                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
-                      <div className="text-[var(--subtle)]">model</div>
-                      <div className="mt-1 truncate font-semibold text-[var(--text)]">
-                        {embeddingIndexStats?.model || "text-embedding-3-small"}
-                      </div>
-                    </div>
-                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
-                      <div className="text-[var(--subtle)]">dimensions</div>
-                      <div className="mt-1 font-semibold text-[var(--text)]">{embeddingIndexStats?.dimensions || "-"}</div>
-                    </div>
-                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
-                      <div className="text-[var(--subtle)]">latest</div>
-                      <div className="mt-1 truncate font-semibold text-[var(--text)]">
-                        {embeddingIndexStats?.latestEmbeddedAt
-                          ? formatJstDateTime(embeddingIndexStats.latestEmbeddedAt)
-                          : "未作成"}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                    <LabeledInput
-                      label="意味検索の閾値"
-                      type="number"
-                      value={String(settingsDraft?.semantic_search_threshold ?? SEMANTIC_CANDIDATE_THRESHOLD)}
-                      onChange={(value) => {
-                        const next = normalizeSemanticThreshold(value);
-                        setSettingsDraft((prev) => (prev ? { ...prev, semantic_search_threshold: next } : prev));
-                      }}
-                      placeholder="0.45"
-                    />
-                    <LabeledSelect
-                      label="意味検索の表示方式"
-                      value={settingsDraft?.semantic_search_result_mode || "threshold"}
-                      onChange={(value) =>
-                        setSettingsDraft((prev) =>
-                          prev
-                            ? {
-                                ...prev,
-                                semantic_search_result_mode: value === "top10" ? "top10" : "threshold",
-                              }
-                            : prev
-                        )
-                      }
-                      options={[
-                        { value: "threshold", label: "閾値内を表示" },
-                        { value: "top10", label: "近い順 Top10" },
-                      ]}
-                    />
-                  </div>
-                  <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
-                    閾値は -1.00 〜 1.00。大きいほど厳しめです。Top10表示では閾値に関係なく近い順で最大10件を表示します。
-                  </p>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void rebuildEmbeddingIndex(false)}
-                      disabled={embeddingProgress?.running}
-                      className={primaryButtonClass}
-                    >
-                      意味検索インデックスを作成
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void rebuildEmbeddingIndex(true)}
-                      disabled={embeddingProgress?.running}
-                      className={secondaryButtonClass}
-                    >
-                      全件再作成
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void reloadEmbeddingIndexStats()}
-                      disabled={embeddingProgress?.running}
-                      className={secondaryButtonClass}
-                    >
-                      状態を確認
-                    </button>
-                    {embeddingProgress?.running ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          embeddingCancelRef.current = true;
-                        }}
-                        className={dangerButtonClass}
-                      >
-                        中断
-                      </button>
-                    ) : null}
-                  </div>
-                  {embeddingProgress ? (
-                    <div className="mt-4 rounded-2xl border border-[color:var(--border)] bg-[var(--card)] p-3 text-xs text-[var(--muted)]">
-                      <div className="font-semibold text-[var(--text)]">
-                        {embeddingProgress.running ? `処理中... ${embeddingProgress.completed} / ${embeddingProgress.total}` : "処理結果"}
-                      </div>
-                      <div className="mt-2 grid grid-cols-2 gap-2">
-                        <span>対象 {embeddingProgress.total}件</span>
-                        <span>完了 {embeddingProgress.completed}件</span>
-                        <span>スキップ {embeddingProgress.skipped}件</span>
-                        <span>失敗 {embeddingProgress.failed}件</span>
-                      </div>
-                      {embeddingProgress.currentTitle ? (
-                        <div className="mt-2 rounded-xl bg-[var(--card-soft)] px-3 py-2">
-                          {embeddingProgress.currentTitle}
-                        </div>
-                      ) : null}
-                      {embeddingProgress.errors.length > 0 ? (
-                        <details className="mt-3">
-                          <summary className="cursor-pointer font-semibold text-[var(--danger)]">
-                            エラー {embeddingProgress.errors.length}件
-                          </summary>
-                          <ul className="mt-2 max-h-36 space-y-1 overflow-auto text-[var(--danger)]">
-                            {embeddingProgress.errors.map((error, index) => (
-                              <li key={`${error}:${index}`}>{error}</li>
-                            ))}
-                          </ul>
-                        </details>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-                <div className={softPanelClass}>
-                  <div className="text-sm font-medium text-slate-800">アプリ更新</div>
-                  <p className="mt-2 text-sm leading-6 text-slate-600">
-                    ホーム画面PWAで古い画面が残る場合は、キャッシュ回避つきで再読み込みします。
-                  </p>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <button type="button" onClick={handleHardReloadApp} className={secondaryButtonClass}>
-                      アプリを再読み込み
-                    </button>
-                  </div>
-                </div>
-                <div className={softPanelClass}>
-                  <div className="text-sm font-medium text-slate-800">Scriptableデータ移行</div>
-                  <p className="mt-2 text-sm leading-6 text-slate-600">
-                    `ChatGPTMagic` フォルダ、または移行用ZIPを選択して、records と preview画像をIndexedDBへ取り込みます。
-                    original画像とlogsは取り込みません。
-                  </p>
-                  <input
-                    ref={scriptableImportInputRef}
-                    type="file"
-                    accept=".zip,application/zip,application/x-zip-compressed"
-                    className="hidden"
-                    onChange={(event) => {
-                      const file = event.target.files?.[0];
-                      event.target.value = "";
-                      void handleScriptableImportFile(file);
-                    }}
-                  />
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => scriptableImportInputRef.current?.click()}
-                      disabled={scriptableImporting}
-                      className={primaryButtonClass}
-                    >
-                      {scriptableImporting ? "インポート中..." : "Scriptable ZIPをインポート"}
-                    </button>
-                  </div>
-                  {scriptableImportResult ? (
-                    <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-3 text-xs leading-6 text-slate-600">
-                      <div className="grid gap-2 sm:grid-cols-4">
-                        <span>追加: {scriptableImportResult.imported}</span>
-                        <span>上書き: {scriptableImportResult.overwritten}</span>
-                        <span>画像: {scriptableImportResult.imagesImported}</span>
-                        <span>スキップ: {scriptableImportResult.skipped}</span>
-                      </div>
-                      {scriptableImportResult.errors.length > 0 ? (
-                        <details className="mt-3">
-                          <summary className="cursor-pointer font-semibold text-rose-600">
-                            エラー/警告 {scriptableImportResult.errors.length}件
-                          </summary>
-                          <ul className="mt-2 max-h-36 space-y-1 overflow-auto text-rose-600">
-                            {scriptableImportResult.errors.slice(0, 20).map((error, index) => (
-                              <li key={`${error}:${index}`}>{error}</li>
-                            ))}
-                            {scriptableImportResult.errors.length > 20 ? (
-                              <li>...ほか {scriptableImportResult.errors.length - 20}件</li>
-                            ) : null}
-                          </ul>
-                        </details>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-                <div className={softPanelClass}>
-                  <div className="text-sm font-medium text-slate-800">Google Drive 同期</div>
-                  <dl className="mt-3 grid grid-cols-2 gap-3 text-xs text-slate-600">
-                    <div>
-                      <dt className="text-slate-400">未バックアップ</dt>
-                      <dd className="mt-1 text-lg font-semibold text-orange-700">{backupSummary ? backupSummary.localOnly + backupSummary.pending : "-"}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-slate-400">バックアップ中</dt>
-                      <dd className="mt-1 text-lg font-semibold text-blue-700">{backupSummary?.backingUp ?? "-"}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-slate-400">失敗</dt>
-                      <dd className="mt-1 text-lg font-semibold text-rose-100">{backupSummary?.failed ?? "-"}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-slate-400">最終バックアップ</dt>
-                      <dd className="mt-1 text-sm text-slate-700">
-                        {backupSummary?.lastBackupAt ? formatJstDateTime(backupSummary.lastBackupAt) : "未実行"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-slate-400">削除済み</dt>
-                      <dd className="mt-1 text-lg font-semibold text-slate-700">{deletedRecordsSummary?.count ?? "-"}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-slate-400">最終削除</dt>
-                      <dd className="mt-1 text-sm text-slate-700">
-                        {deletedRecordsSummary?.latestDeletedAt ? formatJstDateTime(deletedRecordsSummary.latestDeletedAt) : "なし"}
-                      </dd>
-                    </div>
-                  </dl>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <button type="button" onClick={() => runBackupQueue(true)} className={primaryButtonClass}>
-                      {backupProcessing ? "処理中..." : "今すぐバックアップ"}
-                    </button>
-                    <button type="button" onClick={rebackupAllRecords} disabled={backupProcessing} className={secondaryButtonClass}>
-                      全件を再同期
-                    </button>
-                    <button type="button" onClick={loadDriveBackupList} disabled={driveBackupLoading} className={secondaryButtonClass}>
-                      {driveBackupLoading ? "確認中..." : "Drive上の一覧を確認"}
-                    </button>
-                    <button type="button" onClick={() => importMissingFromDrive(true)} disabled={driveImporting} className={secondaryButtonClass}>
-                      {driveImporting ? "取り込み中..." : "未取り込みを追加"}
-                    </button>
-                    <button type="button" onClick={() => syncExternalStatuses(true)} className={secondaryButtonClass}>
-                      {externalSyncing ? "同期中..." : "Google状態を同期"}
-                    </button>
-                    <a href="/api/auth/google/start" className={secondaryButtonClass}>
-                      Google連携を認可
-                    </a>
-                  </div>
-                </div>
-                {driveBackupRecords ? (
-                  <div className={softPanelClass}>
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <div className="text-sm font-medium text-slate-800">Drive上に実在する正本</div>
-                        <p className="mt-1 text-xs text-slate-400">
-                          {driveBackupCheckedAt ? `${formatJstDateTime(driveBackupCheckedAt)} に確認` : ""}
-                        </p>
-                      </div>
-                      <Badge tone="emerald">{driveBackupRecords.length}件</Badge>
-                    </div>
-                    <div className="mt-4 max-h-80 space-y-2 overflow-auto pr-1">
-                      {driveBackupRecords.length > 0 ? (
-                        driveBackupRecords.map((backup) => (
-                          <div
-                            key={`${backup.id}:${backup.file_id || backup.pathname || ""}`}
-                            className={`rounded-2xl border p-3 ${
-                              backup.error ? "border-rose-200 bg-rose-50" : "border-slate-200 bg-white"
-                            }`}
-                          >
-                            <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
-                              <Badge tone={backup.error ? "rose" : "emerald"}>{backup.error ? "読込失敗" : "実在確認済み"}</Badge>
-                              <span>{backup.action || "note"}</span>
-                              <span>{backup.domain || "other"}</span>
-                              <span>{backup.para || "area"}</span>
-                            </div>
-                            <div className="mt-2 text-sm font-semibold text-slate-950">{backup.title || "（無題）"}</div>
-                            {backup.summary ? (
-                              <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{backup.summary}</p>
-                            ) : null}
-                            <div className="mt-3 grid gap-1 text-[11px] text-slate-400">
-                              <span>backup: {backup.backed_up_at ? formatJstDateTime(backup.backed_up_at) : "不明"}</span>
-                              <span>record: {backup.id}</span>
-                              <span>file: {backup.file_id}</span>
-                              <span>checksum: {backup.checksum ? `${backup.checksum.slice(0, 16)}...` : "不明"}</span>
-                            </div>
-                          </div>
-                        ))
-                      ) : (
-                        <p className="text-sm text-slate-500">Drive上の正本はまだありません。</p>
-                      )}
-                    </div>
-                  </div>
-                ) : null}
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <SectionHeading eyebrow="Settings" title="設定" description="必要な項目だけ開いて調整します。" />
                 <div className="flex flex-wrap gap-2">
                   <button type="button" onClick={handleSaveSettings} disabled={settingsSaving} className={primaryButtonClass}>
                     {settingsSaving ? "保存中..." : "設定を保存"}
@@ -5673,24 +5627,446 @@ export default function Page() {
                   <button type="button" onClick={() => reloadSettings()} className={secondaryButtonClass}>
                     再読み込み
                   </button>
-                  <button type="button" onClick={handleClearAll} className={dangerButtonClass}>
-                    全削除
-                  </button>
                 </div>
               </div>
-            </section>
 
-            <aside className={panelClass}>
-              <SectionHeading eyebrow="Status" title="状態" />
-              <div className={softPanelClass}>
-                <ul className="space-y-2 text-sm leading-6 text-slate-600">
-                  <li>・Home / Compose / Settings の3画面構成</li>
-                  <li>・IndexedDB に record を保存</li>
-                  <li>・/api/analyze で OpenAI 解析</li>
-                  <li>・詳細編集と削除を実装</li>
-                </ul>
+              <div className="space-y-3">
+                <SettingsAccordion title="基本設定" summary="AIモデル、タイムゾーン、表示テーマ。" defaultOpen>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <LabeledInput
+                      label="OpenAI model"
+                      value={settingsDraft?.openai_model || ""}
+                      onChange={(value) => setSettingsDraft((prev) => (prev ? { ...prev, openai_model: value } : prev))}
+                      placeholder="gpt-4.1-nano"
+                    />
+                    <LabeledInput
+                      label="Timezone"
+                      value={settingsDraft?.timezone || "Asia/Tokyo"}
+                      onChange={(value) => setSettingsDraft((prev) => (prev ? { ...prev, timezone: value } : prev))}
+                      placeholder="Asia/Tokyo"
+                    />
+                  </div>
+                  <div className="mt-4">
+                    <div className="text-sm font-medium text-[var(--text)]">Theme</div>
+                    <div className="mt-3 grid grid-cols-3 gap-2">
+                      {[
+                        { value: "system", label: "System" },
+                        { value: "light", label: "Light" },
+                        { value: "dark", label: "Dark" },
+                      ].map((item) => (
+                        <button
+                          key={item.value}
+                          type="button"
+                          onClick={() => changeThemeMode(item.value as ThemeMode)}
+                          className={`rounded-2xl border px-3 py-2 text-sm font-semibold transition ${
+                            themeMode === item.value
+                              ? "border-[color:var(--accent)] bg-[var(--accent)] text-[var(--accent-contrast)]"
+                              : "border-[color:var(--border)] bg-[var(--card)] text-[var(--muted)] hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)]"
+                          }`}
+                          aria-pressed={themeMode === item.value}
+                        >
+                          <span className="mr-1">{themeMode === item.value ? "●" : "○"}</span>
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </SettingsAccordion>
+
+                <SettingsAccordion
+                  title="AI と検索"
+                  summary="プロンプト編集、意味検索、embedding index。"
+                  badge={<Badge tone="cyan">{embeddingIndexStats?.count ?? 0} embeddings</Badge>}
+                >
+                  <div className={softPanelClass}>
+                    <div className="text-sm font-medium text-[var(--text)]">AIプロンプト</div>
+                    <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                      Title、Summary、Action分類、写真解析などの判断方針を編集します。出力形式の固定ルールは非表示です。
+                    </p>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button type="button" onClick={openPromptEditor} className={secondaryButtonClass}>
+                        AIプロンプトを編集
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className={`${softPanelClass} mt-3`}>
+                    <div className="text-sm font-medium text-[var(--text)]">意味検索インデックス</div>
+                    <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-[var(--muted)]">
+                      <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
+                        <div className="text-[var(--subtle)]">index</div>
+                        <div className="mt-1 font-semibold text-[var(--text)]">{embeddingIndexStats?.count ?? 0}件</div>
+                      </div>
+                      <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
+                        <div className="text-[var(--subtle)]">model</div>
+                        <div className="mt-1 truncate font-semibold text-[var(--text)]">
+                          {embeddingIndexStats?.model || "text-embedding-3-small"}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
+                        <div className="text-[var(--subtle)]">dimensions</div>
+                        <div className="mt-1 font-semibold text-[var(--text)]">{embeddingIndexStats?.dimensions || "-"}</div>
+                      </div>
+                      <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
+                        <div className="text-[var(--subtle)]">latest</div>
+                        <div className="mt-1 truncate font-semibold text-[var(--text)]">
+                          {embeddingIndexStats?.latestEmbeddedAt ? formatJstDateTime(embeddingIndexStats.latestEmbeddedAt) : "未作成"}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                      <LabeledInput
+                        label="意味検索の閾値"
+                        type="number"
+                        value={String(settingsDraft?.semantic_search_threshold ?? SEMANTIC_CANDIDATE_THRESHOLD)}
+                        onChange={(value) => {
+                          const next = normalizeSemanticThreshold(value);
+                          setSettingsDraft((prev) => (prev ? { ...prev, semantic_search_threshold: next } : prev));
+                        }}
+                        placeholder="0.45"
+                      />
+                      <LabeledSelect
+                        label="意味検索の表示方式"
+                        value={settingsDraft?.semantic_search_result_mode || "threshold"}
+                        onChange={(value) =>
+                          setSettingsDraft((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  semantic_search_result_mode: value === "top10" ? "top10" : "threshold",
+                                }
+                              : prev
+                          )
+                        }
+                        options={[
+                          { value: "threshold", label: "閾値内を表示" },
+                          { value: "top10", label: "近い順 Top10" },
+                        ]}
+                      />
+                    </div>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void rebuildEmbeddingIndex(false)}
+                        disabled={embeddingProgress?.running}
+                        className={primaryButtonClass}
+                      >
+                        意味検索インデックスを作成
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void rebuildEmbeddingIndex(true)}
+                        disabled={embeddingProgress?.running}
+                        className={secondaryButtonClass}
+                      >
+                        全件再作成
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void reloadEmbeddingIndexStats()}
+                        disabled={embeddingProgress?.running}
+                        className={secondaryButtonClass}
+                      >
+                        状態を確認
+                      </button>
+                      {embeddingProgress?.running ? (
+                        <button type="button" onClick={() => (embeddingCancelRef.current = true)} className={dangerButtonClass}>
+                          中断
+                        </button>
+                      ) : null}
+                    </div>
+                    {embeddingProgress ? (
+                      <div className="mt-4 rounded-2xl border border-[color:var(--border)] bg-[var(--card)] p-3 text-xs text-[var(--muted)]">
+                        <div className="font-semibold text-[var(--text)]">
+                          {embeddingProgress.running ? `処理中... ${embeddingProgress.completed} / ${embeddingProgress.total}` : "処理結果"}
+                        </div>
+                        <div className="mt-2 grid grid-cols-2 gap-2">
+                          <span>対象 {embeddingProgress.total}件</span>
+                          <span>完了 {embeddingProgress.completed}件</span>
+                          <span>スキップ {embeddingProgress.skipped}件</span>
+                          <span>失敗 {embeddingProgress.failed}件</span>
+                        </div>
+                        {embeddingProgress.currentTitle ? (
+                          <div className="mt-2 rounded-xl bg-[var(--card-soft)] px-3 py-2">{embeddingProgress.currentTitle}</div>
+                        ) : null}
+                        {embeddingProgress.errors.length > 0 ? (
+                          <details className="mt-3">
+                            <summary className="cursor-pointer font-semibold text-[var(--danger)]">
+                              エラー {embeddingProgress.errors.length}件
+                            </summary>
+                            <ul className="mt-2 max-h-36 space-y-1 overflow-auto text-[var(--danger)]">
+                              {embeddingProgress.errors.map((error, index) => (
+                                <li key={`${error}:${index}`}>{error}</li>
+                              ))}
+                            </ul>
+                          </details>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                </SettingsAccordion>
+
+                <SettingsAccordion
+                  title="同期と連携"
+                  summary="Google Drive、Google Tasks / Calendar、Drive上の実在確認。"
+                  badge={<Badge tone={backupSummary && backupSummary.failed > 0 ? "rose" : "emerald"}>Drive</Badge>}
+                >
+                  <div className={softPanelClass}>
+                    <div className="text-sm font-medium text-[var(--text)]">Google Drive 同期</div>
+                    <dl className="mt-3 grid grid-cols-2 gap-3 text-xs text-[var(--muted)]">
+                      <div>
+                        <dt className="text-[var(--subtle)]">未バックアップ</dt>
+                        <dd className="mt-1 text-lg font-semibold text-[var(--orange)]">
+                          {backupSummary ? backupSummary.localOnly + backupSummary.pending : "-"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-[var(--subtle)]">バックアップ中</dt>
+                        <dd className="mt-1 text-lg font-semibold text-[var(--accent)]">{backupSummary?.backingUp ?? "-"}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-[var(--subtle)]">失敗</dt>
+                        <dd className="mt-1 text-lg font-semibold text-[var(--danger)]">{backupSummary?.failed ?? "-"}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-[var(--subtle)]">最終バックアップ</dt>
+                        <dd className="mt-1 text-sm text-[var(--text)]">
+                          {backupSummary?.lastBackupAt ? formatJstDateTime(backupSummary.lastBackupAt) : "未実行"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-[var(--subtle)]">削除済み</dt>
+                        <dd className="mt-1 text-lg font-semibold text-[var(--text)]">{deletedRecordsSummary?.count ?? "-"}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-[var(--subtle)]">最終削除</dt>
+                        <dd className="mt-1 text-sm text-[var(--text)]">
+                          {deletedRecordsSummary?.latestDeletedAt ? formatJstDateTime(deletedRecordsSummary.latestDeletedAt) : "なし"}
+                        </dd>
+                      </div>
+                    </dl>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button type="button" onClick={() => runBackupQueue(true)} className={primaryButtonClass}>
+                        {backupProcessing ? "処理中..." : "今すぐバックアップ"}
+                      </button>
+                      <button type="button" onClick={rebackupAllRecords} disabled={backupProcessing} className={secondaryButtonClass}>
+                        全件を再同期
+                      </button>
+                      <button type="button" onClick={loadDriveBackupList} disabled={driveBackupLoading} className={secondaryButtonClass}>
+                        {driveBackupLoading ? "確認中..." : "Drive上の一覧を確認"}
+                      </button>
+                      <button type="button" onClick={() => importMissingFromDrive(true)} disabled={driveImporting} className={secondaryButtonClass}>
+                        {driveImporting ? "取り込み中..." : "未取り込みを追加"}
+                      </button>
+                      <button type="button" onClick={() => syncExternalStatuses(true)} className={secondaryButtonClass}>
+                        {externalSyncing ? "同期中..." : "Google状態を同期"}
+                      </button>
+                      <a href="/api/auth/google/start" className={secondaryButtonClass}>
+                        Google連携を認可
+                      </a>
+                    </div>
+                  </div>
+
+                  <div className={`${softPanelClass} mt-3`}>
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <div className="text-sm font-medium text-[var(--text)]">Shortcut Webhook テスト</div>
+                        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                          iOS Shortcutと同じ `/api/shortcut-webhook` を呼び、AI解析・Google登録・Drive保存の処理時間を確認します。
+                        </p>
+                      </div>
+                      <Badge tone="cyan">debug</Badge>
+                    </div>
+                    <div className="mt-4 grid gap-3">
+                      <LabeledTextarea
+                        label="Webhookに投げるテキスト"
+                        value={webhookTestText}
+                        onChange={setWebhookTestText}
+                        rows={4}
+                        placeholder="例: 明日17時に歯医者の予約"
+                      />
+                      <LabeledInput
+                        label="Webhook token（設定している場合のみ）"
+                        value={webhookTestToken}
+                        onChange={setWebhookTestToken}
+                        placeholder="SHORTCUT_WEBHOOK_TOKEN"
+                        type="password"
+                      />
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={runShortcutWebhookTest}
+                          disabled={webhookTestRunning}
+                          className={primaryButtonClass}
+                        >
+                          {webhookTestRunning ? "Webhookテスト中..." : "進捗つきでWebhookテスト"}
+                        </button>
+                        {webhookTestReport ? (
+                          <button type="button" onClick={() => setIsWebhookTestModalOpen(true)} className={secondaryButtonClass}>
+                            前回レポートを見る
+                          </button>
+                        ) : null}
+                      </div>
+                      <p className="text-xs leading-5 text-[var(--subtle)]">
+                        tokenは保存しません。テスト実行時だけAuthorizationヘッダーに入れます。
+                      </p>
+                    </div>
+                  </div>
+
+                  {driveBackupRecords ? (
+                    <div className={`${softPanelClass} mt-3`}>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="text-sm font-medium text-[var(--text)]">Drive上に実在する正本</div>
+                          <p className="mt-1 text-xs text-[var(--subtle)]">
+                            {driveBackupCheckedAt ? `${formatJstDateTime(driveBackupCheckedAt)} に確認` : ""}
+                          </p>
+                        </div>
+                        <Badge tone="emerald">{driveBackupRecords.length}件</Badge>
+                      </div>
+                      <div className="mt-4 max-h-80 space-y-2 overflow-auto pr-1">
+                        {driveBackupRecords.length > 0 ? (
+                          driveBackupRecords.map((backup) => (
+                            <div
+                              key={`${backup.id}:${backup.file_id || backup.pathname || ""}`}
+                              className={`rounded-2xl border p-3 ${
+                                backup.error
+                                  ? "border-[color:var(--danger)] bg-[var(--danger-soft)]"
+                                  : "border-[color:var(--border)] bg-[var(--card)]"
+                              }`}
+                            >
+                              <div className="flex flex-wrap items-center gap-2 text-[11px] text-[var(--subtle)]">
+                                <Badge tone={backup.error ? "rose" : "emerald"}>{backup.error ? "読込失敗" : "実在確認済み"}</Badge>
+                                <span>{backup.action || "note"}</span>
+                                <span>{backup.domain || "other"}</span>
+                                <span>{backup.para || "area"}</span>
+                              </div>
+                              <div className="mt-2 text-sm font-semibold text-[var(--text)]">{backup.title || "（無題）"}</div>
+                              {backup.summary ? (
+                                <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--muted)]">{backup.summary}</p>
+                              ) : null}
+                              <div className="mt-3 grid gap-1 text-[11px] text-[var(--subtle)]">
+                                <span>backup: {backup.backed_up_at ? formatJstDateTime(backup.backed_up_at) : "不明"}</span>
+                                <span>record: {backup.id}</span>
+                                <span>file: {backup.file_id}</span>
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="text-sm text-[var(--muted)]">Drive上の正本はまだありません。</p>
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+                </SettingsAccordion>
+
+                <SettingsAccordion title="データ移行と保守" summary="PWA再読み込み、Scriptable移行、全削除。">
+                  <div className={softPanelClass}>
+                    <div className="text-sm font-medium text-[var(--text)]">アプリ更新</div>
+                    <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                      ホーム画面PWAで古い画面が残る場合は、キャッシュ回避つきで再読み込みします。
+                    </p>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button type="button" onClick={handleHardReloadApp} className={secondaryButtonClass}>
+                        アプリを再読み込み
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className={`${softPanelClass} mt-3`}>
+                    <div className="text-sm font-medium text-[var(--text)]">Scriptableデータ移行</div>
+                    <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                      移行用ZIPから records と preview画像をIndexedDBへ取り込みます。original画像とlogsは取り込みません。
+                    </p>
+                    <input
+                      ref={scriptableImportInputRef}
+                      type="file"
+                      accept=".zip,application/zip,application/x-zip-compressed"
+                      className="hidden"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        event.target.value = "";
+                        void handleScriptableImportFile(file);
+                      }}
+                    />
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => scriptableImportInputRef.current?.click()}
+                        disabled={scriptableImporting}
+                        className={primaryButtonClass}
+                      >
+                        {scriptableImporting ? "インポート中..." : "Scriptable ZIPをインポート"}
+                      </button>
+                    </div>
+                    {scriptableImportResult ? (
+                      <div className="mt-4 rounded-2xl border border-[color:var(--border)] bg-[var(--card)] p-3 text-xs leading-6 text-[var(--muted)]">
+                        <div className="grid gap-2 sm:grid-cols-4">
+                          <span>追加: {scriptableImportResult.imported}</span>
+                          <span>上書き: {scriptableImportResult.overwritten}</span>
+                          <span>画像: {scriptableImportResult.imagesImported}</span>
+                          <span>スキップ: {scriptableImportResult.skipped}</span>
+                        </div>
+                        {scriptableImportResult.errors.length > 0 ? (
+                          <details className="mt-3">
+                            <summary className="cursor-pointer font-semibold text-[var(--danger)]">
+                              エラー/警告 {scriptableImportResult.errors.length}件
+                            </summary>
+                            <ul className="mt-2 max-h-36 space-y-1 overflow-auto text-[var(--danger)]">
+                              {scriptableImportResult.errors.slice(0, 20).map((error, index) => (
+                                <li key={`${error}:${index}`}>{error}</li>
+                              ))}
+                              {scriptableImportResult.errors.length > 20 ? (
+                                <li>...ほか {scriptableImportResult.errors.length - 20}件</li>
+                              ) : null}
+                            </ul>
+                          </details>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-4 flex justify-end">
+                    <button type="button" onClick={handleClearAll} className={dangerButtonClass}>
+                      全削除
+                    </button>
+                  </div>
+                </SettingsAccordion>
+
+                <SettingsAccordion
+                  title="更新情報"
+                  summary={deployInfoLoading ? "取得中..." : deployInfo?.commitMessage || "最新デプロイ情報を確認します。"}
+                  badge={deployInfo?.commitSha ? <Badge tone="slate">{deployInfo.commitSha}</Badge> : undefined}
+                >
+                  <div className="grid gap-3 text-sm text-[var(--muted)]">
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-3">
+                      <div className="text-[11px] uppercase tracking-[0.22em] text-[var(--subtle)]">Summary</div>
+                      <div className="mt-2 font-semibold text-[var(--text)]">
+                        {deployInfoLoading ? "取得中..." : deployInfo?.commitMessage || "GitHub commit message が取得できませんでした。"}
+                      </div>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
+                        <div className="text-[var(--subtle)]">branch</div>
+                        <div className="mt-1 font-semibold text-[var(--text)]">{deployInfo?.commitRef || "-"}</div>
+                      </div>
+                      <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
+                        <div className="text-[var(--subtle)]">sha</div>
+                        <div className="mt-1 font-semibold text-[var(--text)]">{deployInfo?.commitSha || "-"}</div>
+                      </div>
+                      <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
+                        <div className="text-[var(--subtle)]">repo</div>
+                        <div className="mt-1 truncate font-semibold text-[var(--text)]">{deployInfo?.repository || "-"}</div>
+                      </div>
+                      <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
+                        <div className="text-[var(--subtle)]">environment</div>
+                        <div className="mt-1 font-semibold text-[var(--text)]">{deployInfo?.environment || "-"}</div>
+                      </div>
+                    </div>
+                  </div>
+                </SettingsAccordion>
               </div>
-            </aside>
+            </section>
           </div>
         ) : null}
       </div>
