@@ -3582,6 +3582,28 @@ export default function Page() {
   }, [notice]);
 
   useEffect(() => {
+    if (!isPromptEditorOpen) return;
+    const scrollY = window.scrollY;
+    const originalPosition = document.body.style.position;
+    const originalTop = document.body.style.top;
+    const originalWidth = document.body.style.width;
+    const originalOverflow = document.body.style.overflow;
+
+    document.body.style.position = "fixed";
+    document.body.style.top = `-${scrollY}px`;
+    document.body.style.width = "100%";
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.position = originalPosition;
+      document.body.style.top = originalTop;
+      document.body.style.width = originalWidth;
+      document.body.style.overflow = originalOverflow;
+      window.scrollTo(0, scrollY);
+    };
+  }, [isPromptEditorOpen]);
+
+  useEffect(() => {
     if (!aiProcessingOverlay) return;
 
     if (typeof aiProcessingOverlay.finishedAt === "number") {
@@ -4847,15 +4869,16 @@ export default function Page() {
         ) : null}
 
         {isPromptEditorOpen ? (
-          <div className="fixed inset-0 z-[96] flex items-end justify-center bg-white/70 px-4 py-5 backdrop-blur-sm dark:bg-slate-950/60 sm:items-center">
+          <div className="fixed inset-0 z-[96] overflow-y-auto overscroll-contain bg-white/70 px-3 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] backdrop-blur-sm dark:bg-slate-950/60 sm:px-4 sm:py-6">
             {(() => {
               const activeDefinition =
                 promptDefinitions.find((item) => item.key === activePromptKey) || promptDefinitions[0] || null;
               const activePrompt = activeDefinition
                 ? promptConfigDraft?.prompts?.[activeDefinition.key]?.userPrompt || activeDefinition.defaultUserPrompt
                 : "";
+              const activePromptRows = Math.min(42, Math.max(14, activePrompt.split("\n").length + 2));
               return (
-                <section className="flex max-h-[90dvh] w-full max-w-5xl flex-col rounded-[28px] border border-[color:var(--border)] bg-[var(--card)] p-5 shadow-[0_28px_90px_var(--shadow-soft)]">
+                <section className="mx-auto my-2 w-full max-w-5xl rounded-[28px] border border-[color:var(--border)] bg-[var(--card)] p-4 shadow-[0_28px_90px_var(--shadow-soft)] sm:p-5">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <div className="section-eyebrow">Prompt Settings</div>
@@ -4864,7 +4887,11 @@ export default function Page() {
                         ここではAIの判断方針だけを編集します。JSON形式・必須フィールド・余計な文章禁止などの出力制約は非表示で固定しています。
                       </p>
                     </div>
-                    <button type="button" onClick={() => setIsPromptEditorOpen(false)} className={secondaryButtonClass}>
+                    <button
+                      type="button"
+                      onClick={() => setIsPromptEditorOpen(false)}
+                      className={`${secondaryButtonClass} shrink-0 whitespace-nowrap`}
+                    >
                       閉じる
                     </button>
                   </div>
@@ -4880,8 +4907,8 @@ export default function Page() {
                       Google Driveからプロンプト設定を読み込み中...
                     </div>
                   ) : (
-                    <div className="mt-5 grid min-h-0 gap-4 md:grid-cols-[240px_minmax(0,1fr)]">
-                      <div className="max-h-[56dvh] space-y-2 overflow-auto rounded-3xl border border-[color:var(--border)] bg-[var(--card-soft)] p-2">
+                    <div className="mt-5 grid gap-4 md:grid-cols-[240px_minmax(0,1fr)]">
+                      <div className="max-h-72 space-y-2 overflow-auto rounded-3xl border border-[color:var(--border)] bg-[var(--card-soft)] p-2 overscroll-contain md:max-h-[64dvh]">
                         {promptDefinitions.length > 0 ? (
                           promptDefinitions.map((definition) => {
                             const isActive = activeDefinition?.key === definition.key;
@@ -4908,7 +4935,7 @@ export default function Page() {
                         )}
                       </div>
 
-                      <div className="min-h-0 rounded-3xl border border-[color:var(--border)] bg-[var(--card-soft)] p-4">
+                      <div className="rounded-3xl border border-[color:var(--border)] bg-[var(--card-soft)] p-4">
                         {activeDefinition ? (
                           <>
                             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -4918,14 +4945,19 @@ export default function Page() {
                                   {activeDefinition.description}
                                 </p>
                               </div>
-                              <button type="button" onClick={resetActivePromptToDefault} className={secondaryButtonClass}>
+                              <button
+                                type="button"
+                                onClick={resetActivePromptToDefault}
+                                className={`${secondaryButtonClass} shrink-0 whitespace-nowrap`}
+                              >
                                 初期値へ
                               </button>
                             </div>
                             <textarea
                               value={activePrompt}
                               onChange={(event) => updatePromptDraft(activeDefinition.key, event.target.value)}
-                              className="mt-4 min-h-[44dvh] w-full resize-y rounded-3xl border border-[color:var(--border)] bg-[var(--card)] px-4 py-4 font-mono text-sm leading-6 text-[var(--text)] outline-none transition focus:border-[color:var(--accent)] focus:ring-4 focus:ring-[color:var(--accent-ring)]"
+                              rows={activePromptRows}
+                              className="mt-4 min-h-80 w-full resize-y rounded-3xl border border-[color:var(--border)] bg-[var(--card)] px-4 py-4 font-mono text-sm leading-6 text-[var(--text)] outline-none transition focus:border-[color:var(--accent)] focus:ring-4 focus:ring-[color:var(--accent-ring)]"
                               placeholder="AIに守らせたい判断方針を書きます"
                               spellCheck={false}
                             />
@@ -4942,19 +4974,19 @@ export default function Page() {
                     </div>
                   )}
 
-                  <div className="mt-5 flex flex-wrap justify-end gap-2">
+                  <div className="sticky bottom-0 -mx-4 mt-5 flex flex-wrap justify-end gap-2 border-t border-[color:var(--border)] bg-[var(--card)]/95 px-4 py-3 backdrop-blur sm:-mx-5 sm:px-5">
                     <button
                       type="button"
                       onClick={loadPromptConfigForEditor}
                       disabled={promptConfigLoading || promptConfigSaving}
-                      className={secondaryButtonClass}
+                      className={`${secondaryButtonClass} shrink-0 whitespace-nowrap`}
                     >
                       Driveから再読込
                     </button>
                     <button
                       type="button"
                       onClick={() => setIsPromptEditorOpen(false)}
-                      className={secondaryButtonClass}
+                      className={`${secondaryButtonClass} shrink-0 whitespace-nowrap`}
                     >
                       キャンセル
                     </button>
@@ -4962,7 +4994,7 @@ export default function Page() {
                       type="button"
                       onClick={savePromptConfig}
                       disabled={!promptConfigDraft || promptConfigLoading || promptConfigSaving}
-                      className={primaryButtonClass}
+                      className={`${primaryButtonClass} shrink-0 whitespace-nowrap`}
                     >
                       {promptConfigSaving ? "保存中..." : "Google Driveへ保存"}
                     </button>
