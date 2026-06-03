@@ -232,7 +232,18 @@ type BackupRunOptions = {
     completed: number;
     total: number;
     currentTitle: string;
+    stage?: string;
     results: BackupProcessItemResult[];
+  }) => void;
+};
+
+type SingleRecordBackupOptions = {
+  respectRetry?: boolean;
+  force?: boolean;
+  onStep?: (progress: {
+    currentTitle: string;
+    stage: string;
+    results?: BackupProcessItemResult[];
   }) => void;
 };
 
@@ -516,13 +527,26 @@ export async function processBackupQueue(options: BackupRunOptions = {}) {
 
   const totalUnits = dueTombstones.length + recordPlans.length;
   const recordResults = await mapWithConcurrency(recordPlans, BACKUP_CONCURRENCY, async (recordId) => {
-    const result = await processSingleRecordBackup(recordId, { respectRetry: true, force: options.force });
+    const result = await processSingleRecordBackup(recordId, {
+      respectRetry: true,
+      force: options.force,
+      onStep: (step) => {
+        options.onProgress?.({
+          completed: completedUnits,
+          total: totalUnits,
+          currentTitle: step.currentTitle,
+          stage: step.stage,
+          results: step.results || [],
+        });
+      },
+    });
     completedUnits += 1;
     options.onProgress?.({
       completed: completedUnits,
       total: totalUnits,
       currentTitle: result[0]?.title || recordId,
-      results: result,
+      stage: "record_group_done",
+      results: [],
     });
     return result;
   });
@@ -533,11 +557,25 @@ export async function processBackupQueue(options: BackupRunOptions = {}) {
 
 export async function processSingleRecordBackup(
   recordId: string,
-  options: { respectRetry?: boolean; force?: boolean } = {}
+  options: SingleRecordBackupOptions = {}
 ) {
   const results: BackupProcessItemResult[] = [];
   const record = await loadLatestRecord(recordId);
   if (!record) {
+    options.onStep?.({
+      currentTitle: recordId,
+      stage: "record_not_found",
+      results: [
+        {
+          ok: false,
+          recordId,
+          title: recordId,
+          itemType: "record" as const,
+          elapsedMs: 0,
+          error: "RECORD_NOT_FOUND",
+        },
+      ],
+    });
     return [
       {
         ok: false,
@@ -549,11 +587,27 @@ export async function processSingleRecordBackup(
       },
     ];
   }
+  const recordTitle = record.title || record.summary || record.raw_input || record.id;
+  options.onStep?.({ currentTitle: recordTitle, stage: "record_loaded" });
   if (record.ai_status === "pending_ai") {
     await removeBackupQueueItem(record.id);
     for (const attachment of record.attachments || []) {
       await removeBackupQueueItem(`attachment:${record.id}:${attachment.id}`);
     }
+    options.onStep?.({
+      currentTitle: recordTitle,
+      stage: "record_skipped_pending_ai",
+      results: [
+        {
+          ok: true,
+          recordId,
+          title: recordTitle,
+          itemType: "record" as const,
+          skipped: true,
+          elapsedMs: 0,
+        },
+      ],
+    });
     return [
       {
         ok: true,
@@ -581,6 +635,7 @@ export async function processSingleRecordBackup(
       continue;
     }
 
+    options.onStep?.({ currentTitle: recordTitle, stage: "attachment_preparing" });
     await updateAttachmentBackupState(record.id, attachment.id, {
       backup_status: "backing_up",
       blob_upload_status: "backing_up",
@@ -591,8 +646,14 @@ export async function processSingleRecordBackup(
     const latestRecord = (await loadLatestRecord(record.id)) || record;
     const latestAttachment =
       (latestRecord.attachments || []).find((candidate) => candidate.id === attachment.id) || attachment;
+    options.onStep?.({ currentTitle: recordTitle, stage: "attachment_uploading" });
     const result = await backupAttachment(latestRecord, latestAttachment);
     results.push(result);
+    options.onStep?.({
+      currentTitle: recordTitle,
+      stage: result.ok ? "attachment_done" : "attachment_failed",
+      results: [result],
+    });
 
     if (result.ok) {
       await updateAttachmentBackupState(record.id, attachment.id, {
@@ -643,6 +704,7 @@ export async function processSingleRecordBackup(
 
   const latestRecord = (await loadLatestRecord(record.id)) || record;
   const recordQueueId = `record:${record.id}`;
+  options.onStep?.({ currentTitle: recordTitle, stage: "record_preparing" });
   await updateRecordBackupState(record.id, {
     backup_status: "backing_up",
     backup_last_error: "",
@@ -660,8 +722,14 @@ export async function processSingleRecordBackup(
     updated_at: new Date().toISOString(),
   });
 
+  options.onStep?.({ currentTitle: recordTitle, stage: "record_uploading" });
   const recordResult = await backupRecord(latestRecord, { force: options.force });
   results.push(recordResult);
+  options.onStep?.({
+    currentTitle: recordTitle,
+    stage: recordResult.ok ? "record_done" : "record_failed",
+    results: [recordResult],
+  });
 
   if (recordResult.ok) {
     await updateRecordBackupState(record.id, {

@@ -2299,7 +2299,7 @@ export default function Page() {
             return {
               ...current,
               message: progress.currentTitle
-                ? `同期中: ${progress.currentTitle}（${progress.completed}/${progress.total}）`
+                ? `${getBackupStageLabel(progress.stage)}: ${progress.currentTitle}（${progress.completed}/${progress.total}）`
                 : `Google Drive同期中（${progress.completed}/${progress.total}）`,
               total: Math.max(current.total, progress.total, completed),
               succeeded: reportItems.length - failed,
@@ -2413,6 +2413,37 @@ export default function Page() {
       thumbnailSizeBytes: result.thumbnailSizeBytes || 0,
       error: result.error || "",
     }));
+  }
+
+  function getBackupStageLabel(stage?: string) {
+    switch (stage) {
+      case "record_loaded":
+        return "record確認中";
+      case "attachment_preparing":
+        return "写真メタデータ更新中";
+      case "attachment_uploading":
+        return "写真アップロード中";
+      case "attachment_done":
+        return "写真アップロード完了";
+      case "attachment_failed":
+        return "写真アップロード失敗";
+      case "record_preparing":
+        return "record保存準備中";
+      case "record_uploading":
+        return "record JSON送信中";
+      case "record_done":
+        return "record保存完了";
+      case "record_failed":
+        return "record保存失敗";
+      case "record_group_done":
+        return "record一式完了";
+      case "record_skipped_pending_ai":
+        return "下書きのためスキップ";
+      case "record_not_found":
+        return "recordが見つかりません";
+      default:
+        return "同期中";
+    }
   }
 
   async function runSingleRecordBackup(recordId: string) {
@@ -3138,7 +3169,7 @@ export default function Page() {
             return {
               ...current,
               message: progress.currentTitle
-                ? `全件再同期中: ${progress.currentTitle}（${progress.completed}/${progress.total}）`
+                ? `${getBackupStageLabel(progress.stage)}: ${progress.currentTitle}（${progress.completed}/${progress.total}）`
                 : `全件再同期中（${progress.completed}/${progress.total}）`,
               total: Math.max(current.total, progress.total, completed),
               succeeded: reportItems.length - failed,
