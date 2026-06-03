@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { loadPromptConfigFromDrive } from "@/lib/cgmp/drive-backup-server";
+import { buildAnalyzePrompt, createDefaultPromptConfig } from "@/lib/cgmp/prompt-config";
 import { sanitizeVisionResult } from "@/lib/image/sanitizeVisionResult";
 
 export const runtime = "nodejs";
@@ -11,21 +13,6 @@ function pickContent(payload: any) {
     payload?.output?.[0]?.content?.[0]?.text ??
     ""
   );
-}
-
-function buildSystemPrompt() {
-  return [
-    "You analyze one image for a second-brain app.",
-    "Return JSON only.",
-    "Return exactly:",
-    '{"image_type":"screenshot","summary_80":"","image_tags":[],"visible_text":"","confidence":"medium"}',
-    "Allowed image_type: screenshot, document, whiteboard, object, scene, other.",
-    "Allowed confidence: high, medium, low.",
-    "summary_80: concise Japanese summary, around 80 chars.",
-    "image_tags: max 5 strings. Prefer searchable proper nouns, model names, places, screens, error names,用途.",
-    "visible_text: key text only, up to about 120 chars.",
-    "Do not over-infer unknown numbers/specs.",
-  ].join("\n");
 }
 
 export async function POST(request: Request) {
@@ -44,6 +31,14 @@ export async function POST(request: Request) {
     const arrayBuffer = await image.arrayBuffer();
     const base64 = Buffer.from(arrayBuffer).toString("base64");
     const model = "gpt-4.1-nano";
+    let systemPrompt = buildAnalyzePrompt("image_analysis", createDefaultPromptConfig());
+    try {
+      systemPrompt = buildAnalyzePrompt("image_analysis", await loadPromptConfigFromDrive());
+    } catch (error) {
+      console.debug("[cgmp:image] prompt config fallback to default", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
 
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -58,7 +53,7 @@ export async function POST(request: Request) {
         messages: [
           {
             role: "system",
-            content: buildSystemPrompt(),
+            content: systemPrompt,
           },
           {
             role: "user",

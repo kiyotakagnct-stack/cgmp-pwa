@@ -6,7 +6,8 @@ export type CGMPPromptKey =
   | "content"
   | "tags_index"
   | "confirmation_summary"
-  | "classification";
+  | "classification"
+  | "image_analysis";
 
 export type CGMPPromptOverride = {
   key: CGMPPromptKey;
@@ -266,6 +267,48 @@ const PROMPT_DEFINITIONS: CGMPPromptDefinition[] = [
       "choose one para and one domain only. if unsure: para=area, domain=other.",
     ].join("\n"),
   },
+  {
+    key: "image_analysis",
+    label: "画像解析",
+    description: "写真・スクショ添付時の説明文、画像タグ、文字抽出の作り方です。",
+    defaultUserPrompt: [
+      "Analyze the attached image as context for a personal second-brain memo.",
+      "",
+      "Summary rules:",
+      "- summary_80 should be concise Japanese, around 80 characters.",
+      "- Describe what the image is useful for in the memo context.",
+      "- Prefer concrete object names, project names, screen names, document names, people/place names when visible.",
+      "- Do not over-infer hidden intent, unknown numbers, model names, specs, or conclusions.",
+      "- If the image is a whiteboard/document/screenshot, summarize the visible subject rather than saying only 写真 or スクリーンショット.",
+      "",
+      "Tag rules:",
+      "- image_tags should be max 5 searchable keywords.",
+      "- Prefer proper nouns, model names, issue names, document names, screen names, places, and visible target objects.",
+      "- Remove leading #.",
+      "- Avoid generic tags such as 写真, 画像, メモ, スクショ unless they are the only meaningful option.",
+      "- Preserve acronyms and product/model names exactly when visible.",
+      "",
+      "Visible text rules:",
+      "- visible_text should include only important visible text, up to about 120 characters.",
+      "- If there is too much text, extract only key phrases.",
+      "- If text is unreadable, leave visible_text empty instead of guessing.",
+      "",
+      "Classification rules:",
+      "- image_type should reflect the image itself: screenshot, document, whiteboard, object, scene, or other.",
+      "- confidence should be high only when the image content is clear.",
+    ].join("\n"),
+    hiddenContract: [
+      "You analyze one image for a Japanese second-brain app.",
+      "Return JSON only.",
+      'Return exactly: {"image_type":"screenshot","summary_80":"","image_tags":[],"visible_text":"","confidence":"medium"}',
+      "Allowed image_type: screenshot, document, whiteboard, object, scene, other.",
+      "Allowed confidence: high, medium, low.",
+      "summary_80 must be a concise Japanese summary.",
+      "image_tags must be an array of max 5 strings.",
+      "visible_text must be key visible text only.",
+      "Do not return markdown or explanations.",
+    ].join("\n"),
+  },
 ];
 
 export function getPromptDefinitions() {
@@ -330,4 +373,3 @@ export function buildAnalyzePrompt(key: CGMPPromptKey, config?: CGMPPromptConfig
     "No markdown. No comments. No extra text.",
   ].join("\n");
 }
-
