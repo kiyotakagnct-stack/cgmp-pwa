@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { loadPromptConfigFromDrive } from "@/lib/cgmp/drive-backup-server";
+import { buildAnalyzePrompt, createDefaultPromptConfig, type CGMPPromptConfigFile } from "@/lib/cgmp/prompt-config";
 
 export const runtime = "nodejs";
 
@@ -453,10 +455,12 @@ async function runSplitAnalysis({
   apiKey,
   model,
   userContent,
+  promptConfig,
 }: {
   apiKey: string;
   model: string;
   userContent: string;
+  promptConfig: CGMPPromptConfigFile;
 }): Promise<SplitAnalysis> {
   const [
     actionResult,
@@ -466,12 +470,12 @@ async function runSplitAnalysis({
     confirmationSummaryResult,
     classificationAttributesResult,
   ] = await Promise.all([
-    callOpenAIJson({ apiKey, model, userContent, prompt: buildActionPrompt() }),
-    callOpenAIJson({ apiKey, model, userContent, prompt: buildDatetimePrompt() }),
-    callOpenAIJson({ apiKey, model, userContent, prompt: buildContentPrompt() }),
-    callOpenAIJson({ apiKey, model, userContent, prompt: buildTagsIndexPrompt() }),
-    callOpenAIJson({ apiKey, model, userContent, prompt: buildConfirmationSummaryPrompt() }),
-    callOpenAIJson({ apiKey, model, userContent, prompt: buildClassificationAttributesPrompt() }),
+    callOpenAIJson({ apiKey, model, userContent, prompt: buildAnalyzePrompt("action", promptConfig) }),
+    callOpenAIJson({ apiKey, model, userContent, prompt: buildAnalyzePrompt("datetime", promptConfig) }),
+    callOpenAIJson({ apiKey, model, userContent, prompt: buildAnalyzePrompt("content", promptConfig) }),
+    callOpenAIJson({ apiKey, model, userContent, prompt: buildAnalyzePrompt("tags_index", promptConfig) }),
+    callOpenAIJson({ apiKey, model, userContent, prompt: buildAnalyzePrompt("confirmation_summary", promptConfig) }),
+    callOpenAIJson({ apiKey, model, userContent, prompt: buildAnalyzePrompt("classification", promptConfig) }),
   ]);
 
   return {
@@ -581,10 +585,18 @@ export async function POST(request: Request) {
     const model = String(body.model || process.env.OPENAI_MODEL || "gpt-4.1-nano").trim();
     const originalInputTime = normalizeInputTimeToJstStamp(body.input_at);
     const userContent = buildUserContent(originalInputTime, text);
+    let promptConfig = createDefaultPromptConfig();
+    try {
+      promptConfig = await loadPromptConfigFromDrive();
+    } catch (error) {
+      console.debug("[cgmp:analyze] prompt config fallback to default", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
 
     let split: SplitAnalysis;
     try {
-      split = await runSplitAnalysis({ apiKey, model, userContent });
+      split = await runSplitAnalysis({ apiKey, model, userContent, promptConfig });
     } catch (error) {
       return NextResponse.json(
         {

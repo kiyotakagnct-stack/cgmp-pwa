@@ -2,6 +2,11 @@ import crypto from "node:crypto";
 
 import type { CGMPDeletedRecord, CGMPRecord } from "./types";
 import type { ImageAttachment } from "@/types/image";
+import {
+  createDefaultPromptConfig,
+  normalizePromptConfig,
+  type CGMPPromptConfigFile,
+} from "./prompt-config";
 
 const DRIVE_API_BASE = "https://www.googleapis.com/drive/v3";
 const DRIVE_UPLOAD_BASE = "https://www.googleapis.com/upload/drive/v3";
@@ -735,5 +740,37 @@ export async function listBackedUpRecordDetails() {
   return {
     manifest,
     records: records.sort((a, b) => String(b.backed_up_at).localeCompare(String(a.backed_up_at))),
+  };
+}
+
+export async function loadPromptConfigFromDrive(): Promise<CGMPPromptConfigFile> {
+  const target = await getDriveBackupTarget();
+  const file = await findFileInParent("prompts.json", target.manifestParentId, {
+    spaces: target.mode === "appdata" ? APP_DATA_SPACE : undefined,
+  });
+  if (!file) return createDefaultPromptConfig();
+  const text = await readTextFile(file.id);
+  return normalizePromptConfig(JSON.parse(text || "{}"));
+}
+
+export async function savePromptConfigToDrive(config: CGMPPromptConfigFile) {
+  const target = await getDriveBackupTarget();
+  const normalized = normalizePromptConfig({
+    ...config,
+    updated_at: new Date().toISOString(),
+  });
+  const file = await findFileInParent("prompts.json", target.manifestParentId, {
+    spaces: target.mode === "appdata" ? APP_DATA_SPACE : undefined,
+  });
+  const saved = await upsertJsonFile(
+    "prompts.json",
+    JSON.stringify(normalized, null, 2),
+    target.manifestParentId,
+    file
+  );
+  return {
+    config: normalized,
+    fileId: saved.id,
+    updatedAt: normalized.updated_at,
   };
 }
