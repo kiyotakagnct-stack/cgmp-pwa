@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { after } from "next/server";
 
 import { createGoogleCalendarEventFromRecord, createGoogleTaskFromRecord } from "./google-external-server";
 import type { CGMPAnalysisResponse, CGMPRecord } from "./types";
@@ -264,6 +265,32 @@ function applyDriveBackupMetadata(
   };
 }
 
+function scheduleFinalDriveBackup(record: CGMPRecord, context: { source: string; clientRequestId: string }) {
+  after(async () => {
+    const startedAt = Date.now();
+    try {
+      const backup = await backupRecordToDrive(record);
+      console.info("[cgmp:shortcut-webhook] deferred final backup succeeded", {
+        source: context.source,
+        clientRequestId: context.clientRequestId,
+        recordId: record.id,
+        action: record.action,
+        driveFileId: backup.driveFileId,
+        elapsedMs: Date.now() - startedAt,
+      });
+    } catch (error) {
+      console.error("[cgmp:shortcut-webhook] deferred final backup failed", {
+        source: context.source,
+        clientRequestId: context.clientRequestId,
+        recordId: record.id,
+        action: record.action,
+        elapsedMs: Date.now() - startedAt,
+        error,
+      });
+    }
+  });
+}
+
 async function settleWithTiming<T>(promise: Promise<T>) {
   const startedAt = Date.now();
   try {
@@ -492,6 +519,28 @@ export async function createRecordFromShortcutWebhook({
   }
 
   const finalBackupStep = tracer.start("final_drive_backup", "外部ID反映バックアップ", "Google登録結果をrecordへ反映");
+  const needsExternalIdBackup = finalRecord.action === "calendar" || finalRecord.action === "reminder";
+  if (needsExternalIdBackup && initialBackupResult.status === "fulfilled") {
+    scheduleFinalDriveBackup(finalRecord, { source, clientRequestId });
+    finalBackupStep.skipped("レスポンス後に実行予約済み。Shortcutの応答は待たせません。");
+
+    console.info("[cgmp:shortcut-webhook] succeeded; final backup deferred", {
+      source,
+      clientRequestId,
+      recordId: finalRecord.id,
+      action: finalRecord.action,
+    });
+
+    return withTrace(
+      {
+        ...summarizeRecord(finalRecord),
+        source,
+        clientRequestId,
+      },
+      tracer.finish()
+    );
+  }
+
   try {
     const finalBackup = await backupRecordToDrive(finalRecord);
     finalRecord = applyDriveBackupMetadata(finalRecord, finalBackup);
