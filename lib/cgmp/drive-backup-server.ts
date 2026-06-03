@@ -7,8 +7,11 @@ const DRIVE_API_BASE = "https://www.googleapis.com/drive/v3";
 const DRIVE_UPLOAD_BASE = "https://www.googleapis.com/upload/drive/v3";
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const APP_DATA_SPACE = "appDataFolder";
+const DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder";
+const DEFAULT_BACKUP_FOLDER_NAME = "CGMP_Backup";
 const GOOGLE_OAUTH_SCOPES = [
   "https://www.googleapis.com/auth/drive.appdata",
+  "https://www.googleapis.com/auth/drive.file",
   "https://www.googleapis.com/auth/tasks",
   "https://www.googleapis.com/auth/calendar.events",
 ].join(" ");
@@ -17,6 +20,17 @@ type DriveFile = {
   id: string;
   name: string;
   modifiedTime?: string;
+  mimeType?: string;
+};
+
+type DriveBackupTarget = {
+  mode: "appdata" | "drive";
+  manifestParentId: string;
+  recordsParentId: string;
+  attachmentsParentId: string;
+  tombstonesParentId: string;
+  snapshotsParentId: string;
+  rootFolderId?: string;
 };
 
 type DriveManifest = {
@@ -147,6 +161,25 @@ async function driveFetch<T>(path: string, init: RequestInit = {}) {
   return payload as T;
 }
 
+async function driveJson<T>(path: string, init: RequestInit = {}) {
+  const accessToken = await getGoogleAccessToken();
+  const response = await fetch(`${DRIVE_API_BASE}${path}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+      ...(init.headers || {}),
+    },
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(typeof payload?.error?.message === "string" ? payload.error.message : "GOOGLE_DRIVE_REQUEST_FAILED");
+  }
+
+  return payload as T;
+}
+
 async function driveUpload<T>(path: string, metadata: Record<string, unknown>, body: string, mimeType: string, method = "POST") {
   const accessToken = await getGoogleAccessToken();
   const boundary = `cgmp_${crypto.randomUUID().replace(/-/g, "")}`;
@@ -223,15 +256,88 @@ function escapeDriveQuery(value: string) {
   return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 }
 
-async function findAppDataFile(name: string) {
-  const q = `name = '${escapeDriveQuery(name)}' and '${APP_DATA_SPACE}' in parents and trashed = false`;
+async function findFileInParent(
+  name: string,
+  parentId: string,
+  options: { spaces?: string; mimeType?: string } = {}
+) {
+  const mimeQuery = options.mimeType ? ` and mimeType = '${escapeDriveQuery(options.mimeType)}'` : "";
+  const q = `name = '${escapeDriveQuery(name)}' and '${escapeDriveQuery(parentId)}' in parents and trashed = false${mimeQuery}`;
   const params = new URLSearchParams({
-    spaces: APP_DATA_SPACE,
-    fields: "files(id,name,modifiedTime)",
+    fields: "files(id,name,mimeType,modifiedTime)",
     q,
   });
+  if (options.spaces) params.set("spaces", options.spaces);
   const payload = await driveFetch<{ files?: DriveFile[] }>(`/files?${params.toString()}`);
   return payload.files?.[0] || null;
+}
+
+async function createFolder(name: string, parentId?: string) {
+  const metadata: Record<string, unknown> = {
+    name,
+    mimeType: DRIVE_FOLDER_MIME,
+  };
+  if (parentId) metadata.parents = [parentId];
+  return driveJson<DriveFile>("/files?fields=id,name,mimeType,modifiedTime", {
+    method: "POST",
+    body: JSON.stringify(metadata),
+  });
+}
+
+async function ensureFolder(name: string, parentId?: string) {
+  const parent = parentId || "root";
+  const existing = await findFileInParent(name, parent, { mimeType: DRIVE_FOLDER_MIME });
+  if (existing) return existing;
+  return createFolder(name, parentId);
+}
+
+let driveBackupTargetCache: Promise<DriveBackupTarget> | null = null;
+
+function getBackupMode() {
+  const mode = String(process.env.GOOGLE_DRIVE_BACKUP_MODE || "").trim().toLowerCase();
+  if (mode === "drive") return "drive";
+  if (mode === "appdata") return "appdata";
+  return process.env.GOOGLE_DRIVE_BACKUP_FOLDER_ID?.trim() ? "drive" : "appdata";
+}
+
+async function resolveDriveBackupTarget(): Promise<DriveBackupTarget> {
+  const mode = getBackupMode();
+  if (mode === "appdata") {
+    return {
+      mode: "appdata",
+      manifestParentId: APP_DATA_SPACE,
+      recordsParentId: APP_DATA_SPACE,
+      attachmentsParentId: APP_DATA_SPACE,
+      tombstonesParentId: APP_DATA_SPACE,
+      snapshotsParentId: APP_DATA_SPACE,
+    };
+  }
+
+  const configuredRootId = process.env.GOOGLE_DRIVE_BACKUP_FOLDER_ID?.trim();
+  const rootFolder = configuredRootId
+    ? { id: configuredRootId, name: process.env.GOOGLE_DRIVE_BACKUP_FOLDER_NAME || DEFAULT_BACKUP_FOLDER_NAME }
+    : await ensureFolder(process.env.GOOGLE_DRIVE_BACKUP_FOLDER_NAME || DEFAULT_BACKUP_FOLDER_NAME);
+  const [recordsFolder, attachmentsFolder, tombstonesFolder, snapshotsFolder] = await Promise.all([
+    ensureFolder("records", rootFolder.id),
+    ensureFolder("attachments", rootFolder.id),
+    ensureFolder("tombstones", rootFolder.id),
+    ensureFolder("snapshots", rootFolder.id),
+  ]);
+
+  return {
+    mode: "drive",
+    rootFolderId: rootFolder.id,
+    manifestParentId: rootFolder.id,
+    recordsParentId: recordsFolder.id,
+    attachmentsParentId: attachmentsFolder.id,
+    tombstonesParentId: tombstonesFolder.id,
+    snapshotsParentId: snapshotsFolder.id,
+  };
+}
+
+async function getDriveBackupTarget() {
+  driveBackupTargetCache ||= resolveDriveBackupTarget();
+  return driveBackupTargetCache;
 }
 
 async function readTextFile(fileId: string) {
@@ -296,13 +402,21 @@ function checksumBuffer(value: Buffer) {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 
-async function upsertJsonFile(name: string, content: string, knownFile?: DriveFile | null) {
-  const existing = knownFile === undefined ? await findAppDataFile(name) : knownFile;
+async function upsertJsonFile(
+  name: string,
+  content: string,
+  parentId: string,
+  knownFile?: DriveFile | null
+) {
+  const existing =
+    knownFile === undefined
+      ? await findFileInParent(name, parentId, { spaces: parentId === APP_DATA_SPACE ? APP_DATA_SPACE : undefined })
+      : knownFile;
   const metadata = existing
     ? { name }
     : {
         name,
-        parents: [APP_DATA_SPACE],
+        parents: [parentId],
       };
 
   if (existing) {
@@ -323,13 +437,22 @@ async function upsertJsonFile(name: string, content: string, knownFile?: DriveFi
   );
 }
 
-async function upsertBinaryFile(name: string, content: Buffer, mimeType: string, knownFile?: DriveFile | null) {
-  const existing = knownFile === undefined ? await findAppDataFile(name) : knownFile;
+async function upsertBinaryFile(
+  name: string,
+  content: Buffer,
+  mimeType: string,
+  parentId: string,
+  knownFile?: DriveFile | null
+) {
+  const existing =
+    knownFile === undefined
+      ? await findFileInParent(name, parentId, { spaces: parentId === APP_DATA_SPACE ? APP_DATA_SPACE : undefined })
+      : knownFile;
   const metadata = existing
     ? { name }
     : {
         name,
-        parents: [APP_DATA_SPACE],
+        parents: [parentId],
       };
 
   if (existing) {
@@ -351,7 +474,10 @@ async function upsertBinaryFile(name: string, content: Buffer, mimeType: string,
 }
 
 async function loadManifest(): Promise<{ file: DriveFile | null; manifest: DriveManifest }> {
-  const file = await findAppDataFile("manifest.json");
+  const target = await getDriveBackupTarget();
+  const file = await findFileInParent("manifest.json", target.manifestParentId, {
+    spaces: target.mode === "appdata" ? APP_DATA_SPACE : undefined,
+  });
   if (!file) {
     return {
       file: null,
@@ -387,17 +513,22 @@ function knownDriveFile(id: string | undefined, name: string): DriveFile | undef
   return fileId ? { id: fileId, name } : undefined;
 }
 
-async function upsertJsonFileWithFallback(name: string, content: string, knownFile?: DriveFile | null) {
-  if (!knownFile) return upsertJsonFile(name, content);
+async function upsertJsonFileWithFallback(
+  name: string,
+  content: string,
+  parentId: string,
+  knownFile?: DriveFile | null
+) {
+  if (!knownFile) return upsertJsonFile(name, content, parentId);
   try {
-    return await upsertJsonFile(name, content, knownFile);
+    return await upsertJsonFile(name, content, parentId, knownFile);
   } catch (error) {
     console.debug("[cgmp:drive] known json file id failed, falling back to name lookup", {
       name,
       fileId: knownFile.id,
       error,
     });
-    return upsertJsonFile(name, content);
+    return upsertJsonFile(name, content, parentId);
   }
 }
 
@@ -405,40 +536,69 @@ async function upsertBinaryFileWithFallback(
   name: string,
   content: Buffer,
   mimeType: string,
+  parentId: string,
   knownFile?: DriveFile | null
 ) {
-  if (!knownFile) return upsertBinaryFile(name, content, mimeType);
+  if (!knownFile) return upsertBinaryFile(name, content, mimeType, parentId);
   try {
-    return await upsertBinaryFile(name, content, mimeType, knownFile);
+    return await upsertBinaryFile(name, content, mimeType, parentId, knownFile);
   } catch (error) {
     console.debug("[cgmp:drive] known binary file id failed, falling back to name lookup", {
       name,
       fileId: knownFile.id,
       error,
     });
-    return upsertBinaryFile(name, content, mimeType);
+    return upsertBinaryFile(name, content, mimeType, parentId);
   }
 }
 
 export async function backupDeletedRecordToDrive(tombstone: CGMPDeletedRecord) {
   const backedUpAt = new Date().toISOString();
+  const target = await getDriveBackupTarget();
   const { file, manifest } = await loadManifest();
+  const tombstoneFileName = `tombstone_${sanitizeFileComponent(tombstone.record_id)}.json`;
+  const tombstonePayload = JSON.stringify(
+    {
+      schema_version: 1,
+      kind: "cgmp_deleted_record",
+      tombstone: {
+        ...tombstone,
+        schema_version: 1,
+        deleted_at: tombstone.deleted_at || backedUpAt,
+      },
+    },
+    null,
+    2
+  );
+  const tombstoneFile = await upsertJsonFileWithFallback(
+    tombstoneFileName,
+    tombstonePayload,
+    target.tombstonesParentId,
+    knownDriveFile(tombstone.drive_file_id, tombstoneFileName)
+  );
   manifest.updated_at = backedUpAt;
   manifest.deleted_records = manifest.deleted_records || {};
   manifest.deleted_records[tombstone.record_id] = {
     ...tombstone,
     schema_version: 1,
     deleted_at: tombstone.deleted_at || backedUpAt,
+    drive_file_id: tombstoneFile.id,
   };
-  await upsertJsonFile("manifest.json", JSON.stringify(manifest, null, 2), file);
+  await upsertJsonFile("manifest.json", JSON.stringify(manifest, null, 2), target.manifestParentId, file);
   return { backedUpAt };
 }
 
 export async function backupRecordToDrive(record: CGMPRecord) {
+  const target = await getDriveBackupTarget();
   const content = stableRecordPayload(record);
   const recordChecksum = checksum(content);
   const fileName = `record_${record.id}.json`;
-  const recordFile = await upsertJsonFileWithFallback(fileName, content, knownDriveFile(record.drive_file_id, fileName));
+  const recordFile = await upsertJsonFileWithFallback(
+    fileName,
+    content,
+    target.recordsParentId,
+    knownDriveFile(record.drive_file_id, fileName)
+  );
 
   const backedUpAt = new Date().toISOString();
   const { file, manifest } = await loadManifest();
@@ -450,7 +610,7 @@ export async function backupRecordToDrive(record: CGMPRecord) {
     backed_up_at: backedUpAt,
   };
 
-  await upsertJsonFile("manifest.json", JSON.stringify(manifest, null, 2), file);
+  await upsertJsonFile("manifest.json", JSON.stringify(manifest, null, 2), target.manifestParentId, file);
 
   return {
     driveFileId: recordFile.id,
@@ -477,6 +637,7 @@ export async function backupAttachmentToDrive({
   preview: Buffer;
   thumbnail?: Buffer | null;
 }) {
+  const target = await getDriveBackupTarget();
   const safeRecordId = sanitizeFileComponent(recordId);
   const safeAttachmentId = sanitizeFileComponent(attachment.id);
   const previewFileName = `attachment_${safeRecordId}_${safeAttachmentId}_preview.jpg`;
@@ -484,6 +645,7 @@ export async function backupAttachmentToDrive({
     previewFileName,
     preview,
     "image/jpeg",
+    target.attachmentsParentId,
     knownDriveFile(attachment.previewDriveFileId, previewFileName)
   );
   let thumbnailFileId = "";
@@ -495,6 +657,7 @@ export async function backupAttachmentToDrive({
       thumbnailFileName,
       thumbnail,
       "image/jpeg",
+      target.attachmentsParentId,
       knownDriveFile(attachment.thumbnailDriveFileId, thumbnailFileName)
     );
     thumbnailFileId = thumbnailFile.id;
@@ -515,7 +678,7 @@ export async function backupAttachmentToDrive({
     backed_up_at: backedUpAt,
   };
 
-  await upsertJsonFile("manifest.json", JSON.stringify(manifest, null, 2), file);
+  await upsertJsonFile("manifest.json", JSON.stringify(manifest, null, 2), target.manifestParentId, file);
 
   return {
     previewDriveFileId: previewFile.id,
