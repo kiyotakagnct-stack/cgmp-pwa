@@ -226,11 +226,17 @@ function hasBackupAfterLatestUpdate(record: CGMPRecord) {
   return Number.isFinite(lastBackupAt) && Number.isFinite(updatedAt) && lastBackupAt >= updatedAt;
 }
 
-async function shouldSkipRecordUpload(record: CGMPRecord) {
+type BackupRunOptions = {
+  force?: boolean;
+};
+
+async function shouldSkipRecordUpload(record: CGMPRecord, options: BackupRunOptions = {}) {
   const checksum = await getRecordBackupChecksum(record);
   return {
     checksum,
-    skip: Boolean(record.backup_checksum && record.backup_checksum === checksum && hasBackupAfterLatestUpdate(record)),
+    skip: options.force
+      ? false
+      : Boolean(record.backup_checksum && record.backup_checksum === checksum && hasBackupAfterLatestUpdate(record)),
   };
 }
 
@@ -254,9 +260,9 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-async function backupRecord(record: CGMPRecord): Promise<BackupProcessItemResult> {
+async function backupRecord(record: CGMPRecord, options: BackupRunOptions = {}): Promise<BackupProcessItemResult> {
   const startedAt = performance.now();
-  const { skip, checksum } = await shouldSkipRecordUpload(record);
+  const { skip, checksum } = await shouldSkipRecordUpload(record, options);
   if (skip) {
     return {
       ok: true,
@@ -435,7 +441,7 @@ export async function backupAttachment(record: CGMPRecord, attachment: ImageAtta
   };
 }
 
-export async function processBackupQueue() {
+export async function processBackupQueue(options: BackupRunOptions = {}) {
   const [records, queue, tombstones] = await Promise.all([loadAllRecords(), loadBackupQueue(), loadDeletedRecords()]);
   const backupableRecords = records.filter((record) => record.ai_status !== "pending_ai");
   const recordIds = new Set(backupableRecords.map((record) => record.id));
@@ -492,14 +498,17 @@ export async function processBackupQueue() {
     .map(([recordId]) => recordId);
 
   const recordResults = await mapWithConcurrency(recordPlans, BACKUP_CONCURRENCY, (recordId) =>
-    processSingleRecordBackup(recordId, { respectRetry: true })
+    processSingleRecordBackup(recordId, { respectRetry: true, force: options.force })
   );
   results.push(...recordResults.flat());
 
   return results;
 }
 
-export async function processSingleRecordBackup(recordId: string, options: { respectRetry?: boolean } = {}) {
+export async function processSingleRecordBackup(
+  recordId: string,
+  options: { respectRetry?: boolean; force?: boolean } = {}
+) {
   const results: BackupProcessItemResult[] = [];
   const record = await loadLatestRecord(recordId);
   if (!record) {
@@ -533,7 +542,11 @@ export async function processSingleRecordBackup(recordId: string, options: { res
 
   for (const attachment of record.attachments || []) {
     const attachmentQueueId = `attachment:${record.id}:${attachment.id}`;
-    if (attachment.backup_status === "backed_up" && (attachment.previewDriveFileId || attachment.previewBlobPathname || attachment.previewBlobUrl)) {
+    if (
+      !options.force &&
+      attachment.backup_status === "backed_up" &&
+      (attachment.previewDriveFileId || attachment.previewBlobPathname || attachment.previewBlobUrl)
+    ) {
       await removeBackupQueueItem(attachmentQueueId);
       continue;
     }
@@ -621,7 +634,7 @@ export async function processSingleRecordBackup(recordId: string, options: { res
     updated_at: new Date().toISOString(),
   });
 
-  const recordResult = await backupRecord(latestRecord);
+  const recordResult = await backupRecord(latestRecord, { force: options.force });
   results.push(recordResult);
 
   if (recordResult.ok) {

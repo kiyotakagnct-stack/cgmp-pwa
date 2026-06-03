@@ -2427,7 +2427,7 @@ export default function Page() {
     setBackupProcessing(true);
     try {
       const processStartedAt = performance.now();
-      const results = await processSingleRecordBackup(recordId);
+      const results = await processSingleRecordBackup(recordId, { force: true });
       const processElapsedMs = Math.round(performance.now() - processStartedAt);
       const reloadStartedAt = performance.now();
       await Promise.all([reloadRecords(), reloadBackupSummary()]);
@@ -3067,7 +3067,7 @@ export default function Page() {
     setBackupProcessing(true);
     try {
       const queued = await enqueueAllRecordsForBackup();
-      const results = await processBackupQueue();
+      const results = await processBackupQueue({ force: true });
       await Promise.all([reloadRecords(), reloadBackupSummary()]);
       const failed = results.filter((result) => !result.ok).length;
       setNotice({
