@@ -4974,7 +4974,7 @@ export default function Page() {
                     </div>
                   )}
 
-                  <div className="sticky bottom-0 -mx-4 mt-5 flex flex-wrap justify-end gap-2 border-t border-[color:var(--border)] bg-[var(--card)]/95 px-4 py-3 backdrop-blur sm:-mx-5 sm:px-5">
+                  <div className="mt-5 flex flex-wrap justify-end gap-2 border-t border-[color:var(--border)] pt-4">
                     <button
                       type="button"
                       onClick={loadPromptConfigForEditor}
