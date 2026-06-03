@@ -228,6 +228,12 @@ function hasBackupAfterLatestUpdate(record: CGMPRecord) {
 
 type BackupRunOptions = {
   force?: boolean;
+  onProgress?: (progress: {
+    completed: number;
+    total: number;
+    currentTitle: string;
+    results: BackupProcessItemResult[];
+  }) => void;
 };
 
 async function shouldSkipRecordUpload(record: CGMPRecord, options: BackupRunOptions = {}) {
@@ -477,7 +483,18 @@ export async function processBackupQueue(options: BackupRunOptions = {}) {
     .filter((item) => item.drive_backup_status !== "backed_up")
     .filter((item) => isRetryDue(item.drive_backup_next_retry_at || ""));
 
-  const tombstoneResults = await mapWithConcurrency(dueTombstones, BACKUP_CONCURRENCY, processDeletedRecordBackup);
+  let completedUnits = 0;
+  const tombstoneResults = await mapWithConcurrency(dueTombstones, BACKUP_CONCURRENCY, async (tombstone) => {
+    const result = await processDeletedRecordBackup(tombstone);
+    completedUnits += 1;
+    options.onProgress?.({
+      completed: completedUnits,
+      total: Math.max(completedUnits, dueTombstones.length),
+      currentTitle: result.title || result.recordId,
+      results: [result],
+    });
+    return result;
+  });
   results.push(...tombstoneResults);
 
   const plannedRecordIds = new Map<string, string>();
@@ -497,9 +514,18 @@ export async function processBackupQueue(options: BackupRunOptions = {}) {
     .sort(([, leftCreatedAt], [, rightCreatedAt]) => leftCreatedAt.localeCompare(rightCreatedAt))
     .map(([recordId]) => recordId);
 
-  const recordResults = await mapWithConcurrency(recordPlans, BACKUP_CONCURRENCY, (recordId) =>
-    processSingleRecordBackup(recordId, { respectRetry: true, force: options.force })
-  );
+  const totalUnits = dueTombstones.length + recordPlans.length;
+  const recordResults = await mapWithConcurrency(recordPlans, BACKUP_CONCURRENCY, async (recordId) => {
+    const result = await processSingleRecordBackup(recordId, { respectRetry: true, force: options.force });
+    completedUnits += 1;
+    options.onProgress?.({
+      completed: completedUnits,
+      total: totalUnits,
+      currentTitle: result[0]?.title || recordId,
+      results: result,
+    });
+    return result;
+  });
   results.push(...recordResults.flat());
 
   return results;

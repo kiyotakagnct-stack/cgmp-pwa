@@ -2152,6 +2152,7 @@ export default function Page() {
   const [backupSummary, setBackupSummary] = useState<CGMPBackupSummary | null>(null);
   const [backupProcessing, setBackupProcessing] = useState(false);
   const [backupSyncProgress, setBackupSyncProgress] = useState<BackupSyncProgressState | null>(null);
+  const [backupProgressNow, setBackupProgressNow] = useState(0);
   const [driveBackupLoading, setDriveBackupLoading] = useState(false);
   const [driveImporting, setDriveImporting] = useState(false);
   const [driveBackupRecords, setDriveBackupRecords] = useState<DriveBackupRecordPreview[] | null>(null);
@@ -2287,7 +2288,28 @@ export default function Page() {
     setBackupProcessing(true);
     try {
       const processStartedAt = performance.now();
-      const results = await processBackupQueue();
+      const results = await processBackupQueue({
+        onProgress: (progress) => {
+          setBackupSyncProgress((current) => {
+            if (!current || current.phase !== "processing") return current;
+            const newItems = backupResultsToReportItems(progress.results);
+            const reportItems = [...current.reportItems, ...newItems];
+            const failed = reportItems.filter((item) => !item.ok).length;
+            const completed = Math.max(reportItems.length, progress.completed);
+            return {
+              ...current,
+              message: progress.currentTitle
+                ? `同期中: ${progress.currentTitle}（${progress.completed}/${progress.total}）`
+                : `Google Drive同期中（${progress.completed}/${progress.total}）`,
+              total: Math.max(current.total, progress.total, completed),
+              succeeded: reportItems.length - failed,
+              failed,
+              processElapsedMs: Math.round(performance.now() - processStartedAt),
+              reportItems,
+            };
+          });
+        },
+      });
       const processElapsedMs = Math.round(performance.now() - processStartedAt);
       const reloadStartedAt = performance.now();
       await Promise.all([reloadRecords(), reloadBackupSummary()]);
@@ -3104,7 +3126,29 @@ export default function Page() {
           : current
       );
       const processStartedAt = performance.now();
-      const results = await processBackupQueue({ force: true });
+      const results = await processBackupQueue({
+        force: true,
+        onProgress: (progress) => {
+          setBackupSyncProgress((current) => {
+            if (!current || current.phase !== "processing") return current;
+            const newItems = backupResultsToReportItems(progress.results);
+            const reportItems = [...current.reportItems, ...newItems];
+            const failed = reportItems.filter((item) => !item.ok).length;
+            const completed = Math.max(reportItems.length, progress.completed);
+            return {
+              ...current,
+              message: progress.currentTitle
+                ? `全件再同期中: ${progress.currentTitle}（${progress.completed}/${progress.total}）`
+                : `全件再同期中（${progress.completed}/${progress.total}）`,
+              total: Math.max(current.total, progress.total, completed),
+              succeeded: reportItems.length - failed,
+              failed,
+              processElapsedMs: Math.round(performance.now() - processStartedAt),
+              reportItems,
+            };
+          });
+        },
+      });
       const processElapsedMs = Math.round(performance.now() - processStartedAt);
       const reloadStartedAt = performance.now();
       await Promise.all([reloadRecords(), reloadBackupSummary()]);
@@ -3511,6 +3555,17 @@ export default function Page() {
 
     return () => window.clearInterval(timer);
   }, [aiProcessingOverlay]);
+
+  useEffect(() => {
+    if (!backupSyncProgress || backupSyncProgress.phase !== "processing") return;
+
+    setBackupProgressNow(performance.now());
+    const timer = window.setInterval(() => {
+      setBackupProgressNow(performance.now());
+    }, 100);
+
+    return () => window.clearInterval(timer);
+  }, [backupSyncProgress?.phase, backupSyncProgress?.startedAt]);
 
   useEffect(() => {
     return () => {
@@ -4560,7 +4615,9 @@ export default function Page() {
           <div className="fixed inset-0 z-[95] flex items-end justify-center bg-white/65 px-4 py-5 backdrop-blur-sm dark:bg-slate-950/55 sm:items-center">
             {(() => {
               const done = backupSyncProgress.phase === "done" || backupSyncProgress.phase === "error";
-              const elapsed = Math.round((backupSyncProgress.finishedAt || performance.now()) - backupSyncProgress.startedAt);
+              const elapsed = Math.round(
+                (backupSyncProgress.finishedAt || backupProgressNow || performance.now()) - backupSyncProgress.startedAt
+              );
               const detailItems =
                 backupSyncProgress.reportItems.length <= 20
                   ? backupSyncProgress.reportItems
