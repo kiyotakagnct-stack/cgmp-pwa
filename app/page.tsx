@@ -3063,13 +3063,98 @@ export default function Page() {
   }
 
   async function rebackupAllRecords() {
-    if (backupProcessing) return;
+    if (backupProcessing) {
+      const now = performance.now();
+      setBackupSyncProgress({
+        phase: "processing",
+        message: "別の同期が実行中です。完了後にもう一度試してください。",
+        startedAt: now,
+        total: 0,
+        succeeded: 0,
+        failed: 0,
+        processElapsedMs: 0,
+        reloadElapsedMs: 0,
+        reportItems: [],
+      });
+      return;
+    }
+
+    const startedAt = performance.now();
+    setBackupSyncProgress({
+      phase: "processing",
+      message: "全件をGoogle Driveへ再同期しています。",
+      startedAt,
+      total: 0,
+      succeeded: 0,
+      failed: 0,
+      processElapsedMs: 0,
+      reloadElapsedMs: 0,
+      reportItems: [],
+    });
     setBackupProcessing(true);
     try {
       const queued = await enqueueAllRecordsForBackup();
+      setBackupSyncProgress((current) =>
+        current
+          ? {
+              ...current,
+              message: `全件再同期の対象をキューに入れました（対象${queued}件）。`,
+              total: queued,
+            }
+          : current
+      );
+      const processStartedAt = performance.now();
       const results = await processBackupQueue({ force: true });
+      const processElapsedMs = Math.round(performance.now() - processStartedAt);
+      const reloadStartedAt = performance.now();
       await Promise.all([reloadRecords(), reloadBackupSummary()]);
+      const reloadElapsedMs = Math.round(performance.now() - reloadStartedAt);
       const failed = results.filter((result) => !result.ok).length;
+      const reportItems = backupResultsToReportItems(results);
+      const skipped = reportItems.filter((item) => item.skipped).length;
+      const finishedAt = performance.now();
+      console.table(
+        reportItems.map((item) => ({
+          title: item.title,
+          ok: item.ok,
+          skipped: item.skipped,
+          type: item.itemType,
+          attachment: item.attachmentId,
+          total_ms: item.elapsedMs,
+          blob_ms: item.blobElapsedMs,
+          upload_ms: item.uploadElapsedMs,
+          preview_kb: Math.round(item.previewSizeBytes / 1024),
+          error: item.error,
+        }))
+      );
+      console.debug("[cgmp:drive-sync:force-all] report", {
+        queued,
+        total: results.length,
+        succeeded: results.length - failed,
+        failed,
+        skipped,
+        processElapsedMs,
+        reloadElapsedMs,
+        totalElapsedMs: Math.round(finishedAt - startedAt),
+        slowest: [...reportItems].sort((a, b) => b.elapsedMs - a.elapsedMs).slice(0, 12),
+      });
+      setBackupSyncProgress({
+        phase: "done",
+        message:
+          failed > 0
+            ? `全件再同期で失敗があります（成功${results.length - failed} / 失敗${failed}）。`
+            : skipped > 0
+              ? `全件再同期が完了しました（成功${results.length - skipped} / スキップ${skipped}）。`
+              : `全件再同期が完了しました（処理${results.length}件）。`,
+        startedAt,
+        finishedAt,
+        total: results.length,
+        succeeded: results.length - failed,
+        failed,
+        processElapsedMs,
+        reloadElapsedMs,
+        reportItems,
+      });
       setNotice({
         kind: failed > 0 ? "error" : "info",
         text:
@@ -3078,6 +3163,18 @@ export default function Page() {
             : `全件再同期を実行しました（対象${queued}件 / 処理${results.length}件）。`,
       });
     } catch (error) {
+      setBackupSyncProgress({
+        phase: "error",
+        message: error instanceof Error ? error.message : "全件再同期に失敗しました",
+        startedAt,
+        finishedAt: performance.now(),
+        total: 0,
+        succeeded: 0,
+        failed: 1,
+        processElapsedMs: Math.round(performance.now() - startedAt),
+        reloadElapsedMs: 0,
+        reportItems: [],
+      });
       setNotice({
         kind: "error",
         text: error instanceof Error ? error.message : "全件再同期に失敗しました",
