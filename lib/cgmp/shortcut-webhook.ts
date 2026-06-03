@@ -195,7 +195,15 @@ async function analyzeTextViaExistingApi({
   return payload;
 }
 
+function isDriveDuplicateCheckEnabled() {
+  return String(process.env.SHORTCUT_WEBHOOK_DEDUPE || "").trim().toLowerCase() === "drive";
+}
+
 async function findExistingShortcutRecord(recordId: string) {
+  if (!isDriveDuplicateCheckEnabled()) {
+    return null;
+  }
+
   try {
     const details = await listBackedUpRecordDetails();
     const item = details.records.find((record) => record.id === recordId);
@@ -315,23 +323,27 @@ export async function createRecordFromShortcutWebhook({
   const recordId = clientRequestId ? createShortcutRecordId(clientRequestId) : undefined;
   if (recordId) {
     const duplicateStep = tracer.start("duplicate_lookup", "重複チェック", recordId);
-    const existing = await findExistingShortcutRecord(recordId);
-    if (existing) {
-      duplicateStep.success("既存recordあり。二重登録を回避しました。");
-      console.info("[cgmp:shortcut-webhook] duplicate skipped", {
-        clientRequestId,
-        recordId,
-      });
-      return withTrace(
-        {
-          ...summarizeRecord(existing, true),
-          source,
+    if (isDriveDuplicateCheckEnabled()) {
+      const existing = await findExistingShortcutRecord(recordId);
+      if (existing) {
+        duplicateStep.success("既存recordあり。二重登録を回避しました。");
+        console.info("[cgmp:shortcut-webhook] duplicate skipped", {
           clientRequestId,
-        },
-        tracer.finish()
-      );
+          recordId,
+        });
+        return withTrace(
+          {
+            ...summarizeRecord(existing, true),
+            source,
+            clientRequestId,
+          },
+          tracer.finish()
+        );
+      }
+      duplicateStep.success("重複なし");
+    } else {
+      duplicateStep.skipped("高速化のためスキップ。必要なら SHORTCUT_WEBHOOK_DEDUPE=drive で有効化。");
     }
-    duplicateStep.success("重複なし");
   }
 
   const aiStep = tracer.start("ai_analyze", "AI解析", "既存 /api/analyze を使用");
