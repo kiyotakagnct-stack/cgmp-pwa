@@ -5,13 +5,17 @@ import { createDefaultPromptConfig, getPromptDefinitions, normalizePromptConfig 
 
 export const runtime = "nodejs";
 
+function getClientPromptDefinitions() {
+  return getPromptDefinitions().map(({ hiddenContract: _hiddenContract, ...definition }) => definition);
+}
+
 export async function GET() {
   try {
     const config = await loadPromptConfigFromDrive();
     return NextResponse.json({
       ok: true,
       source: "drive",
-      definitions: getPromptDefinitions(),
+      definitions: getClientPromptDefinitions(),
       config,
     });
   } catch (error) {
@@ -19,7 +23,7 @@ export async function GET() {
       ok: true,
       source: "default",
       error: error instanceof Error ? error.message : "PROMPT_CONFIG_LOAD_FAILED",
-      definitions: getPromptDefinitions(),
+      definitions: getClientPromptDefinitions(),
       config: createDefaultPromptConfig(),
     });
   }
@@ -36,7 +40,7 @@ export async function PUT(request: Request) {
       fileId: saved.fileId,
       updatedAt: saved.updatedAt,
       config: saved.config,
-      definitions: getPromptDefinitions(),
+      definitions: getClientPromptDefinitions(),
     });
   } catch (error) {
     return NextResponse.json(

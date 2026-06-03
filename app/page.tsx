@@ -53,6 +53,7 @@ import type {
   CGMPSettings,
   CGMPSemanticSearchResultMode,
 } from "@/lib/cgmp/types";
+import type { CGMPPromptConfigFile, CGMPPromptDefinition, CGMPPromptKey } from "@/lib/cgmp/prompt-config";
 import {
   createId,
   formatJstDateTime,
@@ -72,6 +73,7 @@ type SearchMode = "text" | "semantic";
 type ThemeMode = "system" | "light" | "dark";
 type Notice = { kind: "info" | "error"; text: string } | null;
 type LightboxState = { imageUrl: string; title: string } | null;
+type PromptEditorDefinition = Omit<CGMPPromptDefinition, "hiddenContract">;
 type AiProcessingOverlayState = {
   id: number;
   kind: "text" | "image";
@@ -2138,6 +2140,13 @@ export default function Page() {
   const [composeLoading, setComposeLoading] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState<CGMPSettings | null>(null);
   const [settingsSaving, setSettingsSaving] = useState(false);
+  const [isPromptEditorOpen, setIsPromptEditorOpen] = useState(false);
+  const [promptDefinitions, setPromptDefinitions] = useState<PromptEditorDefinition[]>([]);
+  const [promptConfigDraft, setPromptConfigDraft] = useState<CGMPPromptConfigFile | null>(null);
+  const [promptConfigLoading, setPromptConfigLoading] = useState(false);
+  const [promptConfigSaving, setPromptConfigSaving] = useState(false);
+  const [promptConfigError, setPromptConfigError] = useState("");
+  const [activePromptKey, setActivePromptKey] = useState<CGMPPromptKey>("action");
   const [detailDraft, setDetailDraft] = useState<RecordFormState | null>(null);
   const [detailSaving, setDetailSaving] = useState(false);
   const [detailDeleting, setDetailDeleting] = useState(false);
@@ -4356,6 +4365,97 @@ export default function Page() {
     }
   }
 
+  async function loadPromptConfigForEditor() {
+    setPromptConfigLoading(true);
+    setPromptConfigError("");
+    try {
+      const response = await fetch("/api/prompts");
+      const payload = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        source?: string;
+        error?: string;
+        definitions?: PromptEditorDefinition[];
+        config?: CGMPPromptConfigFile;
+      };
+      if (!response.ok || !payload.config || !payload.definitions) {
+        throw new Error(payload.error || "PROMPT_CONFIG_LOAD_FAILED");
+      }
+      setPromptDefinitions(payload.definitions);
+      setPromptConfigDraft(payload.config);
+      setActivePromptKey(payload.definitions[0]?.key || "action");
+      setPromptConfigError(payload.error || "");
+    } catch (error) {
+      setPromptConfigError(error instanceof Error ? error.message : "プロンプト設定の読み込みに失敗しました");
+    } finally {
+      setPromptConfigLoading(false);
+    }
+  }
+
+  function openPromptEditor() {
+    setIsPromptEditorOpen(true);
+    if (!promptConfigDraft && !promptConfigLoading) {
+      void loadPromptConfigForEditor();
+    }
+  }
+
+  function updatePromptDraft(key: CGMPPromptKey, userPrompt: string) {
+    setPromptConfigDraft((current) => {
+      if (!current) return current;
+      const now = new Date().toISOString();
+      return {
+        ...current,
+        updated_at: now,
+        prompts: {
+          ...current.prompts,
+          [key]: {
+            key,
+            userPrompt,
+            updated_at: now,
+          },
+        },
+      };
+    });
+  }
+
+  function resetActivePromptToDefault() {
+    const definition = promptDefinitions.find((item) => item.key === activePromptKey);
+    if (!definition) return;
+    updatePromptDraft(activePromptKey, definition.defaultUserPrompt);
+  }
+
+  async function savePromptConfig() {
+    if (!promptConfigDraft) return;
+    setPromptConfigSaving(true);
+    setPromptConfigError("");
+    try {
+      const response = await fetch("/api/prompts", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ config: promptConfigDraft }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        definitions?: PromptEditorDefinition[];
+        config?: CGMPPromptConfigFile;
+      };
+      if (!response.ok || !payload.ok || !payload.config) {
+        throw new Error(payload.error || "PROMPT_CONFIG_SAVE_FAILED");
+      }
+      setPromptConfigDraft(payload.config);
+      if (payload.definitions) setPromptDefinitions(payload.definitions);
+      setNotice({ kind: "info", text: "AIプロンプトをGoogle Driveへ保存しました。" });
+    } catch (error) {
+      setPromptConfigError(error instanceof Error ? error.message : "AIプロンプト保存に失敗しました");
+      setNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : "AIプロンプト保存に失敗しました",
+      });
+    } finally {
+      setPromptConfigSaving(false);
+    }
+  }
+
   async function handleClearAll() {
     const confirmed = window.confirm("全ての記録を削除しますか？ この操作は戻せません。");
     if (!confirmed) return;
@@ -4746,6 +4846,133 @@ export default function Page() {
           </div>
         ) : null}
 
+        {isPromptEditorOpen ? (
+          <div className="fixed inset-0 z-[96] flex items-end justify-center bg-white/70 px-4 py-5 backdrop-blur-sm dark:bg-slate-950/60 sm:items-center">
+            {(() => {
+              const activeDefinition =
+                promptDefinitions.find((item) => item.key === activePromptKey) || promptDefinitions[0] || null;
+              const activePrompt = activeDefinition
+                ? promptConfigDraft?.prompts?.[activeDefinition.key]?.userPrompt || activeDefinition.defaultUserPrompt
+                : "";
+              return (
+                <section className="flex max-h-[90dvh] w-full max-w-5xl flex-col rounded-[28px] border border-[color:var(--border)] bg-[var(--card)] p-5 shadow-[0_28px_90px_var(--shadow-soft)]">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="section-eyebrow">Prompt Settings</div>
+                      <h2 className="mt-2 text-2xl font-semibold text-[var(--text)]">AIプロンプト編集</h2>
+                      <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                        ここではAIの判断方針だけを編集します。JSON形式・必須フィールド・余計な文章禁止などの出力制約は非表示で固定しています。
+                      </p>
+                    </div>
+                    <button type="button" onClick={() => setIsPromptEditorOpen(false)} className={secondaryButtonClass}>
+                      閉じる
+                    </button>
+                  </div>
+
+                  {promptConfigError ? (
+                    <div className="mt-4 rounded-2xl border border-[color:var(--danger)] bg-[var(--danger-soft)] px-4 py-3 text-sm text-[var(--danger)]">
+                      {promptConfigError}
+                    </div>
+                  ) : null}
+
+                  {promptConfigLoading ? (
+                    <div className="mt-5 flex min-h-64 items-center justify-center rounded-3xl border border-[color:var(--border)] bg-[var(--card-soft)] text-sm text-[var(--muted)]">
+                      Google Driveからプロンプト設定を読み込み中...
+                    </div>
+                  ) : (
+                    <div className="mt-5 grid min-h-0 gap-4 md:grid-cols-[240px_minmax(0,1fr)]">
+                      <div className="max-h-[56dvh] space-y-2 overflow-auto rounded-3xl border border-[color:var(--border)] bg-[var(--card-soft)] p-2">
+                        {promptDefinitions.length > 0 ? (
+                          promptDefinitions.map((definition) => {
+                            const isActive = activeDefinition?.key === definition.key;
+                            return (
+                              <button
+                                key={definition.key}
+                                type="button"
+                                onClick={() => setActivePromptKey(definition.key)}
+                                className={`w-full rounded-2xl border px-3 py-3 text-left transition ${
+                                  isActive
+                                    ? "border-[color:var(--accent)] bg-[color:var(--accent-soft)] text-[var(--text)]"
+                                    : "border-transparent text-[var(--muted)] hover:border-[color:var(--border)] hover:bg-[var(--card)]"
+                                }`}
+                              >
+                                <span className="block text-sm font-semibold">{definition.label}</span>
+                                <span className="mt-1 block text-xs leading-5">{definition.description}</span>
+                              </button>
+                            );
+                          })
+                        ) : (
+                          <div className="px-3 py-8 text-center text-sm text-[var(--muted)]">
+                            プロンプト項目が読み込まれていません。
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="min-h-0 rounded-3xl border border-[color:var(--border)] bg-[var(--card-soft)] p-4">
+                        {activeDefinition ? (
+                          <>
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div>
+                                <h3 className="text-lg font-semibold text-[var(--text)]">{activeDefinition.label}</h3>
+                                <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
+                                  {activeDefinition.description}
+                                </p>
+                              </div>
+                              <button type="button" onClick={resetActivePromptToDefault} className={secondaryButtonClass}>
+                                初期値へ
+                              </button>
+                            </div>
+                            <textarea
+                              value={activePrompt}
+                              onChange={(event) => updatePromptDraft(activeDefinition.key, event.target.value)}
+                              className="mt-4 min-h-[44dvh] w-full resize-y rounded-3xl border border-[color:var(--border)] bg-[var(--card)] px-4 py-4 font-mono text-sm leading-6 text-[var(--text)] outline-none transition focus:border-[color:var(--accent)] focus:ring-4 focus:ring-[color:var(--accent-ring)]"
+                              placeholder="AIに守らせたい判断方針を書きます"
+                              spellCheck={false}
+                            />
+                            <p className="mt-3 text-xs leading-5 text-[var(--subtle)]">
+                              保存先はGoogle Driveの `CGMP_Backup/prompts.json` です。AI解析時はこのテキストに、アプリ固定の出力契約を合成して使います。
+                            </p>
+                          </>
+                        ) : (
+                          <div className="flex min-h-64 items-center justify-center text-sm text-[var(--muted)]">
+                            左の項目を選択してください。
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mt-5 flex flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={loadPromptConfigForEditor}
+                      disabled={promptConfigLoading || promptConfigSaving}
+                      className={secondaryButtonClass}
+                    >
+                      Driveから再読込
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsPromptEditorOpen(false)}
+                      className={secondaryButtonClass}
+                    >
+                      キャンセル
+                    </button>
+                    <button
+                      type="button"
+                      onClick={savePromptConfig}
+                      disabled={!promptConfigDraft || promptConfigLoading || promptConfigSaving}
+                      className={primaryButtonClass}
+                    >
+                      {promptConfigSaving ? "保存中..." : "Google Driveへ保存"}
+                    </button>
+                  </div>
+                </section>
+              );
+            })()}
+          </div>
+        ) : null}
+
         {tab === "home" ? (
           <div className="grid min-w-0 gap-3 sm:gap-4">
             <section className={panelClass}>
@@ -5104,6 +5331,17 @@ export default function Page() {
                   <p className="text-sm leading-6 text-slate-600">
                     Vercel では `OPENAI_API_KEY` と Google連携用の環境変数を設定してください。クライアント側には渡しません。
                   </p>
+                </div>
+                <div className={softPanelClass}>
+                  <div className="text-sm font-medium text-[var(--text)]">AIプロンプト</div>
+                  <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                    Title、Summary、Action分類などの方針テキストを編集します。JSON形式などの出力制約はアプリ側で隠して保持します。
+                  </p>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button type="button" onClick={openPromptEditor} className={secondaryButtonClass}>
+                      AIプロンプトを編集
+                    </button>
+                  </div>
                 </div>
                 <div className={softPanelClass}>
                   <div className="text-sm font-medium text-[var(--text)]">意味検索インデックス</div>
