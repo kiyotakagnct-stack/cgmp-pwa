@@ -749,13 +749,13 @@ const DOMAIN_SYMBOLS: Record<Exclude<CGMPDomain, "">, string> = {
 
 const DOMAIN_FILTER_OPTIONS: Array<{ value: Exclude<CGMPDomain, "">; label: string }> = [
   { value: "work", label: "work" },
+  { value: "life_admin", label: "admin" },
   { value: "family", label: "fam" },
   { value: "self", label: "self" },
   { value: "health", label: "hlth" },
   { value: "finance", label: "fin" },
   { value: "learning", label: "learn" },
   { value: "creation", label: "make" },
-  { value: "life_admin", label: "admin" },
   { value: "other", label: "other" },
 ];
 
@@ -1368,7 +1368,7 @@ function RecordCard({
   onDeleteAttachment,
   onAddPhotos,
   onSyncOne,
-  onAnalyzeDraft,
+  onAnalyzeRecord,
   onShowBadgeInfo,
   externalProcessingKey = "",
   isPhotoProcessing = false,
@@ -1389,7 +1389,7 @@ function RecordCard({
   onDeleteAttachment: (recordId: string, attachmentId: string) => void;
   onAddPhotos: (recordId: string, files: File[]) => void;
   onSyncOne: (recordId: string) => void;
-  onAnalyzeDraft: (recordId: string) => void;
+  onAnalyzeRecord: (recordId: string) => void;
   onShowBadgeInfo: (info: NonNullable<BadgeInfo>) => void;
   externalProcessingKey?: string;
   isPhotoProcessing?: boolean;
@@ -1406,7 +1406,7 @@ function RecordCard({
   const photoBackupBadge = getPhotoBackupBadge(record);
   const taskProcessing = externalProcessingKey === `task:${record.id}` || externalProcessingKey === `task-status:${record.id}`;
   const calendarProcessing = externalProcessingKey === `calendar:${record.id}`;
-  const draftProcessing = externalProcessingKey === `draft-ai:${record.id}`;
+  const aiProcessing = externalProcessingKey === `draft-ai:${record.id}`;
   const isDraft = record.ai_status === "pending_ai";
   const isTaskRegistered = Boolean(record.google_task_id && record.google_task_list_id);
   const isCalendarRegistered = Boolean(record.google_calendar_event_id);
@@ -1507,18 +1507,30 @@ function RecordCard({
             {isDraft ? (
               <button
                 type="button"
-                disabled={draftProcessing}
+                disabled={aiProcessing}
                 onClick={(event) => {
                   event.stopPropagation();
-                  onAnalyzeDraft(record.id);
+                  onAnalyzeRecord(record.id);
                 }}
                 onKeyDown={(event) => event.stopPropagation()}
                 className="whitespace-nowrap rounded-full border border-[color:var(--accent)] bg-[var(--accent)] px-3 py-1 text-[11px] font-semibold text-[var(--accent-contrast)] shadow-[0_6px_16px_var(--shadow-soft)] transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {draftProcessing ? "解析中..." : "AI解析"}
+                {aiProcessing ? "解析中..." : "AI解析"}
               </button>
             ) : (
               <>
+                <button
+                  type="button"
+                  disabled={aiProcessing}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onAnalyzeRecord(record.id);
+                  }}
+                  onKeyDown={(event) => event.stopPropagation()}
+                  className="whitespace-nowrap rounded-full border border-[color:var(--accent)] bg-[var(--accent)] px-2.5 py-1 text-[11px] font-semibold text-[var(--accent-contrast)] shadow-[0_6px_16px_var(--shadow-soft)] transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {aiProcessing ? "解析中..." : "AI解析"}
+                </button>
                 <button
                   type="button"
                   disabled={isBackupProcessing}
@@ -1606,15 +1618,28 @@ function RecordCard({
                     type="button"
                     onClick={(event) => {
                       event.stopPropagation();
-                      onAnalyzeDraft(record.id);
+                      onAnalyzeRecord(record.id);
                     }}
                     onKeyDown={(event) => event.stopPropagation()}
                     className="rounded-xl border border-[color:var(--accent)] bg-[var(--accent)] px-3 py-1.5 text-xs font-semibold text-[var(--accent-contrast)] transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
-                    disabled={draftProcessing}
+                    disabled={aiProcessing}
                   >
-                    {draftProcessing ? "解析中..." : "AI解析"}
+                    {aiProcessing ? "解析中..." : "AI解析"}
                   </button>
-                ) : null}
+                ) : (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onAnalyzeRecord(record.id);
+                    }}
+                    onKeyDown={(event) => event.stopPropagation()}
+                    className="rounded-xl border border-[color:var(--accent)] bg-[var(--accent)] px-3 py-1.5 text-xs font-semibold text-[var(--accent-contrast)] transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={aiProcessing}
+                  >
+                    {aiProcessing ? "解析中..." : "AI解析"}
+                  </button>
+                )}
                 {!isDraft && record.action === "reminder" ? (
                   isTaskRegistered ? (
                     <button
@@ -2258,6 +2283,7 @@ export default function Page() {
   const [deletedRecordsSummary, setDeletedRecordsSummary] = useState<DeletedRecordsSummary | null>(null);
   const [checkedRecordIds, setCheckedRecordIds] = useState<string[]>([]);
   const [lightbox, setLightbox] = useState<LightboxState>(null);
+  const deployInfoRequestIdRef = useRef(0);
   const [photoProcessingCount, setPhotoProcessingCount] = useState(0);
   const [externalProcessingKey, setExternalProcessingKey] = useState("");
   const [externalConfirm, setExternalConfirm] = useState<ExternalConfirmState>(null);
@@ -3678,29 +3704,49 @@ export default function Page() {
   }, [notice]);
 
   useEffect(() => {
-    if (tab !== "settings" || deployInfo || deployInfoLoading) return;
-    let cancelled = false;
+    if (tab !== "settings" || deployInfo) return;
+    const requestId = deployInfoRequestIdRef.current + 1;
+    deployInfoRequestIdRef.current = requestId;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 8000);
+
     setDeployInfoLoading(true);
-    fetch("/api/deploy-info")
-      .then((response) => response.json())
-      .then((payload: DeployInfo) => {
-        if (!cancelled) setDeployInfo(payload);
-      })
-      .catch((error) => {
-        if (!cancelled) {
+
+    void (async () => {
+      try {
+        const response = await fetch("/api/deploy-info", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const payload = (await response.json().catch(() => ({}))) as DeployInfo & { message?: string };
+        if (!response.ok) {
+          throw new Error(payload.message || `更新情報を取得できませんでした (${response.status})`);
+        }
+        if (deployInfoRequestIdRef.current === requestId) setDeployInfo(payload);
+      } catch (error) {
+        if (deployInfoRequestIdRef.current === requestId) {
+          const isAbortError = error instanceof DOMException && error.name === "AbortError";
           setDeployInfo({
             ok: false,
-            commitMessage: error instanceof Error ? error.message : "更新情報を取得できませんでした",
+            commitMessage: isAbortError
+              ? "更新情報の取得がタイムアウトしました。"
+              : error instanceof Error
+                ? error.message
+                : "更新情報を取得できませんでした",
+            generatedAt: new Date().toISOString(),
           });
         }
-      })
-      .finally(() => {
-        if (!cancelled) setDeployInfoLoading(false);
-      });
+      } finally {
+        window.clearTimeout(timeout);
+        if (deployInfoRequestIdRef.current === requestId) setDeployInfoLoading(false);
+      }
+    })();
+
     return () => {
-      cancelled = true;
+      controller.abort();
+      window.clearTimeout(timeout);
     };
-  }, [deployInfo, deployInfoLoading, tab]);
+  }, [deployInfo, tab]);
 
   useEffect(() => {
     if (!isPromptEditorOpen) return;
@@ -4280,27 +4326,28 @@ export default function Page() {
     }
   }
 
-  async function analyzeDraftRecord(recordId: string) {
+  async function analyzeRecordWithAI(recordId: string) {
     if (externalProcessingKey) return;
     const latestRecords = await loadAllRecords();
-    const draftRecord = latestRecords.find((record) => record.id === recordId);
-    if (!draftRecord) {
-      setNotice({ kind: "error", text: "下書きが見つかりません。" });
+    const targetRecord = latestRecords.find((record) => record.id === recordId);
+    if (!targetRecord) {
+      setNotice({ kind: "error", text: "メモが見つかりません。" });
       return;
     }
-    const rawInput = draftRecord.raw_input.trim();
+    const isDraftRecord = targetRecord.ai_status === "pending_ai";
+    const rawInput = targetRecord.raw_input.trim();
     if (!rawInput) {
-      setNotice({ kind: "error", text: "下書きのRaw inputが空です。" });
+      setNotice({ kind: "error", text: "Raw inputが空です。" });
       return;
     }
 
     setExternalProcessingKey(`draft-ai:${recordId}`);
-    const processingId = beginAiProcessing("text", "下書きAI解析中");
+    const processingId = beginAiProcessing("text", isDraftRecord ? "下書きAI解析中" : "メモAI再解析中");
     try {
       const payload = await requestTextAnalysis(rawInput);
-      const analyzedForm = applyAnalysisToDraft(formFromRecord(draftRecord), rawInput, payload.result);
+      const analyzedForm = applyAnalysisToDraft(formFromRecord(targetRecord), rawInput, payload.result);
       const nextRecord = formToRecord(analyzedForm, {
-        existing: draftRecord,
+        existing: targetRecord,
         aiStatus: "done",
         aiError: "",
         aiMeta: {
@@ -4316,7 +4363,10 @@ export default function Page() {
         backup_next_retry_at: "",
       });
       await Promise.all([reloadRecords(savedRecord.id), reloadBackupSummary()]);
-      setNotice({ kind: "info", text: "下書きをAI解析して通常メモにしました。" });
+      setNotice({
+        kind: "info",
+        text: isDraftRecord ? "下書きをAI解析して通常メモにしました。" : "メモをAI再解析しました。",
+      });
       if (savedRecord.action === "reminder") {
         setExternalConfirm({ recordId: savedRecord.id, action: "reminder", title: savedRecord.title || "（無題）" });
       } else if (savedRecord.action === "calendar") {
@@ -4325,20 +4375,32 @@ export default function Page() {
       window.setTimeout(() => {
         void runBackupQueue(false);
       }, 0);
-      window.setTimeout(() => {
-        void suggestRelatedRecords(savedRecord);
-      }, 0);
+      void suggestRelatedRecords(savedRecord);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "下書きのAI解析に失敗しました";
-      const failedDraft = await putRecordWithoutBackup({
-        ...draftRecord,
-        ai_status: "pending_ai",
-        ai_error: message,
-        backup_status: "local_only",
-        updated_at: draftRecord.updated_at,
-      });
-      setRecords((current) => current.map((record) => (record.id === failedDraft.id ? failedDraft : record)));
-      setNotice({ kind: "error", text: `下書きのAI解析に失敗しました: ${message}` });
+      const message = error instanceof Error ? error.message : "AI解析に失敗しました";
+      if (isDraftRecord) {
+        const failedDraft = await putRecordWithoutBackup({
+          ...targetRecord,
+          ai_status: "pending_ai",
+          ai_error: message,
+          backup_status: "local_only",
+          updated_at: targetRecord.updated_at,
+        });
+        setRecords((current) => current.map((record) => (record.id === failedDraft.id ? failedDraft : record)));
+        setNotice({ kind: "error", text: `下書きのAI解析に失敗しました: ${message}` });
+      } else {
+        const failedRecord = await upsertRecord({
+          ...targetRecord,
+          ai_status: "error",
+          ai_error: message,
+          backup_status: targetRecord.backup_status === "local_only" ? "local_only" : "pending_backup",
+          backup_last_error: "",
+          backup_next_retry_at: "",
+          updated_at: targetRecord.updated_at,
+        });
+        setRecords((current) => current.map((record) => (record.id === failedRecord.id ? failedRecord : record)));
+        setNotice({ kind: "error", text: `メモのAI再解析に失敗しました: ${message}` });
+      }
     } finally {
       finishAiProcessing(processingId);
       setExternalProcessingKey("");
@@ -4353,20 +4415,18 @@ export default function Page() {
     });
 
     try {
-      await upsertRecord(nextRecord);
-      await reloadRecords(nextRecord.id);
+      const savedRecord = await upsertRecord(nextRecord);
+      void suggestRelatedRecords(savedRecord);
+      await reloadRecords(savedRecord.id);
       await reloadBackupSummary();
       setNotice({ kind: "info", text: "保存しました。" });
-      if (nextRecord.action === "reminder") {
-        setExternalConfirm({ recordId: nextRecord.id, action: "reminder", title: nextRecord.title || "（無題）" });
-      } else if (nextRecord.action === "calendar") {
-        setExternalConfirm({ recordId: nextRecord.id, action: "calendar", title: nextRecord.title || "（無題）" });
+      if (savedRecord.action === "reminder") {
+        setExternalConfirm({ recordId: savedRecord.id, action: "reminder", title: savedRecord.title || "（無題）" });
+      } else if (savedRecord.action === "calendar") {
+        setExternalConfirm({ recordId: savedRecord.id, action: "calendar", title: savedRecord.title || "（無題）" });
       }
       window.setTimeout(() => {
         void runBackupQueue(false);
-      }, 0);
-      window.setTimeout(() => {
-        void suggestRelatedRecords(nextRecord);
       }, 0);
       setComposeDraft(blankForm(""));
       setComposeAiStatus("none");
@@ -5358,9 +5418,6 @@ export default function Page() {
 
               <div className="mt-3 min-w-0">
                 <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                  <span className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.22em] text-[var(--subtle)]">
-                    Domain
-                  </span>
                   {DOMAIN_FILTER_OPTIONS.map((item) => {
                     const isActive = domainFilter === item.value;
                     const color = getDomainColorVar(item.value);
@@ -5487,7 +5544,7 @@ export default function Page() {
                     onDeleteAttachment={handleDeleteAttachment}
                     onAddPhotos={handleAddPhotos}
                     onSyncOne={runSingleRecordBackup}
-                    onAnalyzeDraft={analyzeDraftRecord}
+                    onAnalyzeRecord={analyzeRecordWithAI}
                     onShowBadgeInfo={setBadgeInfo}
                     externalProcessingKey={externalProcessingKey}
                     isPhotoProcessing={photoProcessingCount > 0}

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { MouseEvent } from "react";
 
 import { ImageHydrationError, getOrHydrateAttachmentImageBlob } from "@/lib/cgmp/image-hydration";
 import type { ImageAttachment } from "@/types/image";
@@ -62,6 +63,7 @@ export function ImageAttachmentCard({
   const [imageState, setImageState] = useState<"loading" | "hydrating" | "ready" | "missing" | "failed">("loading");
   const [imageError, setImageError] = useState("");
   const [retryToken, setRetryToken] = useState(0);
+  const previewOpenUrlRef = useRef("");
 
   useEffect(() => {
     let revoked = false;
@@ -117,14 +119,43 @@ export function ImageAttachmentCard({
     };
   }, [attachment, compact, retryToken]);
 
+  useEffect(() => {
+    return () => {
+      if (previewOpenUrlRef.current) URL.revokeObjectURL(previewOpenUrlRef.current);
+    };
+  }, []);
+
+  const openPreviewImage = useCallback(
+    async (event?: MouseEvent<HTMLButtonElement>) => {
+      event?.stopPropagation();
+      if (!onOpen) return;
+
+      try {
+        const result = await getOrHydrateAttachmentImageBlob({ attachment, compact: false });
+        if (result.blob) {
+          if (previewOpenUrlRef.current) URL.revokeObjectURL(previewOpenUrlRef.current);
+          const previewUrl = URL.createObjectURL(result.blob);
+          previewOpenUrlRef.current = previewUrl;
+          onOpen(attachment, previewUrl);
+          return;
+        }
+      } catch (error) {
+        console.debug("[cgmp:image] preview open failed; falling back to visible image", {
+          attachmentId: attachment.id,
+          error,
+        });
+      }
+
+      if (imageUrl) onOpen(attachment, imageUrl);
+    },
+    [attachment, imageUrl, onOpen]
+  );
+
   if (compact) {
     return (
       <button
         type="button"
-        onClick={(event) => {
-          event.stopPropagation();
-          if (imageUrl) onOpen?.(attachment, imageUrl);
-        }}
+        onClick={(event) => void openPreviewImage(event)}
         className="relative h-20 w-20 overflow-hidden rounded-2xl border border-slate-200 bg-slate-100"
         aria-label="添付画像を開く"
       >
@@ -150,9 +181,7 @@ export function ImageAttachmentCard({
     <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_8px_22px_rgba(15,23,42,0.04)]">
       <button
         type="button"
-        onClick={() => {
-          if (imageUrl) onOpen?.(attachment, imageUrl);
-        }}
+        onClick={() => void openPreviewImage()}
         className="block w-full overflow-hidden rounded-xl border border-slate-100 bg-slate-100"
         aria-label="添付画像を拡大表示"
       >
