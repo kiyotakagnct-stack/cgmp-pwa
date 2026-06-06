@@ -6,6 +6,7 @@ import type { CSSProperties } from "react";
 import { ImageAttachmentGrid } from "@/components/ImageAttachmentGrid";
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { ImageUploader } from "@/components/ImageUploader";
+import { ComposeView } from "@/components/cgmp/ComposeView";
 import { HomeView } from "@/components/cgmp/HomeView";
 import { PostSaveSuggestionsModal, type ExternalConfirmState } from "@/components/cgmp/PostSaveSuggestionsModal";
 import { RecordEditor } from "@/components/cgmp/RecordEditor";
@@ -21,6 +22,7 @@ import {
   type ShortcutWebhookTestReport,
 } from "@/components/cgmp/ProgressModals";
 import { PromptSettingsModal, type PromptEditorDefinition } from "@/components/cgmp/PromptSettingsModal";
+import { SettingsView } from "@/components/cgmp/SettingsView";
 import { WeeklyView } from "@/components/cgmp/WeeklyView";
 import { deleteImageBlobs, getImageBlob, putImageBlob } from "@/lib/db/imageBlobStore";
 import { analyzeImageWithVision, fallbackImageAnalysis } from "@/lib/image/analyzeImageWithVision";
@@ -116,16 +118,9 @@ import {
   dangerButtonClass,
   DomainBadge,
   fieldClass,
-  LabeledInput,
-  LabeledNumber,
-  LabeledSelect,
-  LabeledTextarea,
-  LabeledToggle,
   panelClass,
   primaryButtonClass,
   secondaryButtonClass,
-  SectionHeading,
-  SettingsAccordion,
   softPanelClass,
 } from "@/components/cgmp/ui";
 
@@ -3140,613 +3135,74 @@ export default function Page() {
         ) : null}
 
         {tab === "compose" ? (
-          <div className="grid gap-5 xl:grid-cols-[1fr_1fr]">
-            <section className={panelClass}>
-              <SectionHeading
-                eyebrow="Compose"
-                title="入力 → AI解析 → 確認"
-              />
-
-              <div className="space-y-4">
-                <LabeledTextarea
-                  label="Raw input"
-                  value={composeDraft.raw_input}
-                  onChange={(value) => setComposeDraft((prev) => ({ ...prev, raw_input: value, body: prev.body || value }))}
-                  placeholder="雑に入れたメモをそのまま貼る"
-                  rows={10}
-                  inputRef={composeRawInputRef}
-                />
-
-                <div className="flex flex-wrap gap-2">
-                  <button type="button" onClick={handleAnalyze} disabled={composeLoading} className={primaryButtonClass}>
-                    {composeLoading ? "解析中..." : "AI解析"}
-                  </button>
-                  <button type="button" onClick={() => saveCompose(true)} className={secondaryButtonClass}>
-                    AIなしで保存
-                  </button>
-                  <button type="button" onClick={() => void saveComposeDraft()} className={secondaryButtonClass}>
-                    下書きとして保存
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setComposeDraft(blankForm(""));
-                      setComposeAiStatus("none");
-                      setComposeAiError("");
-                      setComposeAiMeta(null);
-                    }}
-                    className={secondaryButtonClass}
-                  >
-                    クリア
-                  </button>
-                </div>
-
-                <div className={softPanelClass}>
-                  <div className="text-sm font-medium text-slate-800">AI状態</div>
-                  <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                    <Badge tone={composeAiStatus === "done" ? "emerald" : composeAiStatus === "error" ? "rose" : "slate"}>
-                      {composeAiStatus}
-                    </Badge>
-                    {composeAiMeta ? <Badge tone="cyan">{composeAiMeta.model}</Badge> : null}
-                    {composeAiError ? <span className="text-rose-200">{composeAiError}</span> : null}
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            <section ref={confirmSectionRef} className={panelClass}>
-              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-                <SectionHeading
-                  eyebrow="Confirm"
-                  title="AI結果の確認・修正"
-                />
-                <div className="flex flex-wrap gap-2">
-                  <button type="button" onClick={() => saveCompose()} className={primaryButtonClass}>
-                    保存
-                  </button>
-                  <button type="button" onClick={() => setTab("home")} className={secondaryButtonClass}>
-                    一覧へ
-                  </button>
-                </div>
-              </div>
-
-              <div className="max-h-[74vh] overflow-auto pr-1">
-                <RecordEditor
-                  draft={composeDraft}
-                  onChange={(patch) => setComposeDraft((prev) => ({ ...prev, ...patch }))}
-                  showRawInput={false}
-                />
-              </div>
-
-              <div className="mt-5 flex flex-wrap gap-2">
-                <button type="button" onClick={() => saveCompose()} className={primaryButtonClass}>
-                  保存
-                </button>
-                <button type="button" onClick={() => setTab("home")} className={secondaryButtonClass}>
-                  一覧へ戻る
-                </button>
-              </div>
-            </section>
-          </div>
+          <ComposeView
+            draft={composeDraft}
+            loading={composeLoading}
+            aiStatus={composeAiStatus}
+            aiError={composeAiError}
+            aiMeta={composeAiMeta}
+            rawInputRef={composeRawInputRef}
+            confirmSectionRef={confirmSectionRef}
+            onDraftChange={(patch) => setComposeDraft((prev) => ({ ...prev, ...patch }))}
+            onAnalyze={handleAnalyze}
+            onSave={() => saveCompose()}
+            onSaveWithoutAi={() => saveCompose(true)}
+            onSaveDraft={() => void saveComposeDraft()}
+            onClear={() => {
+              setComposeDraft(blankForm(""));
+              setComposeAiStatus("none");
+              setComposeAiError("");
+              setComposeAiMeta(null);
+            }}
+            onGoHome={() => setTab("home")}
+          />
         ) : null}
 
         {tab === "settings" ? (
-          <div className="grid gap-5">
-            <section className={panelClass}>
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <SectionHeading eyebrow="Settings" title="設定" description="必要な項目だけ開いて調整します。" />
-                <div className="flex flex-wrap gap-2">
-                  <button type="button" onClick={handleSaveSettings} disabled={settingsSaving} className={primaryButtonClass}>
-                    {settingsSaving ? "保存中..." : "設定を保存"}
-                  </button>
-                  <button type="button" onClick={() => reloadSettings()} className={secondaryButtonClass}>
-                    再読み込み
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                <SettingsAccordion title="基本設定" summary="AIモデル、タイムゾーン、表示テーマ。" defaultOpen>
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <LabeledInput
-                      label="OpenAI model"
-                      value={settingsDraft?.openai_model || ""}
-                      onChange={(value) => setSettingsDraft((prev) => (prev ? { ...prev, openai_model: value } : prev))}
-                      placeholder="gpt-4.1-nano"
-                    />
-                    <LabeledInput
-                      label="Timezone"
-                      value={settingsDraft?.timezone || "Asia/Tokyo"}
-                      onChange={(value) => setSettingsDraft((prev) => (prev ? { ...prev, timezone: value } : prev))}
-                      placeholder="Asia/Tokyo"
-                    />
-                  </div>
-                  <div className="mt-4">
-                    <div className="text-sm font-medium text-[var(--text)]">Theme</div>
-                    <div className="mt-3 grid grid-cols-3 gap-2">
-                      {[
-                        { value: "system", label: "System" },
-                        { value: "light", label: "Light" },
-                        { value: "dark", label: "Dark" },
-                      ].map((item) => (
-                        <button
-                          key={item.value}
-                          type="button"
-                          onClick={() => changeThemeMode(item.value as ThemeMode)}
-                          className={`rounded-2xl border px-3 py-2 text-sm font-semibold transition ${
-                            themeMode === item.value
-                              ? "border-[color:var(--accent)] bg-[var(--accent)] text-[var(--accent-contrast)]"
-                              : "border-[color:var(--border)] bg-[var(--card)] text-[var(--muted)] hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)]"
-                          }`}
-                          aria-pressed={themeMode === item.value}
-                        >
-                          <span className="mr-1">{themeMode === item.value ? "●" : "○"}</span>
-                          {item.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </SettingsAccordion>
-
-                <SettingsAccordion
-                  title="AI と検索"
-                  summary="プロンプト編集、意味検索、embedding index。"
-                  badge={<Badge tone="cyan">{embeddingIndexStats?.count ?? 0} embeddings</Badge>}
-                >
-                  <div className={softPanelClass}>
-                    <div className="text-sm font-medium text-[var(--text)]">AIプロンプト</div>
-                    <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                      Title、Summary、Action分類、写真解析などの判断方針を編集します。出力形式の固定ルールは非表示です。
-                    </p>
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      <button type="button" onClick={openPromptEditor} className={secondaryButtonClass}>
-                        AIプロンプトを編集
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className={`${softPanelClass} mt-3`}>
-                    <div className="text-sm font-medium text-[var(--text)]">意味検索インデックス</div>
-                    <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-[var(--muted)]">
-                      <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
-                        <div className="text-[var(--subtle)]">index</div>
-                        <div className="mt-1 font-semibold text-[var(--text)]">{embeddingIndexStats?.count ?? 0}件</div>
-                      </div>
-                      <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
-                        <div className="text-[var(--subtle)]">model</div>
-                        <div className="mt-1 truncate font-semibold text-[var(--text)]">
-                          {embeddingIndexStats?.model || "text-embedding-3-small"}
-                        </div>
-                      </div>
-                      <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
-                        <div className="text-[var(--subtle)]">dimensions</div>
-                        <div className="mt-1 font-semibold text-[var(--text)]">{embeddingIndexStats?.dimensions || "-"}</div>
-                      </div>
-                      <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
-                        <div className="text-[var(--subtle)]">latest</div>
-                        <div className="mt-1 truncate font-semibold text-[var(--text)]">
-                          {embeddingIndexStats?.latestEmbeddedAt ? formatJstDateTime(embeddingIndexStats.latestEmbeddedAt) : "未作成"}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                      <LabeledInput
-                        label="意味検索の閾値"
-                        type="number"
-                        value={String(settingsDraft?.semantic_search_threshold ?? SEMANTIC_CANDIDATE_THRESHOLD)}
-                        onChange={(value) => {
-                          const next = normalizeSemanticThreshold(value);
-                          setSettingsDraft((prev) => (prev ? { ...prev, semantic_search_threshold: next } : prev));
-                        }}
-                        placeholder="0.45"
-                      />
-                      <LabeledSelect
-                        label="意味検索の表示方式"
-                        value={settingsDraft?.semantic_search_result_mode || "threshold"}
-                        onChange={(value) =>
-                          setSettingsDraft((prev) =>
-                            prev
-                              ? {
-                                  ...prev,
-                                  semantic_search_result_mode: value === "top10" ? "top10" : "threshold",
-                                }
-                              : prev
-                          )
-                        }
-                        options={[
-                          { value: "threshold", label: "閾値内を表示" },
-                          { value: "top10", label: "近い順 Top10" },
-                        ]}
-                      />
-                    </div>
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => void rebuildEmbeddingIndex(false)}
-                        disabled={embeddingProgress?.running}
-                        className={primaryButtonClass}
-                      >
-                        意味検索インデックスを作成
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void rebuildEmbeddingIndex(true)}
-                        disabled={embeddingProgress?.running}
-                        className={secondaryButtonClass}
-                      >
-                        全件再作成
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void reloadEmbeddingIndexStats()}
-                        disabled={embeddingProgress?.running}
-                        className={secondaryButtonClass}
-                      >
-                        状態を確認
-                      </button>
-                      {embeddingProgress?.running ? (
-                        <button type="button" onClick={() => (embeddingCancelRef.current = true)} className={dangerButtonClass}>
-                          中断
-                        </button>
-                      ) : null}
-                    </div>
-                    {embeddingProgress ? (
-                      <div className="mt-4 rounded-2xl border border-[color:var(--border)] bg-[var(--card)] p-3 text-xs text-[var(--muted)]">
-                        <div className="font-semibold text-[var(--text)]">
-                          {embeddingProgress.running ? `処理中... ${embeddingProgress.completed} / ${embeddingProgress.total}` : "処理結果"}
-                        </div>
-                        <div className="mt-2 grid grid-cols-2 gap-2">
-                          <span>対象 {embeddingProgress.total}件</span>
-                          <span>完了 {embeddingProgress.completed}件</span>
-                          <span>スキップ {embeddingProgress.skipped}件</span>
-                          <span>失敗 {embeddingProgress.failed}件</span>
-                        </div>
-                        {embeddingProgress.currentTitle ? (
-                          <div className="mt-2 rounded-xl bg-[var(--card-soft)] px-3 py-2">{embeddingProgress.currentTitle}</div>
-                        ) : null}
-                        {embeddingProgress.errors.length > 0 ? (
-                          <details className="mt-3">
-                            <summary className="cursor-pointer font-semibold text-[var(--danger)]">
-                              エラー {embeddingProgress.errors.length}件
-                            </summary>
-                            <ul className="mt-2 max-h-36 space-y-1 overflow-auto text-[var(--danger)]">
-                              {embeddingProgress.errors.map((error, index) => (
-                                <li key={`${error}:${index}`}>{error}</li>
-                              ))}
-                            </ul>
-                          </details>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </div>
-                </SettingsAccordion>
-
-                <SettingsAccordion
-                  title="同期と連携"
-                  summary="Google Drive、Google Tasks / Calendar、Drive上の実在確認。"
-                  badge={<Badge tone={backupSummary && backupSummary.failed > 0 ? "rose" : "emerald"}>Drive</Badge>}
-                >
-                  <div className={softPanelClass}>
-                    <div className="text-sm font-medium text-[var(--text)]">Google Drive 同期</div>
-                    <dl className="mt-3 grid grid-cols-2 gap-3 text-xs text-[var(--muted)]">
-                      <div>
-                        <dt className="text-[var(--subtle)]">未バックアップ</dt>
-                        <dd className="mt-1 text-lg font-semibold text-[var(--orange)]">
-                          {backupSummary ? backupSummary.localOnly + backupSummary.pending : "-"}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt className="text-[var(--subtle)]">バックアップ中</dt>
-                        <dd className="mt-1 text-lg font-semibold text-[var(--accent)]">{backupSummary?.backingUp ?? "-"}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-[var(--subtle)]">失敗</dt>
-                        <dd className="mt-1 text-lg font-semibold text-[var(--danger)]">{backupSummary?.failed ?? "-"}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-[var(--subtle)]">最終バックアップ</dt>
-                        <dd className="mt-1 text-sm text-[var(--text)]">
-                          {backupSummary?.lastBackupAt ? formatJstDateTime(backupSummary.lastBackupAt) : "未実行"}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt className="text-[var(--subtle)]">削除済み</dt>
-                        <dd className="mt-1 text-lg font-semibold text-[var(--text)]">{deletedRecordsSummary?.count ?? "-"}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-[var(--subtle)]">最終削除</dt>
-                        <dd className="mt-1 text-sm text-[var(--text)]">
-                          {deletedRecordsSummary?.latestDeletedAt ? formatJstDateTime(deletedRecordsSummary.latestDeletedAt) : "なし"}
-                        </dd>
-                      </div>
-                    </dl>
-                    <div className="mt-4 rounded-2xl border border-[color:var(--border)] bg-[var(--card)] p-3">
-                      <div className="text-sm font-semibold text-[var(--text)]">Google状態同期の対象範囲</div>
-                      <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
-                        バックグラウンド同期でGoogle側を確認するrecordをDateベースで絞ります。日付なしの未完了Tasksは、Google側で後から日付が付く可能性があるため対象に残します。
-                      </p>
-                      <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                        <LabeledInput
-                          label="過去何日前から"
-                          type="number"
-                          value={String(settingsDraft?.external_sync_past_days ?? 7)}
-                          onChange={(value) =>
-                            setSettingsDraft((prev) =>
-                              prev
-                                ? {
-                                    ...prev,
-                                    external_sync_past_days: Math.max(0, Math.round(Number(value) || 0)),
-                                  }
-                                : prev
-                            )
-                          }
-                          placeholder="7"
-                        />
-                        <LabeledInput
-                          label="未来何日後まで"
-                          type="number"
-                          value={String(settingsDraft?.external_sync_future_days ?? 60)}
-                          onChange={(value) =>
-                            setSettingsDraft((prev) =>
-                              prev
-                                ? {
-                                    ...prev,
-                                    external_sync_future_days: Math.max(0, Math.round(Number(value) || 0)),
-                                  }
-                                : prev
-                            )
-                          }
-                          placeholder="60"
-                        />
-                      </div>
-                      <div className="mt-3 grid gap-2">
-                        <LabeledToggle
-                          label="完了済みTasksは同期しない"
-                          value={settingsDraft?.external_sync_exclude_completed_tasks ?? true}
-                          onChange={(value) =>
-                            setSettingsDraft((prev) =>
-                              prev ? { ...prev, external_sync_exclude_completed_tasks: value } : prev
-                            )
-                          }
-                        />
-                        <LabeledToggle
-                          label="終了済みCalendar予定を同期対象から外す"
-                          value={settingsDraft?.external_sync_exclude_ended_calendar ?? false}
-                          onChange={(value) =>
-                            setSettingsDraft((prev) =>
-                              prev ? { ...prev, external_sync_exclude_ended_calendar: value } : prev
-                            )
-                          }
-                        />
-                      </div>
-                      <div className="mt-3 text-xs text-[var(--subtle)]">
-                        現在の既定: -{settingsDraft?.external_sync_past_days ?? 7}日 〜 +
-                        {settingsDraft?.external_sync_future_days ?? 60}日
-                      </div>
-                    </div>
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      <button type="button" onClick={() => runBackupQueue(true)} className={primaryButtonClass}>
-                        {backupProcessing ? "処理中..." : "今すぐバックアップ"}
-                      </button>
-                      <button type="button" onClick={rebackupAllRecords} disabled={backupProcessing} className={secondaryButtonClass}>
-                        全件を再同期
-                      </button>
-                      <button type="button" onClick={loadDriveBackupList} disabled={driveBackupLoading} className={secondaryButtonClass}>
-                        {driveBackupLoading ? "確認中..." : "Drive上の一覧を確認"}
-                      </button>
-                      <button type="button" onClick={() => importMissingFromDrive(true)} disabled={driveImporting} className={secondaryButtonClass}>
-                        {driveImporting ? "取り込み中..." : "未取り込みを追加"}
-                      </button>
-                      <button type="button" onClick={() => syncExternalStatuses(true)} className={secondaryButtonClass}>
-                        {externalSyncing ? "同期中..." : "Google状態を同期"}
-                      </button>
-                      <a href="/api/auth/google/start" className={secondaryButtonClass}>
-                        Google連携を認可
-                      </a>
-                    </div>
-                  </div>
-
-                  <div className={`${softPanelClass} mt-3`}>
-                    <div className="flex flex-wrap items-start justify-between gap-2">
-                      <div>
-                        <div className="text-sm font-medium text-[var(--text)]">Shortcut Webhook テスト</div>
-                        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                          iOS Shortcutと同じ `/api/shortcut-webhook` を呼び、AI解析・Google登録・Drive保存の処理時間を確認します。
-                        </p>
-                      </div>
-                      <Badge tone="cyan">debug</Badge>
-                    </div>
-                    <div className="mt-4 grid gap-3">
-                      <LabeledTextarea
-                        label="Webhookに投げるテキスト"
-                        value={webhookTestText}
-                        onChange={setWebhookTestText}
-                        rows={4}
-                        placeholder="例: 明日17時に歯医者の予約"
-                      />
-                      <LabeledInput
-                        label="Webhook token（設定している場合のみ）"
-                        value={webhookTestToken}
-                        onChange={setWebhookTestToken}
-                        placeholder="SHORTCUT_WEBHOOK_TOKEN"
-                        type="password"
-                      />
-                      <div className="flex flex-wrap items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={runShortcutWebhookTest}
-                          disabled={webhookTestRunning}
-                          className={primaryButtonClass}
-                        >
-                          {webhookTestRunning ? "Webhookテスト中..." : "進捗つきでWebhookテスト"}
-                        </button>
-                        {webhookTestReport ? (
-                          <button type="button" onClick={() => setIsWebhookTestModalOpen(true)} className={secondaryButtonClass}>
-                            前回レポートを見る
-                          </button>
-                        ) : null}
-                      </div>
-                      <p className="text-xs leading-5 text-[var(--subtle)]">
-                        tokenは保存しません。テスト実行時だけAuthorizationヘッダーに入れます。
-                      </p>
-                    </div>
-                  </div>
-
-                  {driveBackupRecords ? (
-                    <div className={`${softPanelClass} mt-3`}>
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div>
-                          <div className="text-sm font-medium text-[var(--text)]">Drive上に実在する正本</div>
-                          <p className="mt-1 text-xs text-[var(--subtle)]">
-                            {driveBackupCheckedAt ? `${formatJstDateTime(driveBackupCheckedAt)} に確認` : ""}
-                          </p>
-                        </div>
-                        <Badge tone="emerald">{driveBackupRecords.length}件</Badge>
-                      </div>
-                      <div className="mt-4 max-h-80 space-y-2 overflow-auto pr-1">
-                        {driveBackupRecords.length > 0 ? (
-                          driveBackupRecords.map((backup) => (
-                            <div
-                              key={`${backup.id}:${backup.file_id || backup.pathname || ""}`}
-                              className={`rounded-2xl border p-3 ${
-                                backup.error
-                                  ? "border-[color:var(--danger)] bg-[var(--danger-soft)]"
-                                  : "border-[color:var(--border)] bg-[var(--card)]"
-                              }`}
-                            >
-                              <div className="flex flex-wrap items-center gap-2 text-[11px] text-[var(--subtle)]">
-                                <Badge tone={backup.error ? "rose" : "emerald"}>{backup.error ? "読込失敗" : "実在確認済み"}</Badge>
-                                <span>{backup.action || "note"}</span>
-                                <span>{backup.domain || "other"}</span>
-                                <span>{backup.para || "area"}</span>
-                              </div>
-                              <div className="mt-2 text-sm font-semibold text-[var(--text)]">{backup.title || "（無題）"}</div>
-                              {backup.summary ? (
-                                <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--muted)]">{backup.summary}</p>
-                              ) : null}
-                              <div className="mt-3 grid gap-1 text-[11px] text-[var(--subtle)]">
-                                <span>backup: {backup.backed_up_at ? formatJstDateTime(backup.backed_up_at) : "不明"}</span>
-                                <span>record: {backup.id}</span>
-                                <span>file: {backup.file_id}</span>
-                              </div>
-                            </div>
-                          ))
-                        ) : (
-                          <p className="text-sm text-[var(--muted)]">Drive上の正本はまだありません。</p>
-                        )}
-                      </div>
-                    </div>
-                  ) : null}
-                </SettingsAccordion>
-
-                <SettingsAccordion title="データ移行と保守" summary="PWA再読み込み、Scriptable移行、全削除。">
-                  <div className={softPanelClass}>
-                    <div className="text-sm font-medium text-[var(--text)]">アプリ更新</div>
-                    <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                      ホーム画面PWAで古い画面が残る場合は、キャッシュ回避つきで再読み込みします。
-                    </p>
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      <button type="button" onClick={handleHardReloadApp} className={secondaryButtonClass}>
-                        アプリを再読み込み
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className={`${softPanelClass} mt-3`}>
-                    <div className="text-sm font-medium text-[var(--text)]">Scriptableデータ移行</div>
-                    <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                      移行用ZIPから records と preview画像をIndexedDBへ取り込みます。original画像とlogsは取り込みません。
-                    </p>
-                    <input
-                      ref={scriptableImportInputRef}
-                      type="file"
-                      accept=".zip,application/zip,application/x-zip-compressed"
-                      className="hidden"
-                      onChange={(event) => {
-                        const file = event.target.files?.[0];
-                        event.target.value = "";
-                        void handleScriptableImportFile(file);
-                      }}
-                    />
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => scriptableImportInputRef.current?.click()}
-                        disabled={scriptableImporting}
-                        className={primaryButtonClass}
-                      >
-                        {scriptableImporting ? "インポート中..." : "Scriptable ZIPをインポート"}
-                      </button>
-                    </div>
-                    {scriptableImportResult ? (
-                      <div className="mt-4 rounded-2xl border border-[color:var(--border)] bg-[var(--card)] p-3 text-xs leading-6 text-[var(--muted)]">
-                        <div className="grid gap-2 sm:grid-cols-4">
-                          <span>追加: {scriptableImportResult.imported}</span>
-                          <span>上書き: {scriptableImportResult.overwritten}</span>
-                          <span>画像: {scriptableImportResult.imagesImported}</span>
-                          <span>スキップ: {scriptableImportResult.skipped}</span>
-                        </div>
-                        {scriptableImportResult.errors.length > 0 ? (
-                          <details className="mt-3">
-                            <summary className="cursor-pointer font-semibold text-[var(--danger)]">
-                              エラー/警告 {scriptableImportResult.errors.length}件
-                            </summary>
-                            <ul className="mt-2 max-h-36 space-y-1 overflow-auto text-[var(--danger)]">
-                              {scriptableImportResult.errors.slice(0, 20).map((error, index) => (
-                                <li key={`${error}:${index}`}>{error}</li>
-                              ))}
-                              {scriptableImportResult.errors.length > 20 ? (
-                                <li>...ほか {scriptableImportResult.errors.length - 20}件</li>
-                              ) : null}
-                            </ul>
-                          </details>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </div>
-
-                  <div className="mt-4 flex justify-end">
-                    <button type="button" onClick={handleClearAll} className={dangerButtonClass}>
-                      全削除
-                    </button>
-                  </div>
-                </SettingsAccordion>
-
-                <SettingsAccordion
-                  title="更新情報"
-                  summary={deployInfoLoading ? "取得中..." : deployInfo?.commitMessage || "最新デプロイ情報を確認します。"}
-                  badge={deployInfo?.commitSha ? <Badge tone="slate">{deployInfo.commitSha}</Badge> : undefined}
-                >
-                  <div className="grid gap-3 text-sm text-[var(--muted)]">
-                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-3">
-                      <div className="text-[11px] uppercase tracking-[0.22em] text-[var(--subtle)]">Summary</div>
-                      <div className="mt-2 font-semibold text-[var(--text)]">
-                        {deployInfoLoading ? "取得中..." : deployInfo?.commitMessage || "GitHub commit message が取得できませんでした。"}
-                      </div>
-                    </div>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
-                        <div className="text-[var(--subtle)]">branch</div>
-                        <div className="mt-1 font-semibold text-[var(--text)]">{deployInfo?.commitRef || "-"}</div>
-                      </div>
-                      <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
-                        <div className="text-[var(--subtle)]">sha</div>
-                        <div className="mt-1 font-semibold text-[var(--text)]">{deployInfo?.commitSha || "-"}</div>
-                      </div>
-                      <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
-                        <div className="text-[var(--subtle)]">repo</div>
-                        <div className="mt-1 truncate font-semibold text-[var(--text)]">{deployInfo?.repository || "-"}</div>
-                      </div>
-                      <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
-                        <div className="text-[var(--subtle)]">environment</div>
-                        <div className="mt-1 font-semibold text-[var(--text)]">{deployInfo?.environment || "-"}</div>
-                      </div>
-                    </div>
-                  </div>
-                </SettingsAccordion>
-              </div>
-            </section>
-          </div>
+          <SettingsView
+            settingsDraft={settingsDraft}
+            setSettingsDraft={setSettingsDraft}
+            settingsSaving={settingsSaving}
+            themeMode={themeMode}
+            embeddingIndexStats={embeddingIndexStats}
+            embeddingProgress={embeddingProgress}
+            embeddingCancelRef={embeddingCancelRef}
+            backupSummary={backupSummary}
+            deletedRecordsSummary={deletedRecordsSummary}
+            backupProcessing={backupProcessing}
+            driveBackupLoading={driveBackupLoading}
+            driveImporting={driveImporting}
+            externalSyncing={externalSyncing}
+            webhookTestText={webhookTestText}
+            setWebhookTestText={setWebhookTestText}
+            webhookTestToken={webhookTestToken}
+            setWebhookTestToken={setWebhookTestToken}
+            webhookTestRunning={webhookTestRunning}
+            webhookTestReport={webhookTestReport}
+            setIsWebhookTestModalOpen={setIsWebhookTestModalOpen}
+            driveBackupRecords={driveBackupRecords}
+            driveBackupCheckedAt={driveBackupCheckedAt}
+            scriptableImportInputRef={scriptableImportInputRef}
+            scriptableImporting={scriptableImporting}
+            scriptableImportResult={scriptableImportResult}
+            deployInfoLoading={deployInfoLoading}
+            deployInfo={deployInfo}
+            handleSaveSettings={handleSaveSettings}
+            reloadSettings={reloadSettings}
+            changeThemeMode={changeThemeMode}
+            openPromptEditor={openPromptEditor}
+            rebuildEmbeddingIndex={rebuildEmbeddingIndex}
+            reloadEmbeddingIndexStats={reloadEmbeddingIndexStats}
+            runBackupQueue={runBackupQueue}
+            rebackupAllRecords={rebackupAllRecords}
+            loadDriveBackupList={loadDriveBackupList}
+            importMissingFromDrive={importMissingFromDrive}
+            syncExternalStatuses={syncExternalStatuses}
+            runShortcutWebhookTest={runShortcutWebhookTest}
+            handleScriptableImportFile={handleScriptableImportFile}
+            handleHardReloadApp={handleHardReloadApp}
+            handleClearAll={handleClearAll}
+          />
         ) : null}
       </div>
 
