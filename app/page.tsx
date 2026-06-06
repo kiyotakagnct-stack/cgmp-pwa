@@ -23,6 +23,7 @@ import {
 } from "@/components/cgmp/ProgressModals";
 import { PromptSettingsModal, type PromptEditorDefinition } from "@/components/cgmp/PromptSettingsModal";
 import { SettingsView } from "@/components/cgmp/SettingsView";
+import { TodayView } from "@/components/cgmp/TodayView";
 import { WeeklyView } from "@/components/cgmp/WeeklyView";
 import { deleteImageBlobs, getImageBlob, putImageBlob } from "@/lib/db/imageBlobStore";
 import { analyzeImageWithVision, fallbackImageAnalysis } from "@/lib/image/analyzeImageWithVision";
@@ -124,7 +125,7 @@ import {
   softPanelClass,
 } from "@/components/cgmp/ui";
 
-type AppTab = "home" | "week" | "compose" | "settings";
+type AppTab = "home" | "today" | "week" | "compose" | "settings";
 type SortKey = "updated_at" | "created_at" | "datetime";
 type SearchMode = "text" | "semantic";
 type Notice = { kind: "info" | "error"; text: string } | null;
@@ -3116,6 +3117,20 @@ export default function Page() {
           />
         ) : null}
 
+        {tab === "today" ? (
+          <TodayView
+            records={records}
+            onOpenRecord={(id) => {
+              setSelectedId(id);
+              setTab("home");
+              setPendingMiniJumpId(id);
+            }}
+            onOpenImage={(attachment, imageUrl) => setLightbox({ imageUrl, title: attachment.summary_80 || "添付画像" })}
+            onToggleGoogleTaskStatus={toggleGoogleTaskStatus}
+            externalProcessingKey={externalProcessingKey}
+          />
+        ) : null}
+
         {tab === "week" ? (
           <WeeklyView
             weekStart={weekStart}
@@ -3416,9 +3431,10 @@ export default function Page() {
       <AiProcessingOverlay state={aiProcessingOverlay} elapsedMs={aiProcessingElapsedMs} />
 
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-[color:var(--border)] bg-[var(--card)] px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 backdrop-blur-xl">
-        <div className="mx-auto grid max-w-3xl grid-cols-4 gap-2">
+        <div className="mx-auto grid max-w-3xl grid-cols-5 gap-2">
           {[
             { key: "home", label: "Home" },
+            { key: "today", label: "Today" },
             { key: "week", label: "Week" },
             { key: "compose", label: "Compose" },
             { key: "settings", label: "Settings" },
@@ -3427,7 +3443,7 @@ export default function Page() {
               key={item.key}
               type="button"
               onClick={() => setTab(item.key as AppTab)}
-              className={`rounded-2xl px-4 py-3 text-sm font-medium transition ${
+              className={`rounded-2xl px-2 py-3 text-xs font-medium transition sm:px-4 sm:text-sm ${
                 tab === item.key
                   ? "bg-[var(--accent)] text-[var(--accent-contrast)] shadow-[0_10px_24px_var(--shadow-soft)]"
                   : "bg-[var(--card-soft)] text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
