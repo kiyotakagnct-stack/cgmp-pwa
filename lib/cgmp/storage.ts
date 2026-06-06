@@ -776,7 +776,13 @@ export async function loadSemanticIconDictionary() {
     const normalized = (Array.isArray(result) ? result : [])
       .map(normalizeSemanticIconEntry)
       .filter((item): item is CGMPSemanticIconEntry => Boolean(item));
-    return normalized.length > 0 ? normalized : createDefaultSemanticIconDictionary();
+    if (normalized.length === 0) return createDefaultSemanticIconDictionary();
+
+    const defaults = createDefaultSemanticIconDictionary();
+    const savedByKey = new Map(normalized.map((item) => [item.key, item]));
+    const mergedDefaults = defaults.map((item) => savedByKey.get(item.key) || item);
+    const customEntries = normalized.filter((item) => !defaults.some((defaultItem) => defaultItem.key === item.key));
+    return [...mergedDefaults, ...customEntries];
   } finally {
     db.close();
   }
