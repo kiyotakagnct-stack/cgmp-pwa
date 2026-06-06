@@ -188,6 +188,10 @@ export type CGMPSettings = {
   timezone: string;
   semantic_search_threshold: number;
   semantic_search_result_mode: CGMPSemanticSearchResultMode;
+  external_sync_past_days: number;
+  external_sync_future_days: number;
+  external_sync_exclude_completed_tasks: boolean;
+  external_sync_exclude_ended_calendar: boolean;
   created_at: string;
   updated_at: string;
 };

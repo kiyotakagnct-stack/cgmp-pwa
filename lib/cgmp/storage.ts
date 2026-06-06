@@ -228,6 +228,10 @@ export function createDefaultSettings(): CGMPSettings {
     timezone: "Asia/Tokyo",
     semantic_search_threshold: DEFAULT_SEMANTIC_SEARCH_THRESHOLD,
     semantic_search_result_mode: "threshold",
+    external_sync_past_days: 7,
+    external_sync_future_days: 60,
+    external_sync_exclude_completed_tasks: true,
+    external_sync_exclude_ended_calendar: false,
     created_at: now,
     updated_at: now,
   };
@@ -243,6 +247,12 @@ function normalizeSemanticSearchResultMode(value: unknown): CGMPSemanticSearchRe
   return value === "top10" ? "top10" : "threshold";
 }
 
+function normalizeExternalSyncDays(value: unknown, fallback: number) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(3650, Math.max(0, Math.round(number)));
+}
+
 export async function loadSettings(): Promise<CGMPSettings> {
   if (!hasWindow()) return createDefaultSettings();
 
@@ -256,6 +266,10 @@ export async function loadSettings(): Promise<CGMPSettings> {
       ...merged,
       semantic_search_threshold: normalizeSemanticSearchThreshold(merged.semantic_search_threshold),
       semantic_search_result_mode: normalizeSemanticSearchResultMode(merged.semantic_search_result_mode),
+      external_sync_past_days: normalizeExternalSyncDays(merged.external_sync_past_days, 7),
+      external_sync_future_days: normalizeExternalSyncDays(merged.external_sync_future_days, 60),
+      external_sync_exclude_completed_tasks: merged.external_sync_exclude_completed_tasks !== false,
+      external_sync_exclude_ended_calendar: merged.external_sync_exclude_ended_calendar === true,
     };
   } finally {
     db.close();
@@ -274,6 +288,11 @@ export async function saveSettings(settings: Partial<CGMPSettings>) {
     semantic_search_result_mode: normalizeSemanticSearchResultMode(
       settings.semantic_search_result_mode ?? current.semantic_search_result_mode
     ),
+    external_sync_past_days: normalizeExternalSyncDays(settings.external_sync_past_days ?? current.external_sync_past_days, 7),
+    external_sync_future_days: normalizeExternalSyncDays(settings.external_sync_future_days ?? current.external_sync_future_days, 60),
+    external_sync_exclude_completed_tasks:
+      settings.external_sync_exclude_completed_tasks ?? current.external_sync_exclude_completed_tasks,
+    external_sync_exclude_ended_calendar: settings.external_sync_exclude_ended_calendar ?? current.external_sync_exclude_ended_calendar,
     updated_at: new Date().toISOString(),
   };
 

@@ -1,10 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 
 import { ImageAttachmentGrid } from "@/components/ImageAttachmentGrid";
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { ImageUploader } from "@/components/ImageUploader";
+import { RecordEditor } from "@/components/cgmp/RecordEditor";
+import { WeeklyView } from "@/components/cgmp/WeeklyView";
 import { deleteImageBlobs, getImageBlob, putImageBlob } from "@/lib/db/imageBlobStore";
 import { analyzeImageWithVision, fallbackImageAnalysis } from "@/lib/image/analyzeImageWithVision";
 import { createImageAttachmentFromFile } from "@/lib/image/createImageAttachment";
@@ -55,22 +58,82 @@ import type {
 } from "@/lib/cgmp/types";
 import type { CGMPPromptConfigFile, CGMPPromptDefinition, CGMPPromptKey } from "@/lib/cgmp/prompt-config";
 import {
-  createId,
   formatJstDateTime,
-  makePreviewTitle,
   normalizeAction,
   normalizeDomain,
   normalizePara,
-  parseTags,
-  tagsToHashtags,
 } from "@/lib/cgmp/utils";
-import type { CSSProperties, ReactNode, RefObject } from "react";
 import type { ImageAttachment, ImageVisionResult } from "@/types/image";
+import {
+  addDays,
+  applyAnalysisToDraft,
+  applyTheme,
+  blankForm,
+  dateKeyFromDate,
+  DOMAIN_FILTER_OPTIONS,
+  formFromRecord,
+  formToRecord,
+  formatWeekDate,
+  formatWeekRange,
+  getActionInfo,
+  getActionLabel,
+  getActionSymbol,
+  getBackupInfo,
+  getBackupLabel,
+  getBackupTone,
+  getCalendarInfo,
+  getDateSortValue,
+  getDomainInfo,
+  getDomainSymbol,
+  getDraftRecordTitle,
+  getEffectivePara,
+  getExternalSyncWindow,
+  getMondayOfWeek,
+  getParaInfo,
+  getParaLabel,
+  getPhotoBackupBadge,
+  getPhotoBackupInfo,
+  getRecordText,
+  getRecordTimeline,
+  getTaskInfo,
+  matchesMiniQuery,
+  matchesQuery,
+  normalizeSemanticThreshold,
+  readStoredTheme,
+  scrollToElementById,
+  shouldSyncExternalRecord,
+  startOfDay,
+  THEME_STORAGE_KEY,
+  WEEKDAY_LABELS,
+  WEEKDAY_MINI_LABELS,
+  type BadgeInfo,
+  type RecordFormState,
+  type ThemeMode,
+} from "@/lib/cgmp/client-utils";
+import {
+  AiProcessingOverlay,
+  Badge,
+  BadgeInfoModal,
+  dangerButtonClass,
+  DomainBadge,
+  fieldClass,
+  getDomainColorVar,
+  LabeledInput,
+  LabeledNumber,
+  LabeledSelect,
+  LabeledTextarea,
+  LabeledToggle,
+  panelClass,
+  primaryButtonClass,
+  secondaryButtonClass,
+  SectionHeading,
+  SettingsAccordion,
+  softPanelClass,
+} from "@/components/cgmp/ui";
 
 type AppTab = "home" | "week" | "compose" | "settings";
 type SortKey = "updated_at" | "created_at" | "datetime";
 type SearchMode = "text" | "semantic";
-type ThemeMode = "system" | "light" | "dark";
 type Notice = { kind: "info" | "error"; text: string } | null;
 type SyncActivity = {
   id: number;
@@ -267,1102 +330,6 @@ type ExternalConfirmState = {
   action: "reminder" | "calendar";
   title: string;
 } | null;
-type BadgeInfo = {
-  title: string;
-  label: string;
-  description: string;
-  examples?: string[];
-} | null;
-
-type RecordFormState = {
-  raw_input: string;
-  title: string;
-  summary: string;
-  body: string;
-  tagsText: string;
-  action: CGMPAction;
-  para: CGMPPara;
-  domain: CGMPDomain;
-  date: string;
-  time: string;
-  all_day: boolean;
-  duration_minutes: number;
-  location: string;
-  confirmation: string;
-  note_tags: string;
-  note_index_line: string;
-  user_intent_summary: string;
-};
-
-const fieldClass =
-  "mt-2 w-full rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-4 py-3 text-sm text-[var(--text)] outline-none transition placeholder:text-[color:var(--subtle)] focus:border-[color:var(--accent)] focus:ring-4 focus:ring-[color:var(--accent-soft)]";
-const textareaClass = `${fieldClass} min-h-[120px] resize-y`;
-const panelClass =
-  "min-w-0 overflow-hidden rounded-[24px] border border-[color:var(--border)] bg-[var(--card)] p-4 shadow-[0_18px_55px_var(--shadow-soft),0_2px_10px_var(--shadow-soft)] sm:rounded-[28px] sm:p-5";
-const softPanelClass =
-  "min-w-0 overflow-hidden rounded-[22px] border border-[color:var(--border)] bg-[var(--card-soft)] p-3 shadow-[0_10px_30px_var(--shadow-soft)] sm:rounded-[24px] sm:p-4";
-const primaryButtonClass =
-  "rounded-2xl border border-[color:var(--accent)] bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-[var(--accent-contrast)] shadow-[0_10px_24px_var(--shadow-soft)] transition hover:brightness-95";
-const secondaryButtonClass =
-  "rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-4 py-2.5 text-sm font-semibold text-[var(--text)] shadow-[0_8px_18px_var(--shadow-soft)] transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)]";
-const dangerButtonClass =
-  "rounded-2xl border border-[color:var(--danger)] bg-[var(--danger-soft)] px-4 py-2.5 text-sm font-semibold text-[var(--danger)] transition hover:brightness-95";
-const THEME_STORAGE_KEY = "cgmp_theme";
-
-function readStoredTheme(): ThemeMode {
-  if (typeof window === "undefined") return "system";
-  try {
-    const value = window.localStorage.getItem(THEME_STORAGE_KEY);
-    return value === "light" || value === "dark" || value === "system" ? value : "system";
-  } catch {
-    return "system";
-  }
-}
-
-function resolveTheme(mode: ThemeMode): "light" | "dark" {
-  if (typeof window === "undefined") return "light";
-  if (mode !== "system") return mode;
-  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-}
-
-function applyTheme(mode: ThemeMode) {
-  if (typeof document === "undefined") return;
-  const resolved = resolveTheme(mode);
-  document.documentElement.dataset.theme = resolved;
-  document.documentElement.dataset.themePreference = mode;
-}
-
-function blankForm(text = ""): RecordFormState {
-  return {
-    raw_input: text,
-    title: "",
-    summary: "",
-    body: text,
-    tagsText: "",
-    action: "note",
-    para: "area",
-    domain: "other",
-    date: "",
-    time: "",
-    all_day: false,
-    duration_minutes: 60,
-    location: "",
-    confirmation: "",
-    note_tags: "",
-    note_index_line: "",
-    user_intent_summary: "",
-  };
-}
-
-function formFromRecord(record: CGMPRecord): RecordFormState {
-  return {
-    raw_input: record.raw_input || "",
-    title: record.title || "",
-    summary: record.summary || "",
-    body: record.body || "",
-    tagsText: (record.tags || []).join(" "),
-    action: record.action || "note",
-    para: record.para || "area",
-    domain: record.domain || "other",
-    date: record.date || "",
-    time: record.time || "",
-    all_day: Boolean(record.all_day),
-    duration_minutes: record.duration_minutes || 60,
-    location: record.location || "",
-    confirmation: record.confirmation || "",
-    note_tags: record.note_tags || "",
-    note_index_line: record.note_index_line || "",
-    user_intent_summary: record.user_intent_summary || "",
-  };
-}
-
-function formToRecord(
-  form: RecordFormState,
-  options: {
-    existing?: CGMPRecord | null;
-    aiStatus?: CGMPRecord["ai_status"];
-    aiError?: string;
-    aiMeta?: { model: string; generated_at: string } | null;
-    backupStatus?: CGMPRecord["backup_status"];
-  }
-): CGMPRecord {
-  const stamp = new Date().toISOString();
-  const tags = parseTags(form.tagsText);
-  const existing = options.existing ?? null;
-  const aiMeta = options.aiMeta ?? null;
-  const action = normalizeAction(form.action);
-  const para = normalizePara(form.para);
-  const domain = normalizeDomain(form.domain);
-
-  return {
-    schema_version: 1,
-    id: existing?.id || createId(),
-    created_at: existing?.created_at || stamp,
-    updated_at: stamp,
-    raw_input: form.raw_input,
-    title: form.title.trim() || makePreviewTitle(form.raw_input),
-    summary: form.summary.trim() || form.user_intent_summary.trim() || form.raw_input.slice(0, 120),
-    body: form.body.trim() || form.raw_input,
-    action,
-    tags,
-    para,
-    domain,
-    date: form.date.trim(),
-    time: form.time.trim(),
-    all_day: Boolean(form.all_day),
-    duration_minutes: Number.isFinite(Number(form.duration_minutes)) ? Math.max(1, Math.round(Number(form.duration_minutes))) : 60,
-    location: form.location.trim(),
-    confirmation: form.confirmation.trim(),
-    note_tags: form.note_tags.trim() || tagsToHashtags(tags).join(" "),
-    note_index_line: form.note_index_line.trim(),
-    user_intent_summary: form.user_intent_summary.trim(),
-    ai_status: options.aiStatus ?? existing?.ai_status ?? "none",
-    ai_error: options.aiError ?? existing?.ai_error ?? "",
-    external_action_status: existing?.external_action_status ?? "none",
-    external_target: existing?.external_target ?? "",
-    external_registered_at: existing?.external_registered_at ?? "",
-    external_error: existing?.external_error ?? "",
-    google_task_id: existing?.google_task_id ?? "",
-    google_task_list_id: existing?.google_task_list_id ?? "",
-    google_task_status: existing?.google_task_status ?? "",
-    google_task_updated_at: existing?.google_task_updated_at ?? "",
-    google_calendar_event_id: existing?.google_calendar_event_id ?? "",
-    google_calendar_id: existing?.google_calendar_id ?? "",
-    google_calendar_updated_at: existing?.google_calendar_updated_at ?? "",
-    backup_status: options.backupStatus ?? existing?.backup_status ?? "pending_backup",
-    backup_retry_count: existing?.backup_retry_count ?? 0,
-    backup_last_error: existing?.backup_last_error ?? "",
-    backup_next_retry_at: existing?.backup_next_retry_at ?? "",
-    drive_file_id: existing?.drive_file_id ?? "",
-    last_backup_at: existing?.last_backup_at ?? "",
-    backup_checksum: existing?.backup_checksum ?? "",
-    attachments: existing?.attachments ?? [],
-    ai: {
-      model: aiMeta?.model ?? existing?.ai?.model ?? "",
-      generated_at: aiMeta?.generated_at ?? existing?.ai?.generated_at ?? stamp,
-      initial_title: aiMeta ? form.title.trim() || makePreviewTitle(form.raw_input) : existing?.ai?.initial_title ?? "",
-      initial_tags: aiMeta ? tags : existing?.ai?.initial_tags ?? [],
-      initial_date: aiMeta ? form.date.trim() : existing?.ai?.initial_date ?? "",
-      initial_time: aiMeta ? form.time.trim() : existing?.ai?.initial_time ?? "",
-      initial_action: aiMeta ? action : existing?.ai?.initial_action ?? "note",
-      initial_para: aiMeta ? para : existing?.ai?.initial_para ?? "area",
-      initial_domain: aiMeta ? domain : existing?.ai?.initial_domain ?? "other",
-      initial_summary: aiMeta ? form.summary.trim() || form.user_intent_summary.trim() : existing?.ai?.initial_summary ?? "",
-    },
-  };
-}
-
-function getRecordText(record: CGMPRecord) {
-  return [
-    record.title,
-    record.summary,
-    record.body,
-    record.raw_input,
-    record.note_index_line,
-    record.user_intent_summary,
-    record.confirmation,
-    record.location,
-    record.date,
-    record.time,
-    record.action,
-    record.para,
-    record.domain,
-    ...(record.tags || []),
-    ...(record.attachments || []).flatMap((attachment) => [
-      attachment.summary_80,
-      attachment.visible_text,
-      ...(attachment.image_tags || []),
-    ]),
-  ]
-    .map((value) => String(value || "").toLowerCase())
-    .join("\n");
-}
-
-function getMiniListText(record: CGMPRecord) {
-  return [
-    record.title,
-    record.summary,
-    record.raw_input,
-    ...(record.tags || []),
-    ...(record.attachments || []).flatMap((attachment) => [
-      attachment.summary_80,
-      attachment.visible_text,
-      ...(attachment.image_tags || []),
-    ]),
-  ]
-    .map((value) => String(value || "").toLowerCase())
-    .join("\n");
-}
-
-function applyAnalysisToDraft(draft: RecordFormState, rawInput: string, analysis: CGMPAnalysis): RecordFormState {
-  return {
-    ...draft,
-    raw_input: rawInput,
-    title: analysis.title || makePreviewTitle(rawInput),
-    summary: analysis.summary || analysis.user_intent_summary || "",
-    body: analysis.body || rawInput,
-    tagsText: (analysis.tags || []).join(" "),
-    action: normalizeAction(analysis.action),
-    para: normalizePara(analysis.para),
-    domain: normalizeDomain(analysis.domain),
-    date: analysis.date || "",
-    time: analysis.time || "",
-    all_day: Boolean(analysis.all_day),
-    duration_minutes: Number(analysis.duration_minutes || 60),
-    location: analysis.location || "",
-    confirmation: analysis.confirmation || "",
-    note_tags: analysis.note_tags || "",
-    note_index_line: analysis.note_index_line || "",
-    user_intent_summary: analysis.user_intent_summary || analysis.summary || "",
-  };
-}
-
-function getDraftRecordTitle(rawInput: string) {
-  return makePreviewTitle(rawInput) || "下書き";
-}
-
-function getDateSortValue(record: CGMPRecord) {
-  const date = record.date || "";
-  const time = record.time || "";
-  const stamp = `${date}T${time || "00:00"}:00`;
-  const parsed = new Date(stamp);
-  const value = parsed.getTime();
-  return Number.isFinite(value) ? value : new Date(record.updated_at || record.created_at).getTime();
-}
-
-function matchesQuery(record: CGMPRecord, query: string, tagQuery: string) {
-  const text = query.trim().toLowerCase();
-  const tag = tagQuery.trim().toLowerCase();
-
-  const textOk =
-    !text ||
-    text
-      .split(/\s+/)
-      .filter(Boolean)
-      .every((token) => getRecordText(record).includes(token));
-
-  const tagOk =
-    !tag ||
-    (record.tags || []).some((item) => String(item || "").toLowerCase().includes(tag));
-
-  return textOk && tagOk;
-}
-
-function getEffectivePara(record: CGMPRecord) {
-  const para = normalizePara(record.para);
-  return para || "area";
-}
-
-function matchesMiniQuery(record: CGMPRecord, query: string) {
-  const text = query.trim().toLowerCase();
-  if (!text) return true;
-  return text
-    .split(/\s+/)
-    .filter(Boolean)
-    .every((token) => getMiniListText(record).includes(token));
-}
-
-function getBackupLabel(record: CGMPRecord) {
-  if (record.backup_status === "backed_up") return "同期済";
-  if (record.backup_status === "backing_up") return "同期中";
-  if (record.backup_status === "pending_backup") return "未同期";
-  if (record.backup_status === "backup_failed") return "同期失敗";
-  if (record.backup_status === "conflicted") return "競合";
-  return "端末";
-}
-
-function getBackupTone(record: CGMPRecord): "slate" | "cyan" | "emerald" | "amber" | "rose" {
-  if (record.backup_status === "backed_up") return "emerald";
-  if (record.backup_status === "backing_up") return "cyan";
-  if (record.backup_status === "pending_backup") return "amber";
-  if (record.backup_status === "backup_failed" || record.backup_status === "conflicted") return "rose";
-  return "slate";
-}
-
-function getPhotoBackupBadge(record: CGMPRecord): { label: string; tone: "slate" | "cyan" | "emerald" | "amber" | "rose" } | null {
-  const attachments = record.attachments || [];
-  if (attachments.length === 0) return null;
-  const backedUp = attachments.filter((attachment) => attachment.backup_status === "backed_up").length;
-  const backingUp = attachments.filter((attachment) => attachment.backup_status === "backing_up").length;
-  const failed = attachments.filter(
-    (attachment) => attachment.backup_status === "backup_failed" || attachment.backup_status === "conflicted"
-  ).length;
-  if (failed > 0) return { label: `写失敗 ${failed}/${attachments.length}`, tone: "rose" };
-  if (backingUp > 0) return { label: `写同期 ${backedUp}/${attachments.length}`, tone: "cyan" };
-  if (backedUp === attachments.length) return { label: `写済 ${backedUp}/${attachments.length}`, tone: "emerald" };
-  return { label: `写未 ${backedUp}/${attachments.length}`, tone: "amber" };
-}
-
-function getActionLabel(action: CGMPAction) {
-  if (action === "calendar") return "Cal";
-  if (action === "reminder") return "Rem";
-  if (action === "unclear") return "?";
-  return "Note";
-}
-
-function getParaLabel(para: CGMPPara) {
-  if (para === "project") return "P";
-  if (para === "resource") return "R";
-  if (para === "archive") return "Arc";
-  return "Area";
-}
-
-function getDomainLabel(domain: CGMPDomain | string) {
-  const labels: Record<string, string> = {
-    work: "work",
-    family: "fam",
-    self: "self",
-    health: "hlth",
-    finance: "fin",
-    learning: "learn",
-    creation: "make",
-    life_admin: "admin",
-    other: "other",
-  };
-  return labels[domain || "other"] || String(domain || "other");
-}
-
-function getActionInfo(action: CGMPAction): NonNullable<BadgeInfo> {
-  const info: Record<CGMPAction, NonNullable<BadgeInfo>> = {
-    note: {
-      title: "Action",
-      label: "Note",
-      description: "情報、気づき、メモ、ログとして残す記録です。Google Tasks/Calendar登録は基本しません。",
-      examples: ["会議メモ", "調査ログ", "思いつき"],
-    },
-    reminder: {
-      title: "Action",
-      label: "Reminder / Todo",
-      description: "やること・タスクです。必要に応じてGoogle Tasksへ登録し、完了/未完了を同期できます。",
-      examples: ["資料を送る", "買い物する", "確認する"],
-    },
-    calendar: {
-      title: "Action",
-      label: "Calendar",
-      description: "予定・スケジュールです。日時がある場合はGoogle Calendar登録の対象になります。",
-      examples: ["打ち合わせ", "通院予約", "イベント"],
-    },
-    unclear: {
-      title: "Action",
-      label: "Unclear",
-      description: "メモ、タスク、予定の判定が曖昧な記録です。後で確認して分類し直す想定です。",
-    },
-  };
-  return info[action || "note"] || info.note;
-}
-
-function getParaInfo(para: CGMPPara): NonNullable<BadgeInfo> {
-  const info: Record<Exclude<CGMPPara, "">, NonNullable<BadgeInfo>> = {
-    project: {
-      title: "PARA",
-      label: "P = Project",
-      description: "期限や成果物がある進行中の案件です。終わりがある仕事・家庭タスク・開発案件など。",
-      examples: ["PWA実装", "引越し準備", "旅行計画"],
-    },
-    area: {
-      title: "PARA",
-      label: "Area",
-      description: "継続的に管理する責任領域です。終わりが明確ではなく、生活や仕事の維持管理に近いもの。",
-      examples: ["家族", "健康", "仕事管理"],
-    },
-    resource: {
-      title: "PARA",
-      label: "R = Resource",
-      description: "後で参照したい知識・資料・アイデアです。すぐ実行するものではなく、検索で再利用する情報。",
-      examples: ["仕様メモ", "調査資料", "学び"],
-    },
-    archive: {
-      title: "PARA",
-      label: "Arc = Archive",
-      description: "完了済み、過去ログ、保存のみの記録です。AreaのAと混ざらないよう、このアプリではArc表記にしています。",
-      examples: ["完了した案件", "過去の記録", "保存ログ"],
-    },
-  };
-  return info[(para || "area") as Exclude<CGMPPara, "">] || info.area;
-}
-
-function getDomainInfo(domain: CGMPDomain | string): NonNullable<BadgeInfo> {
-  const normalized = normalizeDomain(domain) || "other";
-  const info: Record<Exclude<CGMPDomain, "">, NonNullable<BadgeInfo>> = {
-    work: { title: "Domain", label: "work", description: "仕事・業務・顧客・職場に関する記録です。" },
-    family: { title: "Domain", label: "family", description: "家族、子ども、家庭内の予定や相談に関する記録です。" },
-    self: { title: "Domain", label: "self", description: "自分自身の体調、考え、習慣、個人管理に関する記録です。" },
-    health: { title: "Domain", label: "health", description: "健康、医療、通院、体調管理に関する記録です。" },
-    finance: { title: "Domain", label: "finance", description: "お金、支払い、家計、費用、請求に関する記録です。" },
-    learning: { title: "Domain", label: "learning", description: "学習、読書、調査、勉強に関する記録です。" },
-    creation: { title: "Domain", label: "creation", description: "制作、開発、設計、アイデアづくりに関する記録です。" },
-    life_admin: { title: "Domain", label: "life_admin", description: "生活事務、手続き、買い物、予約、家の管理に関する記録です。" },
-    other: { title: "Domain", label: "other", description: "どの領域にも強く当てはまらない、または未分類の記録です。" },
-  };
-  return info[normalized as Exclude<CGMPDomain, "">] || info.other;
-}
-
-function getBackupInfo(record: CGMPRecord): NonNullable<BadgeInfo> {
-  return {
-    title: "Sync",
-    label: getBackupLabel(record),
-    description: "このメモ本文・メタデータのGoogle Drive同期状態です。画像の同期状態は別バッジで表示します。",
-    examples: [
-      "同期済: Google Drive側にも保存済み",
-      "未同期: まだアップロード待ち",
-      "失敗: 次回再同期または手動同期が必要",
-    ],
-  };
-}
-
-function getPhotoBackupInfo(record: CGMPRecord): NonNullable<BadgeInfo> {
-  const badge = getPhotoBackupBadge(record);
-  return {
-    title: "Photo Sync",
-    label: badge?.label || "写真なし",
-    description: "添付画像のGoogle Drive同期状態です。メモ本文とは別に、画像本体のアップロード状況を管理しています。",
-    examples: ["写済: 画像同期済み", "写未: 未同期画像あり", "写失敗: 画像アップロードに失敗"],
-  };
-}
-
-function getTaskInfo(record: CGMPRecord): NonNullable<BadgeInfo> {
-  return {
-    title: "Google Tasks",
-    label: record.google_task_status === "completed" ? "Task完" : "Task未",
-    description: "Google Tasks側の完了状態です。Task未は未完了、Task完は完了済みを表します。",
-  };
-}
-
-function getCalendarInfo(): NonNullable<BadgeInfo> {
-  return {
-    title: "Google Calendar",
-    label: "GCal",
-    description: "Google Calendarへ登録済みの予定です。Calendar側の変更は同期時にCGMPへ反映されます。",
-  };
-}
-
-const ACTION_SYMBOLS: Record<CGMPAction, string> = {
-  note: "📝",
-  reminder: "✅",
-  calendar: "📅",
-  unclear: "❓",
-};
-
-const DOMAIN_SYMBOLS: Record<Exclude<CGMPDomain, "">, string> = {
-  work: "🏢",
-  family: "👨‍👩‍👧‍👦",
-  self: "🌱",
-  health: "🩺",
-  finance: "💰",
-  learning: "📚",
-  creation: "🎨",
-  life_admin: "🧾",
-  other: "📌",
-};
-
-const DOMAIN_FILTER_OPTIONS: Array<{ value: Exclude<CGMPDomain, "">; label: string }> = [
-  { value: "work", label: "work" },
-  { value: "life_admin", label: "admin" },
-  { value: "family", label: "fam" },
-  { value: "self", label: "self" },
-  { value: "health", label: "hlth" },
-  { value: "finance", label: "fin" },
-  { value: "learning", label: "learn" },
-  { value: "creation", label: "make" },
-  { value: "other", label: "other" },
-];
-
-const WEEKDAY_LABELS = ["日曜日", "月曜日", "火曜日", "水曜日", "木曜日", "金曜日", "土曜日"];
-const WEEKDAY_MINI_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-
-function startOfDay(date: Date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-function addDays(date: Date, days: number) {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-  return next;
-}
-
-function getMondayOfWeek(date: Date) {
-  const base = startOfDay(date);
-  const day = base.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  return addDays(base, diff);
-}
-
-function dateKeyFromDate(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function formatWeekDate(date: Date) {
-  return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`;
-}
-
-function formatWeekRange(start: Date) {
-  return `${formatWeekDate(start)} - ${formatWeekDate(addDays(start, 6))}`;
-}
-
-function getJstParts(value: string) {
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return { dateKey: "", time: "" };
-  const parts = new Intl.DateTimeFormat("sv-SE", {
-    timeZone: "Asia/Tokyo",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(date);
-  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value || "";
-  return {
-    dateKey: `${get("year")}-${get("month")}-${get("day")}`,
-    time: `${get("hour")}:${get("minute")}`,
-  };
-}
-
-function minutesFromTime(value: string) {
-  const match = /^(\d{1,2}):(\d{2})/.exec(value || "");
-  if (!match) return Number.POSITIVE_INFINITY;
-  return Number(match[1]) * 60 + Number(match[2]);
-}
-
-function getRecordTimeline(record: CGMPRecord) {
-  if (record.date) {
-    const hasTime = Boolean(record.time);
-    return {
-      dateKey: record.date,
-      timeLabel: record.all_day ? "終日" : hasTime ? record.time.slice(0, 5) : "No time",
-      sourceLabel: "scheduled" as const,
-      sortValue: record.all_day ? -1 : hasTime ? minutesFromTime(record.time) : Number.POSITIVE_INFINITY - 1,
-    };
-  }
-
-  const created = getJstParts(record.created_at || record.updated_at);
-  return {
-    dateKey: created.dateKey,
-    timeLabel: created.time || "No time",
-    sourceLabel: "created" as const,
-    sortValue: created.time ? minutesFromTime(created.time) : Number.POSITIVE_INFINITY,
-  };
-}
-
-function getActionSymbol(record: CGMPRecord) {
-  if ((record.attachments || []).some((attachment) => attachment.type === "image")) return "🖼️";
-  return ACTION_SYMBOLS[record.action || "note"] || ACTION_SYMBOLS.note;
-}
-
-function getDomainSymbol(domain: CGMPDomain | string) {
-  const normalized = normalizeDomain(domain);
-  return DOMAIN_SYMBOLS[(normalized || "other") as Exclude<CGMPDomain, "">] || DOMAIN_SYMBOLS.other;
-}
-
-function scrollToElementById(id: string, block: ScrollLogicalPosition = "start") {
-  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block });
-}
-
-function normalizeSemanticThreshold(value: unknown) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return SEMANTIC_CANDIDATE_THRESHOLD;
-  return Math.min(1, Math.max(-1, number));
-}
-
-function Badge({
-  children,
-  tone = "slate",
-  compact = false,
-  onClick,
-  title,
-}: {
-  children: ReactNode;
-  tone?: "slate" | "cyan" | "emerald" | "amber" | "rose";
-  compact?: boolean;
-  onClick?: () => void;
-  title?: string;
-}) {
-  const toneClass =
-    tone === "cyan"
-      ? "border-[color:var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
-      : tone === "emerald"
-        ? "border-[color:var(--success)] bg-[var(--success-soft)] text-[var(--success)]"
-        : tone === "amber"
-          ? "border-[color:var(--orange)] bg-[var(--orange-soft)] text-[var(--orange)]"
-          : tone === "rose"
-            ? "border-[color:var(--danger)] bg-[var(--danger-soft)] text-[var(--danger)]"
-            : "border-[color:var(--border)] bg-[var(--card-soft)] text-[var(--muted)]";
-  const className = `inline-flex items-center rounded-full border ${
-    compact ? "px-2 py-0.5 text-[11px] leading-5" : "px-2.5 py-1 text-xs"
-  } ${toneClass}`;
-  if (onClick) {
-    return (
-      <button
-        type="button"
-        title={title}
-        onClick={(event) => {
-          event.stopPropagation();
-          onClick();
-        }}
-        onKeyDown={(event) => event.stopPropagation()}
-        className={`${className} cursor-help text-left transition hover:brightness-95 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]`}
-      >
-        {children}
-      </button>
-    );
-  }
-  return (
-    <span
-      title={title}
-      className={className}
-    >
-      {children}
-    </span>
-  );
-}
-
-function getDomainColorVar(domain: CGMPDomain | string) {
-  const normalized = String(domain || "other").replace("_", "-");
-  if (normalized === "life-admin") return "var(--domain-life-admin)";
-  return `var(--domain-${normalized})`;
-}
-
-function DomainBadge({
-  domain,
-  compact = false,
-  onClick,
-}: {
-  domain: CGMPDomain | string;
-  compact?: boolean;
-  onClick?: () => void;
-}) {
-  const color = getDomainColorVar(domain);
-  const className = `inline-flex items-center rounded-full border text-[color:var(--domain-color)] ${
-    compact ? "px-2 py-0.5 text-[11px] leading-5" : "px-2.5 py-1 text-xs"
-  }`;
-  const style = {
-    "--domain-color": color,
-    backgroundColor: `color-mix(in srgb, ${color} 12%, var(--card))`,
-    borderColor: color,
-  } as CSSProperties;
-  if (onClick) {
-    return (
-      <button
-        type="button"
-        title="Domainの意味を表示"
-        onClick={(event) => {
-          event.stopPropagation();
-          onClick();
-        }}
-        onKeyDown={(event) => event.stopPropagation()}
-        className={`${className} cursor-help text-left transition hover:brightness-95 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]`}
-        style={style}
-      >
-        {getDomainLabel(domain)}
-      </button>
-    );
-  }
-  return (
-    <span
-      className={className}
-      style={style}
-    >
-      {getDomainLabel(domain)}
-    </span>
-  );
-}
-
-function BadgeInfoModal({ info, onClose }: { info: BadgeInfo; onClose: () => void }) {
-  if (!info) return null;
-  return (
-    <div className="fixed inset-0 z-[85] flex items-end justify-center bg-slate-950/24 px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] backdrop-blur-[2px] sm:items-center sm:pb-4">
-      <button type="button" className="absolute inset-0 cursor-default" aria-label="説明を閉じる" onClick={onClose} />
-      <section className="relative w-full max-w-md rounded-[28px] border border-[color:var(--border)] bg-[var(--card)] p-5 shadow-[0_24px_80px_var(--shadow-soft)]">
-        <div className="text-[11px] uppercase tracking-[0.34em] text-[var(--accent)]">{info.title}</div>
-        <h2 className="mt-2 text-2xl font-semibold text-[var(--text)]">{info.label}</h2>
-        <p className="mt-3 text-sm leading-7 text-[var(--muted)]">{info.description}</p>
-        {info.examples?.length ? (
-          <div className="mt-4 flex flex-wrap gap-2">
-            {info.examples.map((example) => (
-              <Badge key={example} compact>
-                {example}
-              </Badge>
-            ))}
-          </div>
-        ) : null}
-        <div className="mt-5 flex justify-end">
-          <button type="button" onClick={onClose} className={secondaryButtonClass}>
-            閉じる
-          </button>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function AiProcessingOverlay({
-  state,
-  elapsedMs,
-}: {
-  state: AiProcessingOverlayState | null;
-  elapsedMs: number;
-}) {
-  if (!state) return null;
-
-  const isDone = typeof state.finishedAt === "number";
-  const title = isDone ? "完了しました" : state.label;
-  const description = isDone
-    ? `所要時間 ${elapsedMs.toLocaleString("ja-JP")} ms`
-    : `${elapsedMs.toLocaleString("ja-JP")} ms`;
-
-  return (
-    <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-[var(--overlay)] px-6 backdrop-blur-[2px]"
-      role="status"
-      aria-live="polite"
-      aria-label={title}
-    >
-      <div className="w-full max-w-[280px] rounded-[28px] border border-[color:var(--border)] bg-[var(--card)] p-6 text-center shadow-[0_24px_80px_var(--shadow-soft)]">
-        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-[var(--accent-soft)]">
-          {isDone ? (
-            <span className="text-2xl font-bold text-[var(--accent)]">✓</span>
-          ) : (
-            <span className="h-8 w-8 animate-spin rounded-full border-4 border-[color:var(--accent-soft)] border-t-[color:var(--accent)]" />
-          )}
-        </div>
-        <div className="mt-4 text-xs font-semibold uppercase tracking-[0.28em] text-[var(--accent)]">
-          {state.kind === "text" ? "Text AI" : "Image AI"}
-        </div>
-        <div className="mt-2 text-lg font-semibold text-[var(--text)]">{title}</div>
-        <div className="mt-2 font-mono text-sm text-[var(--muted)]">{description}</div>
-      </div>
-    </div>
-  );
-}
-
-function SectionHeading({
-  eyebrow,
-  title,
-  description,
-}: {
-  eyebrow: string;
-  title: string;
-  description?: string;
-}) {
-  return (
-    <div className="mb-4">
-      <div className="text-[11px] uppercase tracking-[0.3em] text-[var(--accent)]">{eyebrow}</div>
-      <h2 className="mt-2 text-xl font-semibold text-[var(--text)]">{title}</h2>
-      {description ? <p className="mt-1 text-sm leading-6 text-[var(--muted)]">{description}</p> : null}
-    </div>
-  );
-}
-
-function SettingsAccordion({
-  title,
-  summary,
-  badge,
-  defaultOpen = false,
-  children,
-}: {
-  title: string;
-  summary?: string;
-  badge?: ReactNode;
-  defaultOpen?: boolean;
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <section className="overflow-hidden rounded-[24px] border border-[color:var(--border)] bg-[var(--card-soft)] shadow-[0_10px_30px_var(--shadow-soft)]">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className="flex w-full items-start justify-between gap-3 px-4 py-4 text-left transition hover:bg-[var(--accent-soft)]"
-        aria-expanded={open}
-      >
-        <span className="min-w-0">
-          <span className="flex flex-wrap items-center gap-2">
-            <span className="text-base font-semibold text-[var(--text)]">{title}</span>
-            {badge}
-          </span>
-          {summary ? <span className="mt-1 block text-sm leading-6 text-[var(--muted)]">{summary}</span> : null}
-        </span>
-        <span className="mt-0.5 shrink-0 rounded-full border border-[color:var(--border)] bg-[var(--card)] px-2 py-1 text-xs font-semibold text-[var(--muted)]">
-          {open ? "閉じる" : "開く"}
-        </span>
-      </button>
-      <div
-        className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
-          open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
-        }`}
-      >
-        <div className="min-h-0 overflow-hidden">
-          <div className="border-t border-[color:var(--border)] px-4 py-4">{children}</div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function LabeledInput({
-  label,
-  value,
-  onChange,
-  placeholder,
-  type = "text",
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-  type?: string;
-}) {
-  return (
-    <label className="block min-w-0 text-sm font-medium text-[var(--text)]">
-      {label}
-      <input
-        type={type}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        className={fieldClass}
-      />
-    </label>
-  );
-}
-
-function LabeledNumber({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <label className="block min-w-0 text-sm font-medium text-[var(--text)]">
-      {label}
-      <input
-        type="number"
-        min={1}
-        value={Number.isFinite(value) ? value : 60}
-        onChange={(event) => onChange(Number(event.target.value || 60))}
-        className={fieldClass}
-      />
-    </label>
-  );
-}
-
-function LabeledTextarea({
-  label,
-  value,
-  onChange,
-  placeholder,
-  rows = 5,
-  inputRef,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-  rows?: number;
-  inputRef?: RefObject<HTMLTextAreaElement | null>;
-}) {
-  return (
-    <label className="block min-w-0 text-sm font-medium text-[var(--text)]">
-      {label}
-      <textarea
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        rows={rows}
-        ref={inputRef}
-        className={textareaClass}
-      />
-    </label>
-  );
-}
-
-function LabeledSelect({
-  label,
-  value,
-  onChange,
-  options,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  options: { value: string; label: string }[];
-}) {
-  return (
-    <label className="block min-w-0 text-sm font-medium text-[var(--text)]">
-      {label}
-      <select value={value} onChange={(event) => onChange(event.target.value)} className={fieldClass}>
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-function LabeledToggle({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: boolean;
-  onChange: (value: boolean) => void;
-}) {
-  return (
-    <label className="flex items-center justify-between gap-3 rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-4 py-3 text-sm text-[var(--text)]">
-      <span>{label}</span>
-      <button
-        type="button"
-        onClick={() => onChange(!value)}
-        className={`relative h-6 w-11 rounded-full border transition ${
-          value ? "border-[color:var(--accent)] bg-[var(--accent)]" : "border-[color:var(--border)] bg-[var(--card-soft)]"
-        }`}
-      >
-        <span
-          className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition ${
-            value ? "left-5" : "left-0.5"
-          }`}
-        />
-      </button>
-    </label>
-  );
-}
-
-function RecordEditor({
-  draft,
-  onChange,
-  showRawInput = false,
-}: {
-  draft: RecordFormState;
-  onChange: (patch: Partial<RecordFormState>) => void;
-  showRawInput?: boolean;
-}) {
-  return (
-    <div className="grid gap-4 xl:grid-cols-2">
-      <div className="space-y-4">
-        {showRawInput ? (
-          <LabeledTextarea
-            label="Raw input"
-            value={draft.raw_input}
-            onChange={(value) => onChange({ raw_input: value, body: draft.body || value })}
-            placeholder="雑に投げたメモ本文"
-            rows={8}
-          />
-        ) : null}
-        <LabeledInput label="Title" value={draft.title} onChange={(value) => onChange({ title: value })} placeholder="短く具体的に" />
-        <LabeledTextarea
-          label="Summary"
-          value={draft.summary}
-          onChange={(value) => onChange({ summary: value })}
-          placeholder="要点を1〜2行で"
-          rows={4}
-        />
-        <LabeledTextarea label="Body" value={draft.body} onChange={(value) => onChange({ body: value })} placeholder="本文" rows={8} />
-        <LabeledInput
-          label="Tags"
-          value={draft.tagsText}
-          onChange={(value) => onChange({ tagsText: value })}
-          placeholder="#仕事 #AI #仕様"
-        />
-      </div>
-
-      <div className="space-y-4">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <LabeledSelect
-            label="Action"
-            value={draft.action}
-            onChange={(value) => onChange({ action: normalizeAction(value) })}
-            options={[
-              { value: "note", label: "note" },
-              { value: "reminder", label: "reminder" },
-              { value: "calendar", label: "calendar" },
-              { value: "unclear", label: "unclear" },
-            ]}
-          />
-          <LabeledSelect
-            label="PARA"
-            value={draft.para}
-            onChange={(value) => onChange({ para: normalizePara(value) })}
-            options={[
-              { value: "project", label: "project" },
-              { value: "area", label: "area" },
-              { value: "resource", label: "resource" },
-              { value: "archive", label: "archive" },
-            ]}
-          />
-          <LabeledSelect
-            label="Domain"
-            value={draft.domain}
-            onChange={(value) => onChange({ domain: normalizeDomain(value) })}
-            options={[
-              { value: "work", label: "work" },
-              { value: "family", label: "family" },
-              { value: "self", label: "self" },
-              { value: "health", label: "health" },
-              { value: "finance", label: "finance" },
-              { value: "learning", label: "learning" },
-              { value: "creation", label: "creation" },
-              { value: "life_admin", label: "life_admin" },
-              { value: "other", label: "other" },
-            ]}
-          />
-          <LabeledNumber
-            label="Duration (min)"
-            value={draft.duration_minutes}
-            onChange={(value) => onChange({ duration_minutes: value })}
-          />
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          <LabeledInput label="Date" value={draft.date} onChange={(value) => onChange({ date: value })} placeholder="YYYY-MM-DD" />
-          <LabeledInput label="Time" value={draft.time} onChange={(value) => onChange({ time: value })} placeholder="HH:mm" />
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          <LabeledToggle label="All day" value={draft.all_day} onChange={(value) => onChange({ all_day: value })} />
-          <LabeledInput label="Location" value={draft.location} onChange={(value) => onChange({ location: value })} placeholder="場所" />
-        </div>
-
-        <LabeledTextarea
-          label="Confirmation"
-          value={draft.confirmation}
-          onChange={(value) => onChange({ confirmation: value })}
-          placeholder="確認文"
-          rows={3}
-        />
-        <LabeledInput
-          label="note_tags"
-          value={draft.note_tags}
-          onChange={(value) => onChange({ note_tags: value })}
-          placeholder="#tag #tag"
-        />
-        <LabeledTextarea
-          label="note_index_line"
-          value={draft.note_index_line}
-          onChange={(value) => onChange({ note_index_line: value })}
-          placeholder="YYYY-MM-DD | TYPE | #tag | summary"
-          rows={3}
-        />
-        <LabeledTextarea
-          label="user_intent_summary"
-          value={draft.user_intent_summary}
-          onChange={(value) => onChange({ user_intent_summary: value })}
-          placeholder="検索しやすい1行要約"
-          rows={3}
-        />
-      </div>
-    </div>
-  );
-}
-
 function RecordCard({
   record,
   onOpen,
@@ -1826,411 +793,6 @@ function MiniRecordCard({
         </p>
       </div>
     </button>
-  );
-}
-
-function WeekRecordItem({
-  record,
-  isExpanded,
-  onToggleExpanded,
-  onOpenHome,
-  onOpenImage,
-  onToggleGoogleTaskStatus,
-  externalProcessingKey,
-}: {
-  record: CGMPRecord;
-  isExpanded: boolean;
-  onToggleExpanded: (id: string) => void;
-  onOpenHome: (id: string) => void;
-  onOpenImage: (attachment: ImageAttachment, imageUrl: string) => void;
-  onToggleGoogleTaskStatus: (id: string) => void;
-  externalProcessingKey: string;
-}) {
-  const timeline = getRecordTimeline(record);
-  const isTaskRegistered = Boolean(record.google_task_id && record.google_task_list_id);
-  const taskProcessing = externalProcessingKey === `task-status:${record.id}`;
-  const detailBody = record.body || record.raw_input || "";
-  const detailIntent = record.user_intent_summary || record.confirmation || "";
-
-  return (
-    <div
-      id={`week-item-${record.id}`}
-      role="button"
-      tabIndex={0}
-      onClick={() => onToggleExpanded(record.id)}
-      onKeyDown={(event) => {
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        onToggleExpanded(record.id);
-      }}
-      className={`group w-full max-w-full cursor-pointer overflow-hidden rounded-[22px] border bg-[var(--card)] p-3 text-left transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] sm:rounded-[24px] sm:p-4 ${
-        isExpanded
-          ? "border-[color:var(--accent)] shadow-[0_12px_34px_var(--shadow-soft)]"
-          : "border-[color:var(--border)]"
-      }`}
-      aria-expanded={isExpanded}
-    >
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <span className="shrink-0 font-mono text-base font-semibold leading-6 text-[var(--text)] sm:text-lg">
-          {timeline.timeLabel}
-        </span>
-        <span className="shrink-0 rounded-full bg-[var(--card-soft)] px-2.5 py-1 text-xs text-[var(--subtle)]">
-          {timeline.sourceLabel}
-        </span>
-        <span className="shrink-0 text-lg leading-none sm:text-xl">{getActionSymbol(record)}</span>
-        <span className="shrink-0 text-lg leading-none sm:text-xl">{getDomainSymbol(record.domain)}</span>
-        <h3 className="min-w-[12rem] flex-1 truncate text-base font-semibold leading-7 text-[var(--text)] sm:text-lg">
-          {record.title || "（無題）"}
-        </h3>
-        {isTaskRegistered ? (
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              onToggleGoogleTaskStatus(record.id);
-            }}
-            disabled={taskProcessing}
-            className={`ml-auto shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-semibold leading-5 transition disabled:cursor-not-allowed disabled:opacity-50 ${
-              record.google_task_status === "completed"
-                ? "border-[color:var(--success)] bg-[var(--success-soft)] text-[var(--success)] hover:brightness-95"
-                : "border-[color:var(--orange)] bg-[var(--orange-soft)] text-[var(--orange)] hover:brightness-95"
-            }`}
-          >
-            {taskProcessing ? "同期中" : record.google_task_status === "completed" ? "完了" : "未完"}
-          </button>
-        ) : null}
-      </div>
-
-      {!isExpanded && (record.attachments || []).length > 0 ? (
-        <div className="mt-2" onClick={(event) => event.stopPropagation()}>
-          <ImageAttachmentGrid attachments={record.attachments} compact maxItems={1} onOpen={onOpenImage} />
-        </div>
-      ) : null}
-
-      <div
-        className={`overflow-hidden transition-[max-height,opacity,margin-top] duration-300 ease-out ${
-          isExpanded ? "mt-3 max-h-[42rem] opacity-100" : "mt-0 max-h-0 opacity-0"
-        }`}
-      >
-        <div className="space-y-3 rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-3 text-sm leading-6 text-[var(--text)]">
-          <section>
-            <div className="text-[10px] uppercase tracking-[0.24em] text-[var(--subtle)]">Summary</div>
-            <p className="mt-1 whitespace-pre-wrap break-words">{record.summary || "（要約なし）"}</p>
-          </section>
-          {detailIntent ? (
-            <section>
-              <div className="text-[10px] uppercase tracking-[0.24em] text-[var(--subtle)]">Intent</div>
-              <p className="mt-1 whitespace-pre-wrap break-words">{detailIntent}</p>
-            </section>
-          ) : null}
-          {detailBody ? (
-            <section>
-              <div className="text-[10px] uppercase tracking-[0.24em] text-[var(--subtle)]">
-                {record.body ? "Body" : "Raw input"}
-              </div>
-              <pre className="mt-1 m-0 max-h-48 overflow-auto whitespace-pre-wrap break-words font-sans">{detailBody}</pre>
-            </section>
-          ) : null}
-          <section className="flex flex-wrap gap-2 text-xs text-[var(--muted)]">
-            <span>created {formatJstDateTime(record.created_at)}</span>
-            <span>updated {formatJstDateTime(record.updated_at)}</span>
-            {record.date ? <span>date {record.date}</span> : null}
-            {record.time ? <span>time {record.time}</span> : null}
-          </section>
-          {(record.attachments || []).length > 0 ? (
-            <section onClick={(event) => event.stopPropagation()}>
-              <div className="text-[10px] uppercase tracking-[0.24em] text-[var(--subtle)]">Images</div>
-              <div className="mt-2">
-                <ImageAttachmentGrid attachments={record.attachments} compact maxItems={3} onOpen={onOpenImage} />
-              </div>
-            </section>
-          ) : null}
-          <div className="flex justify-end">
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                onOpenHome(record.id);
-              }}
-              onKeyDown={(event) => event.stopPropagation()}
-              className="rounded-full border border-[color:var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs font-semibold text-[var(--text)] transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)]"
-            >
-              Homeで開く
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function WeeklyMinimap({
-  days,
-  activeDay,
-  todayKey,
-}: {
-  days: Array<{ date: Date; dateKey: string; records: CGMPRecord[] }>;
-  activeDay: number;
-  todayKey: string;
-}) {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const collapseTimerRef = useRef<number | null>(null);
-
-  const revealMinimap = () => {
-    setIsExpanded(true);
-    if (collapseTimerRef.current) {
-      window.clearTimeout(collapseTimerRef.current);
-    }
-    collapseTimerRef.current = window.setTimeout(() => setIsExpanded(false), 1600);
-  };
-
-  useEffect(() => {
-    return () => {
-      if (collapseTimerRef.current) {
-        window.clearTimeout(collapseTimerRef.current);
-      }
-    };
-  }, []);
-
-  return (
-    <aside
-      onPointerDown={revealMinimap}
-      onBlur={(event) => {
-        if (event.currentTarget.contains(event.relatedTarget)) return;
-        setIsExpanded(false);
-      }}
-      className={`fixed right-1 top-28 bottom-32 select-none overflow-hidden rounded-3xl border transition-all duration-200 sm:right-3 sm:top-20 sm:bottom-24 ${
-        isExpanded
-          ? "z-[70] w-16 border-[color:var(--border)] bg-[var(--card)] px-1.5 py-2 opacity-95 shadow-[0_18px_44px_var(--shadow-soft)] backdrop-blur-xl sm:w-[4.5rem]"
-          : "z-30 w-9 border-transparent bg-transparent px-1 py-1 opacity-40 shadow-none backdrop-blur-none hover:opacity-70 sm:w-10"
-      }`}
-      aria-label="Weekly Minimap"
-    >
-      <div className={`flex h-full flex-col overflow-hidden ${isExpanded ? "gap-1.5" : "gap-1"}`}>
-        {days.map((day, index) => {
-          const isActive = activeDay === index;
-          const isToday = day.dateKey === todayKey;
-          return (
-            <div
-              key={day.dateKey}
-              onClick={() => {
-                revealMinimap();
-                scrollToElementById(`week-day-${index}`);
-              }}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter" && event.key !== " ") return;
-                event.preventDefault();
-                revealMinimap();
-                scrollToElementById(`week-day-${index}`);
-              }}
-              role="button"
-              tabIndex={0}
-              className={`min-h-0 flex-1 rounded-2xl border transition ${
-                isExpanded && isActive
-                  ? "border-[color:var(--accent)] bg-[var(--accent-soft)] shadow-[inset_0_0_0_1px_var(--accent)]"
-                  : isExpanded
-                    ? "border-transparent hover:border-[color:var(--border)] hover:bg-[var(--card-soft)]"
-                    : "border-transparent bg-transparent shadow-none"
-              } ${isExpanded ? "grid grid-cols-[1.65rem_minmax(0,1fr)] items-start gap-1 px-1.5 py-1" : "px-1 py-0.5 text-left"}`}
-              aria-label={`${WEEKDAY_MINI_LABELS[index]}へ移動`}
-            >
-              <div
-                className={`w-fit rounded-full px-1 font-semibold ${
-                  isExpanded && isToday
-                    ? "bg-[var(--card)] ring-1 ring-[color:var(--accent)] text-[var(--accent)]"
-                  : isExpanded && isActive
-                      ? "bg-[var(--card)] text-[var(--accent)]"
-                      : "text-[var(--subtle)]"
-                } ${isExpanded ? "sticky top-0 z-10 text-[10px] leading-4" : "mx-auto mb-0.5 text-[8px] leading-3"}`}
-              >
-                {WEEKDAY_MINI_LABELS[index]}
-              </div>
-              <div className={isExpanded ? "min-w-0 space-y-1 pt-0.5" : "space-y-0.5"}>
-                {day.records.length > 0 ? (
-                  day.records.map((record) => {
-                    const color = getDomainColorVar(record.domain || "other");
-                    return (
-                      <div
-                        key={record.id}
-                        className={`flex w-full items-center overflow-hidden rounded-sm ${isExpanded ? "h-2.5" : "h-2"}`}
-                        aria-hidden="true"
-                      >
-                        <span
-                          className={`min-w-0 flex-1 rounded-full ${isExpanded ? "h-1 opacity-90" : "h-0.5 opacity-65"}`}
-                          style={{ backgroundColor: color } as CSSProperties}
-                        />
-                      </div>
-                    );
-                  })
-                ) : (
-                  <div className="mx-auto h-0.5 w-3 rounded-full bg-[var(--border)] opacity-60" />
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </aside>
-  );
-}
-
-function WeeklyView({
-  weekStart,
-  records,
-  onPreviousWeek,
-  onNextWeek,
-  onThisWeek,
-  onOpenRecord,
-  onOpenImage,
-  onToggleGoogleTaskStatus,
-  externalProcessingKey,
-}: {
-  weekStart: Date;
-  records: CGMPRecord[];
-  onPreviousWeek: () => void;
-  onNextWeek: () => void;
-  onThisWeek: () => void;
-  onOpenRecord: (id: string) => void;
-  onOpenImage: (attachment: ImageAttachment, imageUrl: string) => void;
-  onToggleGoogleTaskStatus: (id: string) => void;
-  externalProcessingKey: string;
-}) {
-  const [activeDay, setActiveDay] = useState(0);
-  const [expandedRecordId, setExpandedRecordId] = useState<string | null>(null);
-  const todayKey = dateKeyFromDate(new Date());
-  const days = useMemo(
-    () =>
-      Array.from({ length: 7 }, (_, index) => {
-        const date = addDays(weekStart, index);
-        const dateKey = dateKeyFromDate(date);
-        const dayRecords = records
-          .filter((record) => getRecordTimeline(record).dateKey === dateKey)
-          .sort((left, right) => {
-            const leftTimeline = getRecordTimeline(left);
-            const rightTimeline = getRecordTimeline(right);
-            if (leftTimeline.sortValue !== rightTimeline.sortValue) {
-              return leftTimeline.sortValue - rightTimeline.sortValue;
-            }
-            return String(left.created_at || left.updated_at).localeCompare(String(right.created_at || right.updated_at));
-          });
-        return { date, dateKey, records: dayRecords };
-      }),
-    [records, weekStart]
-  );
-
-  useEffect(() => {
-    const sections = days
-      .map((_, index) => document.getElementById(`week-day-${index}`))
-      .filter((element): element is HTMLElement => Boolean(element));
-    if (sections.length === 0) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const visible = entries
-          .filter((entry) => entry.isIntersecting)
-          .sort((left, right) => {
-            const leftTop = Math.abs(left.boundingClientRect.top - 140);
-            const rightTop = Math.abs(right.boundingClientRect.top - 140);
-            return leftTop - rightTop;
-          });
-        const target = visible[0]?.target;
-        if (!target?.id) return;
-        const index = Number(target.id.replace("week-day-", ""));
-        if (Number.isFinite(index)) setActiveDay(index);
-      },
-      { root: null, rootMargin: "-20% 0px -55% 0px", threshold: 0.08 }
-    );
-
-    sections.forEach((section) => observer.observe(section));
-    return () => observer.disconnect();
-  }, [days]);
-
-  useEffect(() => {
-    setExpandedRecordId(null);
-  }, [weekStart]);
-
-  return (
-    <div className="grid max-w-full gap-3 overflow-hidden sm:gap-4">
-      <WeeklyMinimap days={days} activeDay={activeDay} todayKey={todayKey} />
-      <section className={panelClass}>
-        <SectionHeading eyebrow="Week" title="週次ログビュー" />
-        <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2">
-          <button type="button" onClick={onPreviousWeek} className={secondaryButtonClass}>
-            前週
-          </button>
-          <div className="min-w-0 rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2.5 text-center text-sm font-semibold text-[var(--text)]">
-            {formatWeekRange(weekStart)}
-          </div>
-          <button type="button" onClick={onNextWeek} className={secondaryButtonClass}>
-            次週
-          </button>
-          <button type="button" onClick={onThisWeek} className={`${primaryButtonClass} col-span-3`}>
-            Today / This Week
-          </button>
-        </div>
-      </section>
-
-      <section className="grid max-w-full gap-3 overflow-hidden">
-        {days.map(({ date, dateKey, records: dayRecords }, index) => {
-          const day = date.getDay();
-          const isToday = dateKey === todayKey;
-          const weekendStyle =
-            day === 6
-              ? { backgroundColor: "var(--week-saturday-bg)" }
-              : day === 0
-                ? { backgroundColor: "var(--week-sunday-bg)" }
-                : undefined;
-          const cardStyle = isToday
-            ? { backgroundColor: "var(--today-bg)", borderColor: "var(--accent)" }
-            : weekendStyle;
-
-          return (
-            <article
-              id={`week-day-${index}`}
-              key={dateKey}
-              className="max-w-full overflow-hidden rounded-[24px] border border-[color:var(--border)] bg-[var(--card)] p-4 shadow-[0_12px_34px_var(--shadow-soft)] sm:p-5"
-              style={cardStyle}
-            >
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-xl font-semibold text-[var(--text)]">{WEEKDAY_LABELS[day]}</h3>
-                    {isToday ? <Badge compact tone="cyan">Today</Badge> : null}
-                    {day === 6 ? <Badge compact tone="cyan">Sat</Badge> : null}
-                    {day === 0 ? <Badge compact tone="rose">Sun</Badge> : null}
-                  </div>
-                  <div className="mt-1 text-base text-[var(--muted)]">{formatWeekDate(date)}</div>
-                </div>
-                <Badge tone={dayRecords.length > 0 ? "emerald" : "slate"}>{dayRecords.length}件</Badge>
-              </div>
-
-              <div className="mt-4 grid gap-2">
-                {dayRecords.length > 0 ? (
-                  dayRecords.map((record) => (
-                    <WeekRecordItem
-                      key={record.id}
-                      record={record}
-                      isExpanded={expandedRecordId === record.id}
-                      onToggleExpanded={(id) => {
-                        setExpandedRecordId((current) => (current === id ? null : id));
-                      }}
-                      onOpenHome={onOpenRecord}
-                      onOpenImage={onOpenImage}
-                      onToggleGoogleTaskStatus={onToggleGoogleTaskStatus}
-                      externalProcessingKey={externalProcessingKey}
-                    />
-                  ))
-                ) : (
-                  <div className="rounded-2xl border border-dashed border-[color:var(--border)] px-4 py-5 text-sm text-[var(--subtle)]">
-                    No records
-                  </div>
-                )}
-              </div>
-            </article>
-          );
-        })}
-      </section>
-    </div>
   );
 }
 
@@ -2958,9 +1520,7 @@ export default function Page() {
       }
       return;
     }
-    const targets = records.filter(
-      (record) => (record.google_task_id && record.google_task_list_id) || (record.google_calendar_event_id && record.google_calendar_id)
-    );
+    const targets = records.filter((record) => shouldSyncExternalRecord(record, settingsDraft));
     if (targets.length === 0) {
       if (showNotice) {
         const now = performance.now();
@@ -2987,7 +1547,12 @@ export default function Page() {
 
     setExternalSyncing(true);
     const startedAt = performance.now();
-    const activityId = startSyncActivity("Checking Google updates", "Tasks / Calendar", `${targets.length}件`);
+    const syncWindow = getExternalSyncWindow(settingsDraft);
+    const activityId = startSyncActivity(
+      "Checking Google updates",
+      "Tasks / Calendar",
+      `-${syncWindow.pastDays}日〜+${syncWindow.futureDays}日 / ${targets.length}件`
+    );
     const setManualProgress = (patch: Partial<ExternalSyncProgressState>) => {
       if (!showNotice) return;
       setExternalSyncProgress((prev) => ({
@@ -3993,10 +2558,10 @@ export default function Page() {
   useEffect(() => {
     if (!isReady) return;
     if (initialExternalSyncDoneRef.current) return;
-    if (!records.some((record) => record.google_task_id || record.google_calendar_event_id)) return;
+    if (!records.some((record) => shouldSyncExternalRecord(record, settingsDraft))) return;
     initialExternalSyncDoneRef.current = true;
     void syncExternalStatuses(false);
-  }, [isReady, records]);
+  }, [isReady, records, settingsDraft]);
 
   useEffect(() => {
     if (!isReady) return;
@@ -6092,6 +4657,70 @@ export default function Page() {
                         </dd>
                       </div>
                     </dl>
+                    <div className="mt-4 rounded-2xl border border-[color:var(--border)] bg-[var(--card)] p-3">
+                      <div className="text-sm font-semibold text-[var(--text)]">Google状態同期の対象範囲</div>
+                      <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
+                        バックグラウンド同期でGoogle側を確認するrecordをDateベースで絞ります。日付なしの未完了Tasksは、Google側で後から日付が付く可能性があるため対象に残します。
+                      </p>
+                      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                        <LabeledInput
+                          label="過去何日前から"
+                          type="number"
+                          value={String(settingsDraft?.external_sync_past_days ?? 7)}
+                          onChange={(value) =>
+                            setSettingsDraft((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    external_sync_past_days: Math.max(0, Math.round(Number(value) || 0)),
+                                  }
+                                : prev
+                            )
+                          }
+                          placeholder="7"
+                        />
+                        <LabeledInput
+                          label="未来何日後まで"
+                          type="number"
+                          value={String(settingsDraft?.external_sync_future_days ?? 60)}
+                          onChange={(value) =>
+                            setSettingsDraft((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    external_sync_future_days: Math.max(0, Math.round(Number(value) || 0)),
+                                  }
+                                : prev
+                            )
+                          }
+                          placeholder="60"
+                        />
+                      </div>
+                      <div className="mt-3 grid gap-2">
+                        <LabeledToggle
+                          label="完了済みTasksは同期しない"
+                          value={settingsDraft?.external_sync_exclude_completed_tasks ?? true}
+                          onChange={(value) =>
+                            setSettingsDraft((prev) =>
+                              prev ? { ...prev, external_sync_exclude_completed_tasks: value } : prev
+                            )
+                          }
+                        />
+                        <LabeledToggle
+                          label="終了済みCalendar予定を同期対象から外す"
+                          value={settingsDraft?.external_sync_exclude_ended_calendar ?? false}
+                          onChange={(value) =>
+                            setSettingsDraft((prev) =>
+                              prev ? { ...prev, external_sync_exclude_ended_calendar: value } : prev
+                            )
+                          }
+                        />
+                      </div>
+                      <div className="mt-3 text-xs text-[var(--subtle)]">
+                        現在の既定: -{settingsDraft?.external_sync_past_days ?? 7}日 〜 +
+                        {settingsDraft?.external_sync_future_days ?? 60}日
+                      </div>
+                    </div>
                     <div className="mt-4 flex flex-wrap gap-2">
                       <button type="button" onClick={() => runBackupQueue(true)} className={primaryButtonClass}>
                         {backupProcessing ? "処理中..." : "今すぐバックアップ"}
