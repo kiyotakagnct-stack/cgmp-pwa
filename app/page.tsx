@@ -72,6 +72,14 @@ type SortKey = "updated_at" | "created_at" | "datetime";
 type SearchMode = "text" | "semantic";
 type ThemeMode = "system" | "light" | "dark";
 type Notice = { kind: "info" | "error"; text: string } | null;
+type SyncActivity = {
+  id: number;
+  status: "running" | "done" | "error";
+  label: string;
+  title?: string;
+  detail?: string;
+  startedAt: number;
+};
 type LightboxState = { imageUrl: string; title: string } | null;
 type PromptEditorDefinition = Omit<CGMPPromptDefinition, "hiddenContract">;
 type DeployInfo = {
@@ -2283,6 +2291,7 @@ export default function Page() {
   const [deletedRecordsSummary, setDeletedRecordsSummary] = useState<DeletedRecordsSummary | null>(null);
   const [checkedRecordIds, setCheckedRecordIds] = useState<string[]>([]);
   const [lightbox, setLightbox] = useState<LightboxState>(null);
+  const [syncActivity, setSyncActivity] = useState<SyncActivity | null>(null);
   const deployInfoRequestIdRef = useRef(0);
   const [photoProcessingCount, setPhotoProcessingCount] = useState(0);
   const [externalProcessingKey, setExternalProcessingKey] = useState("");
@@ -2308,6 +2317,8 @@ export default function Page() {
   const initialExternalSyncDoneRef = useRef(false);
   const aiProcessingIdRef = useRef(0);
   const aiProcessingHideTimerRef = useRef<number | null>(null);
+  const syncActivityIdRef = useRef(0);
+  const syncActivityHideTimerRef = useRef<number | null>(null);
   const scriptableImportInputRef = useRef<HTMLInputElement | null>(null);
   const embeddingProviderRef = useRef(new ApiEmbeddingProvider());
   const embeddingCancelRef = useRef(false);
@@ -2320,6 +2331,51 @@ export default function Page() {
     } catch {
       // Theme preference is nice-to-have; the UI still updates for this session.
     }
+  }
+
+  function startSyncActivity(label: string, title?: string, detail?: string) {
+    if (syncActivityHideTimerRef.current) {
+      window.clearTimeout(syncActivityHideTimerRef.current);
+      syncActivityHideTimerRef.current = null;
+    }
+    const id = syncActivityIdRef.current + 1;
+    syncActivityIdRef.current = id;
+    setSyncActivity({
+      id,
+      status: "running",
+      label,
+      title,
+      detail,
+      startedAt: performance.now(),
+    });
+    return id;
+  }
+
+  function updateSyncActivity(id: number, patch: Partial<Omit<SyncActivity, "id" | "startedAt">>) {
+    setSyncActivity((current) => (current?.id === id ? { ...current, ...patch } : current));
+  }
+
+  function finishSyncActivity(id: number, status: "done" | "error" = "done", label?: string, detail?: string) {
+    setSyncActivity((current) => {
+      if (!current || current.id !== id) return current;
+      return {
+        ...current,
+        status,
+        label: label || current.label,
+        detail: detail || current.detail,
+      };
+    });
+    if (syncActivityHideTimerRef.current) window.clearTimeout(syncActivityHideTimerRef.current);
+    syncActivityHideTimerRef.current = window.setTimeout(() => {
+      setSyncActivity((current) => (current?.id === id ? null : current));
+      syncActivityHideTimerRef.current = null;
+    }, status === "error" ? 3200 : 1800);
+  }
+
+  function getBackupActivityLabel(stage?: string) {
+    if (stage === "skip") return "Checking";
+    if (stage === "delete") return "Deleting";
+    return "Uploading";
   }
 
   async function reloadRecords(preferredId?: string) {
@@ -2403,6 +2459,7 @@ export default function Page() {
       return;
     }
     const startedAt = performance.now();
+    const activityId = startSyncActivity("Uploading", "Google Drive", "同期キューを確認中");
     if (showNotice) {
       setBackupSyncProgress({
         phase: "processing",
@@ -2421,6 +2478,11 @@ export default function Page() {
       const processStartedAt = performance.now();
       const results = await processBackupQueue({
         onProgress: (progress) => {
+          updateSyncActivity(activityId, {
+            label: getBackupActivityLabel(progress.stage),
+            title: progress.currentTitle || "Google Drive",
+            detail: `${getBackupStageLabel(progress.stage)} ${progress.completed}/${progress.total}`,
+          });
           setBackupSyncProgress((current) => {
             if (!current || current.phase !== "processing") return current;
             const newItems = backupResultsToReportItems(progress.results);
@@ -2503,6 +2565,12 @@ export default function Page() {
                 : `バックアップしました（${results.length}件）。`,
         });
       }
+      finishSyncActivity(
+        activityId,
+        failed > 0 ? "error" : "done",
+        failed > 0 ? "Upload failed" : "Upload complete",
+        results.length === 0 ? "待機中の同期はありません" : `成功${results.length - failed} / 失敗${failed}`
+      );
     } catch (error) {
       if (showNotice) {
         setBackupSyncProgress({
@@ -2524,6 +2592,12 @@ export default function Page() {
           text: error instanceof Error ? error.message : "バックアップに失敗しました",
         });
       }
+      finishSyncActivity(
+        activityId,
+        "error",
+        "Upload failed",
+        error instanceof Error ? error.message : "バックアップに失敗しました"
+      );
     } finally {
       setBackupProcessing(false);
     }
@@ -2597,6 +2671,7 @@ export default function Page() {
     const record = records.find((candidate) => candidate.id === recordId);
     const title = record?.title || record?.summary || recordId;
     const startedAt = performance.now();
+    const activityId = startSyncActivity("Uploading", title, "1件同期を開始");
     setBackupSyncProgress({
       phase: "processing",
       message: `「${title}」だけをGoogle Driveへ同期しています。`,
@@ -2612,6 +2687,7 @@ export default function Page() {
     try {
       const processStartedAt = performance.now();
       const results = await processSingleRecordBackup(recordId, { force: true });
+      updateSyncActivity(activityId, { label: "Uploading", title, detail: "Google Driveへ保存中" });
       const processElapsedMs = Math.round(performance.now() - processStartedAt);
       const reloadStartedAt = performance.now();
       await Promise.all([reloadRecords(), reloadBackupSummary()]);
@@ -2663,6 +2739,12 @@ export default function Page() {
         kind: failed > 0 ? "error" : "info",
         text: failed > 0 ? "1件同期で失敗があります。詳細モーダルを確認してください。" : "1件同期が完了しました。",
       });
+      finishSyncActivity(
+        activityId,
+        failed > 0 ? "error" : "done",
+        failed > 0 ? "Upload failed" : "Upload complete",
+        failed > 0 ? `失敗${failed}` : title
+      );
     } catch (error) {
       setBackupSyncProgress({
         phase: "error",
@@ -2692,6 +2774,7 @@ export default function Page() {
         ],
       });
       setNotice({ kind: "error", text: error instanceof Error ? error.message : "1件同期に失敗しました" });
+      finishSyncActivity(activityId, "error", "Upload failed", error instanceof Error ? error.message : "1件同期に失敗しました");
     } finally {
       setBackupProcessing(false);
     }
@@ -2713,6 +2796,7 @@ export default function Page() {
     const errors: string[] = [];
 
     if (record.google_task_id && record.google_task_list_id) {
+      const activityId = startSyncActivity("Sync Reminder", record.title || record.summary || "Google Tasks", "Google Tasks更新中");
       try {
         const response = await fetch("/api/external/google/task", {
           method: "PATCH",
@@ -2730,12 +2814,15 @@ export default function Page() {
           google_task_status: payload.status || nextRecord.google_task_status || "needsAction",
           google_task_updated_at: payload.updatedAt || new Date().toISOString(),
         };
+        finishSyncActivity(activityId, "done", "Reminder synced", record.title || "Google Tasks");
       } catch (error) {
         errors.push(error instanceof Error ? error.message : "Google Tasks更新に失敗しました");
+        finishSyncActivity(activityId, "error", "Reminder sync failed", error instanceof Error ? error.message : "Google Tasks更新に失敗しました");
       }
     }
 
     if (record.google_calendar_event_id && record.google_calendar_id) {
+      const activityId = startSyncActivity("Sync Calendar", record.title || record.summary || "Google Calendar", "Google Calendar更新中");
       try {
         const response = await fetch("/api/external/google/calendar", {
           method: "PATCH",
@@ -2752,8 +2839,10 @@ export default function Page() {
           external_error: "",
           google_calendar_updated_at: payload.updatedAt || new Date().toISOString(),
         };
+        finishSyncActivity(activityId, "done", "Calendar synced", record.title || "Google Calendar");
       } catch (error) {
         errors.push(error instanceof Error ? error.message : "Google Calendar更新に失敗しました");
+        finishSyncActivity(activityId, "error", "Calendar sync failed", error instanceof Error ? error.message : "Google Calendar更新に失敗しました");
       }
     }
 
@@ -2898,6 +2987,7 @@ export default function Page() {
 
     setExternalSyncing(true);
     const startedAt = performance.now();
+    const activityId = startSyncActivity("Checking Google updates", "Tasks / Calendar", `${targets.length}件`);
     const setManualProgress = (patch: Partial<ExternalSyncProgressState>) => {
       if (!showNotice) return;
       setExternalSyncProgress((prev) => ({
@@ -2942,6 +3032,14 @@ export default function Page() {
           const batchTargets = targets.slice(index, index + batchSize);
           const batchEnd = Math.min(index + batchTargets.length, targets.length);
           const firstTarget = batchTargets[0];
+          updateSyncActivity(activityId, {
+            label: "Checking Google updates",
+            title:
+              batchTargets.length > 1
+                ? `${firstTarget.title || firstTarget.summary || firstTarget.raw_input || firstTarget.id} ほか${batchTargets.length - 1}件`
+                : firstTarget.title || firstTarget.summary || firstTarget.raw_input || firstTarget.id,
+            detail: `${index}/${targets.length}`,
+          });
           setManualProgress({
             phase: "checking",
             checked: index,
@@ -2980,6 +3078,11 @@ export default function Page() {
         const record = targets[index];
         const result = resultById.get(record.id);
         if (!result) continue;
+        updateSyncActivity(activityId, {
+          label: record.google_calendar_event_id ? "Checking Calendar update" : "Checking Reminder update",
+          title: record.title || record.summary || record.raw_input || record.id,
+          detail: `${index}/${targets.length}`,
+        });
         setManualProgress({
           phase: "applying",
           applied: index,
@@ -3091,6 +3194,7 @@ export default function Page() {
         reportItems,
         finishedAt,
       });
+      finishSyncActivity(activityId, failed > 0 ? "error" : "done", failed > 0 ? "Google sync warning" : "Google sync complete", `更新${changed} / 失敗${failed}`);
       if (showNotice) {
         setNotice({
           kind: failed > 0 ? "error" : "info",
@@ -3109,6 +3213,12 @@ export default function Page() {
           text: error instanceof Error ? error.message : "Google状態同期に失敗しました",
         });
       }
+      finishSyncActivity(
+        activityId,
+        "error",
+        "Google sync failed",
+        error instanceof Error ? error.message : "Google状態同期に失敗しました"
+      );
     } finally {
       setExternalSyncing(false);
     }
@@ -3118,6 +3228,7 @@ export default function Page() {
     const record = records.find((candidate) => candidate.id === recordId);
     if (!record) return;
     const processingKey = `task:${recordId}`;
+    const activityId = startSyncActivity("Sync Reminder", record.title || record.summary || "Google Tasks", "登録中");
     setExternalProcessingKey(processingKey);
     try {
       const response = await fetch("/api/external/google/task", {
@@ -3142,6 +3253,7 @@ export default function Page() {
         google_task_updated_at: payload.updatedAt || new Date().toISOString(),
       });
       setNotice({ kind: "info", text: "Google Tasksへ登録しました。" });
+      finishSyncActivity(activityId, "done", "Reminder synced", record.title || "Google Tasks");
     } catch (error) {
       await saveExternalRecordUpdate({
         ...record,
@@ -3153,6 +3265,7 @@ export default function Page() {
         kind: "error",
         text: error instanceof Error ? error.message : "Google Tasks登録に失敗しました",
       });
+      finishSyncActivity(activityId, "error", "Reminder sync failed", error instanceof Error ? error.message : "Google Tasks登録に失敗しました");
     } finally {
       setExternalProcessingKey("");
     }
@@ -3164,6 +3277,11 @@ export default function Page() {
     const nextStatus: Exclude<CGMPGoogleTaskStatus, ""> =
       record.google_task_status === "completed" ? "needsAction" : "completed";
     const processingKey = `task-status:${recordId}`;
+    const activityId = startSyncActivity(
+      "Sync Reminder",
+      record.title || record.summary || "Google Tasks",
+      nextStatus === "completed" ? "完了へ更新中" : "未完了へ更新中"
+    );
     setExternalProcessingKey(processingKey);
     try {
       const response = await fetch("/api/external/google/task", {
@@ -3188,6 +3306,7 @@ export default function Page() {
         google_task_updated_at: payload.updatedAt || new Date().toISOString(),
       });
       setNotice({ kind: "info", text: nextStatus === "completed" ? "Google Tasksを完了にしました。" : "Google Tasksを未完了に戻しました。" });
+      finishSyncActivity(activityId, "done", "Reminder synced", record.title || "Google Tasks");
     } catch (error) {
       await saveExternalRecordUpdate({
         ...record,
@@ -3198,6 +3317,7 @@ export default function Page() {
         kind: "error",
         text: error instanceof Error ? error.message : "Google Tasks更新に失敗しました",
       });
+      finishSyncActivity(activityId, "error", "Reminder sync failed", error instanceof Error ? error.message : "Google Tasks更新に失敗しました");
     } finally {
       setExternalProcessingKey("");
     }
@@ -3207,6 +3327,7 @@ export default function Page() {
     const record = records.find((candidate) => candidate.id === recordId);
     if (!record) return;
     const processingKey = `calendar:${recordId}`;
+    const activityId = startSyncActivity("Sync Calendar", record.title || record.summary || "Google Calendar", "登録中");
     setExternalProcessingKey(processingKey);
     try {
       const response = await fetch("/api/external/google/calendar", {
@@ -3230,6 +3351,7 @@ export default function Page() {
         google_calendar_updated_at: payload.updatedAt || new Date().toISOString(),
       });
       setNotice({ kind: "info", text: "Google Calendarへ登録しました。" });
+      finishSyncActivity(activityId, "done", "Calendar synced", record.title || "Google Calendar");
     } catch (error) {
       await saveExternalRecordUpdate({
         ...record,
@@ -3241,6 +3363,7 @@ export default function Page() {
         kind: "error",
         text: error instanceof Error ? error.message : "Google Calendar登録に失敗しました",
       });
+      finishSyncActivity(activityId, "error", "Calendar sync failed", error instanceof Error ? error.message : "Google Calendar登録に失敗しました");
     } finally {
       setExternalProcessingKey("");
     }
@@ -3264,6 +3387,7 @@ export default function Page() {
     }
 
     const startedAt = performance.now();
+    const activityId = startSyncActivity("Uploading", "Google Drive", "全件再同期を準備中");
     setBackupSyncProgress({
       phase: "processing",
       message: "全件をGoogle Driveへ再同期しています。",
@@ -3278,6 +3402,7 @@ export default function Page() {
     setBackupProcessing(true);
     try {
       const queued = await enqueueAllRecordsForBackup();
+      updateSyncActivity(activityId, { label: "Uploading", title: "Google Drive", detail: `対象${queued}件` });
       setBackupSyncProgress((current) =>
         current
           ? {
@@ -3291,6 +3416,11 @@ export default function Page() {
       const results = await processBackupQueue({
         force: true,
         onProgress: (progress) => {
+          updateSyncActivity(activityId, {
+            label: getBackupActivityLabel(progress.stage),
+            title: progress.currentTitle || "Google Drive",
+            detail: `${getBackupStageLabel(progress.stage)} ${progress.completed}/${progress.total}`,
+          });
           setBackupSyncProgress((current) => {
             if (!current || current.phase !== "processing") return current;
             const newItems = backupResultsToReportItems(progress.results);
@@ -3368,6 +3498,12 @@ export default function Page() {
             ? `全件再同期で失敗があります（${failed}件）。もう一度実行できます。`
             : `全件再同期を実行しました（対象${queued}件 / 処理${results.length}件）。`,
       });
+      finishSyncActivity(
+        activityId,
+        failed > 0 ? "error" : "done",
+        failed > 0 ? "Upload failed" : "Upload complete",
+        failed > 0 ? `成功${results.length - failed} / 失敗${failed}` : `処理${results.length}`
+      );
     } catch (error) {
       setBackupSyncProgress({
         phase: "error",
@@ -3385,6 +3521,7 @@ export default function Page() {
         kind: "error",
         text: error instanceof Error ? error.message : "全件再同期に失敗しました",
       });
+      finishSyncActivity(activityId, "error", "Upload failed", error instanceof Error ? error.message : "全件再同期に失敗しました");
     } finally {
       setBackupProcessing(false);
     }
@@ -3445,8 +3582,14 @@ export default function Page() {
   async function importMissingFromDrive(showNotice = false) {
     if (driveImporting) return;
     setDriveImporting(true);
+    const activityId = startSyncActivity("Downloading", "Google Drive", "差分を確認中");
     try {
       const result = await importMissingRecordsFromDrive();
+      updateSyncActivity(activityId, {
+        label: "Downloading",
+        title: "Google Drive",
+        detail: `追加${result.imported.length} / 画像${result.hydratedAttachments}`,
+      });
       await Promise.all([reloadRecords(), reloadBackupSummary(), reloadDeletedRecordsSummary()]);
       if (showNotice || result.imported.length > 0 || result.deleted.length > 0) {
         setNotice({
@@ -3457,6 +3600,12 @@ export default function Page() {
               : "Driveから追加する未取り込みメモはありません。",
         });
       }
+      finishSyncActivity(
+        activityId,
+        "done",
+        "Download complete",
+        `追加${result.imported.length} / 削除${result.deleted.length} / 画像${result.hydratedAttachments}`
+      );
     } catch (error) {
       if (showNotice) {
         setNotice({
@@ -3464,6 +3613,12 @@ export default function Page() {
           text: error instanceof Error ? error.message : "Driveからの取り込みに失敗しました",
         });
       }
+      finishSyncActivity(
+        activityId,
+        "error",
+        "Download failed",
+        error instanceof Error ? error.message : "Driveからの取り込みに失敗しました"
+      );
     } finally {
       setDriveImporting(false);
     }
@@ -3811,6 +3966,9 @@ export default function Page() {
     return () => {
       if (aiProcessingHideTimerRef.current !== null) {
         window.clearTimeout(aiProcessingHideTimerRef.current);
+      }
+      if (syncActivityHideTimerRef.current !== null) {
+        window.clearTimeout(syncActivityHideTimerRef.current);
       }
     };
   }, []);
@@ -4817,6 +4975,38 @@ export default function Page() {
               >
                 ×
               </button>
+            </div>
+          </div>
+        ) : null}
+
+        {syncActivity ? (
+          <div className="pointer-events-none fixed inset-x-0 bottom-[calc(5.65rem+env(safe-area-inset-bottom))] z-[70] flex justify-start px-3 sm:bottom-[calc(5.9rem+env(safe-area-inset-bottom))] sm:px-5">
+            <div
+              className={`flex max-w-[min(30rem,calc(100vw-7rem))] items-center gap-2 rounded-full border px-3 py-2 text-xs shadow-[0_16px_42px_var(--shadow-soft)] backdrop-blur-xl transition ${
+                syncActivity.status === "error"
+                  ? "border-[color:var(--danger)] bg-[color-mix(in_srgb,var(--card)_82%,var(--danger-soft))] text-[var(--text)]"
+                  : syncActivity.status === "done"
+                    ? "border-[color:var(--success)] bg-[color-mix(in_srgb,var(--card)_82%,var(--success-soft))] text-[var(--text)]"
+                    : "border-[color:var(--accent)] bg-[color-mix(in_srgb,var(--card)_72%,transparent)] text-[var(--text)]"
+              }`}
+              role={syncActivity.status === "error" ? "alert" : "status"}
+              aria-live="polite"
+            >
+              <span
+                className={`h-2.5 w-2.5 shrink-0 rounded-full ${
+                  syncActivity.status === "error"
+                    ? "bg-[var(--danger)]"
+                    : syncActivity.status === "done"
+                      ? "bg-[var(--success)]"
+                      : "animate-pulse bg-[var(--accent)]"
+                }`}
+                aria-hidden="true"
+              />
+              <span className="shrink-0 font-semibold">{syncActivity.label}</span>
+              {syncActivity.title ? (
+                <span className="min-w-0 truncate text-[var(--muted)]">“{syncActivity.title}”</span>
+              ) : null}
+              {syncActivity.detail ? <span className="shrink-0 text-[var(--subtle)]">{syncActivity.detail}</span> : null}
             </div>
           </div>
         ) : null}
