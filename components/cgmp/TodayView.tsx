@@ -12,9 +12,10 @@ import {
   getJstParts,
   getRecordTimeline,
   minutesFromTime,
+  shouldSyncExternalRecord,
   WEEKDAY_LABELS,
 } from "@/lib/cgmp/client-utils";
-import type { CGMPRecord } from "@/lib/cgmp/types";
+import type { CGMPRecord, CGMPSettings } from "@/lib/cgmp/types";
 import type { ImageAttachment } from "@/types/image";
 
 type TodaySection = {
@@ -31,7 +32,12 @@ function isIncompleteTask(record: CGMPRecord) {
 }
 
 function isGoogleTaskLinked(record: CGMPRecord) {
-  return Boolean(record.google_task_id && record.google_task_list_id);
+  return (
+    record.external_action_status === "registered" &&
+    record.google_task_status === "needsAction" &&
+    Boolean(String(record.google_task_id || "").trim()) &&
+    Boolean(String(record.google_task_list_id || "").trim())
+  );
 }
 
 function createdDateKey(record: CGMPRecord) {
@@ -171,12 +177,14 @@ function TodaySectionBlock({
 
 export function TodayView({
   records,
+  settings,
   onOpenRecord,
   onOpenImage,
   onToggleGoogleTaskStatus,
   externalProcessingKey,
 }: {
   records: CGMPRecord[];
+  settings: CGMPSettings | null;
   onOpenRecord: (id: string) => void;
   onOpenImage: (attachment: ImageAttachment, imageUrl: string) => void;
   onToggleGoogleTaskStatus: (id: string) => void;
@@ -199,9 +207,15 @@ export function TodayView({
       .filter((record) => record.action === "note" && createdDateKey(record) === todayKey)
       .sort((left, right) => String(right.created_at || right.updated_at).localeCompare(String(left.created_at || left.updated_at)));
     const carryOver = records
-      .filter((record) => isIncompleteTask(record) && isGoogleTaskLinked(record) && Boolean(record.date) && record.date < todayKey)
-      .sort(sortByTodayTime)
-      .slice(0, 5);
+      .filter(
+        (record) =>
+          isIncompleteTask(record) &&
+          isGoogleTaskLinked(record) &&
+          shouldSyncExternalRecord(record, settings) &&
+          Boolean(record.date) &&
+          record.date < todayKey
+      )
+      .sort(sortByTodayTime);
 
     const upcomingTask = timedTasks
       .filter((record) => minutesFromTime(record.time) >= nowMinutes)
@@ -227,7 +241,7 @@ export function TodayView({
       notesToday,
       carryOver,
     };
-  }, [nowMinutes, records, todayKey]);
+  }, [nowMinutes, records, settings, todayKey]);
 
   const sections: TodaySection[] = [
     {
@@ -253,7 +267,7 @@ export function TodayView({
     },
     {
       title: "Carry-over",
-      subtitle: "Google Tasks連携済みの古い未完了タスク。まずは最大5件だけ表示します。",
+      subtitle: "外部同期対象に入っているGoogle Tasks連携済みの古い未完了タスク。",
       records: cockpit.carryOver,
       emptyText: "持ち越しタスクはありません。",
       tone: "amber",

@@ -3120,6 +3120,7 @@ export default function Page() {
         {tab === "today" ? (
           <TodayView
             records={records}
+            settings={settingsDraft}
             onOpenRecord={(id) => {
               setSelectedId(id);
               setTab("home");
