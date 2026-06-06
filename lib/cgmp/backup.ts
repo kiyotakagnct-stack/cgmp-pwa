@@ -211,6 +211,7 @@ function recordBackupSource(record: CGMPRecord) {
     google_calendar_event_id: record.google_calendar_event_id,
     google_calendar_id: record.google_calendar_id,
     google_calendar_updated_at: record.google_calendar_updated_at,
+    icon: record.icon,
     attachments: (record.attachments || []).map(attachmentBackupSource),
     ai: record.ai,
   };

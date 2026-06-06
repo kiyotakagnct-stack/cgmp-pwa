@@ -30,14 +30,18 @@ import { analyzeImageWithVision, fallbackImageAnalysis } from "@/lib/image/analy
 import { createImageAttachmentFromFile } from "@/lib/image/createImageAttachment";
 import {
   clearAllRecords,
+  clearSemanticIconIndex,
   deleteRecord,
   loadAllRecords,
   loadDeletedRecords,
   loadEmbeddingIndex,
+  loadSemanticIconDictionary,
+  loadSemanticIconIndex,
   isRecordDeleted,
   loadSettings,
   putRecordWithoutBackup,
   saveSettings,
+  saveSemanticIconDictionary,
   upsertRecord,
 } from "@/lib/cgmp/storage";
 import {
@@ -50,6 +54,13 @@ import {
   SEMANTIC_CANDIDATE_THRESHOLD,
   type SimilarRecord,
 } from "@/lib/cgmp/embedding";
+import {
+  DEFAULT_SEMANTIC_ICON_THRESHOLD,
+  buildRecordIconText,
+  ensureSemanticIconDictionaryIndex,
+  inferSemanticIconForRecord,
+  resetSemanticIconDictionary,
+} from "@/lib/cgmp/semantic-icons";
 import {
   backupDeleteTombstoneNow,
   enqueueAllRecordsForBackup,
@@ -71,6 +82,7 @@ import type {
   CGMPPara,
   CGMPRecord,
   CGMPSettings,
+  CGMPSemanticIconEntry,
   CGMPSemanticSearchResultMode,
 } from "@/lib/cgmp/types";
 import type { CGMPPromptConfigFile, CGMPPromptKey } from "@/lib/cgmp/prompt-config";
@@ -230,6 +242,22 @@ type EmbeddingIndexStats = {
   latestEmbeddedAt: string;
   model: string;
 };
+type SemanticIconProgressState = {
+  running: boolean;
+  mode: "dictionary" | "records";
+  total: number;
+  completed: number;
+  skipped: number;
+  failed: number;
+  currentTitle: string;
+  errors: string[];
+};
+type SemanticIconIndexStats = {
+  dictionaryCount: number;
+  indexCount: number;
+  latestEmbeddedAt: string;
+  model: string;
+};
 type DeletedRecordsSummary = {
   count: number;
   latestDeletedAt: string;
@@ -311,6 +339,9 @@ export default function Page() {
   const [scriptableImportResult, setScriptableImportResult] = useState<ScriptableImportResult | null>(null);
   const [embeddingProgress, setEmbeddingProgress] = useState<EmbeddingProgressState | null>(null);
   const [embeddingIndexStats, setEmbeddingIndexStats] = useState<EmbeddingIndexStats | null>(null);
+  const [semanticIconDictionary, setSemanticIconDictionary] = useState<CGMPSemanticIconEntry[]>([]);
+  const [semanticIconIndexStats, setSemanticIconIndexStats] = useState<SemanticIconIndexStats | null>(null);
+  const [semanticIconProgress, setSemanticIconProgress] = useState<SemanticIconProgressState | null>(null);
   const [relatedCandidates, setRelatedCandidates] = useState<SimilarRecord[]>([]);
   const [badgeInfo, setBadgeInfo] = useState<BadgeInfo>(null);
   const initialDriveImportDoneRef = useRef(false);
@@ -1653,9 +1684,188 @@ export default function Page() {
     });
   }
 
+  async function reloadSemanticIconState() {
+    const [dictionary, index] = await Promise.all([loadSemanticIconDictionary(), loadSemanticIconIndex()]);
+    setSemanticIconDictionary(dictionary);
+    setSemanticIconIndexStats({
+      dictionaryCount: dictionary.length,
+      indexCount: index.length,
+      latestEmbeddedAt: index.reduce((latest, item) => {
+        if (!latest) return item.embedded_at;
+        return item.embedded_at > latest ? item.embedded_at : latest;
+      }, ""),
+      model: index[0]?.model || "text-embedding-3-small",
+    });
+  }
+
+  async function assignSemanticIcon(record: CGMPRecord, force = false) {
+    try {
+      if (typeof navigator !== "undefined" && !navigator.onLine) return record;
+      const quickHash = await hashEmbeddingText(buildRecordIconText(record));
+      if (!force && record.icon?.text_hash === quickHash && record.icon?.emoji) return record;
+
+      const iconIndex = await loadSemanticIconIndex();
+      if (iconIndex.length === 0) {
+        return record;
+      }
+      const { index } = await createOrRefreshEmbedding(record, false);
+      const result = await inferSemanticIconForRecord({
+        record,
+        provider: embeddingProviderRef.current,
+        threshold: settingsDraft?.semantic_icon_threshold ?? DEFAULT_SEMANTIC_ICON_THRESHOLD,
+        recordVector: index.vector,
+      });
+      const nextRecord = { ...record, icon: result.icon };
+      const saved = await upsertRecord({ ...nextRecord, updated_at: record.updated_at });
+      setRecords((current) => current.map((item) => (item.id === saved.id ? saved : item)));
+      return saved;
+    } catch (error) {
+      console.debug("[cgmp:semantic-icon] assignment failed", {
+        record_id: record.id,
+        error,
+      });
+      return record;
+    }
+  }
+
+  async function rebuildSemanticIconDictionaryIndex(force = false) {
+    if (semanticIconProgress?.running) return;
+    setSemanticIconProgress({
+      running: true,
+      mode: "dictionary",
+      total: semanticIconDictionary.length,
+      completed: 0,
+      skipped: 0,
+      failed: 0,
+      currentTitle: "",
+      errors: [],
+    });
+    try {
+      if (force) await clearSemanticIconIndex();
+      await ensureSemanticIconDictionaryIndex({
+        provider: embeddingProviderRef.current,
+        force,
+        onProgress: (progress) => {
+          setSemanticIconProgress((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  total: progress.total,
+                  completed: progress.completed,
+                  currentTitle: progress.currentLabel,
+                }
+              : prev
+          );
+        },
+      });
+      await reloadSemanticIconState();
+      setSemanticIconProgress((prev) =>
+        prev ? { ...prev, running: false, currentTitle: "", skipped: 0, failed: 0 } : prev
+      );
+      setNotice({ kind: "info", text: "Semantic icon辞書のembeddingを更新しました。" });
+    } catch (error) {
+      setSemanticIconProgress((prev) =>
+        prev
+          ? {
+              ...prev,
+              running: false,
+              failed: prev.failed + 1,
+              errors: [error instanceof Error ? error.message : String(error)],
+            }
+          : prev
+      );
+      setNotice({ kind: "error", text: error instanceof Error ? error.message : "Icon辞書embeddingに失敗しました" });
+    }
+  }
+
+  async function reassignSemanticIcons(force = false) {
+    if (semanticIconProgress?.running) return;
+    const targets = force ? records : records.filter((record) => !record.icon?.emoji);
+    setSemanticIconProgress({
+      running: true,
+      mode: "records",
+      total: targets.length,
+      completed: 0,
+      skipped: records.length - targets.length,
+      failed: 0,
+      currentTitle: targets[0]?.title || "",
+      errors: [],
+    });
+    if (targets.length === 0) {
+      setSemanticIconProgress((prev) => (prev ? { ...prev, running: false, currentTitle: "" } : prev));
+      setNotice({ kind: "info", text: "Icon再推定が必要なメモはありません。" });
+      return;
+    }
+    let completed = 0;
+    let failed = 0;
+    const errors: string[] = [];
+    for (const record of targets) {
+      setSemanticIconProgress((prev) => (prev ? { ...prev, currentTitle: record.title || record.id } : prev));
+      try {
+        await assignSemanticIcon(record, true);
+        completed += 1;
+      } catch (error) {
+        failed += 1;
+        errors.push(`${record.id}: ${error instanceof Error ? error.message : "ICON_ASSIGN_FAILED"}`);
+      }
+      setSemanticIconProgress((prev) =>
+        prev
+          ? {
+              ...prev,
+              completed,
+              failed,
+              errors: errors.slice(-20),
+            }
+          : prev
+      );
+    }
+    await reloadRecords();
+    setSemanticIconProgress((prev) =>
+      prev
+        ? {
+            ...prev,
+            running: false,
+            completed,
+            failed,
+            currentTitle: "",
+            errors: errors.slice(-20),
+          }
+        : prev
+    );
+    setNotice({
+      kind: failed > 0 ? "error" : "info",
+      text: `Semantic icon再推定が完了しました（完了${completed}件 / 失敗${failed}件）。`,
+    });
+  }
+
+  async function addSemanticIconEntry(entry: CGMPSemanticIconEntry) {
+    const next = [
+      ...semanticIconDictionary.filter((item) => item.key !== entry.key),
+      {
+        ...entry,
+        enabled: true,
+        updated_at: new Date().toISOString(),
+      },
+    ];
+    const saved = await saveSemanticIconDictionary(next);
+    setSemanticIconDictionary(saved);
+    await clearSemanticIconIndex();
+    await reloadSemanticIconState();
+    setNotice({ kind: "info", text: "Semantic icon辞書に追加しました。辞書embeddingを再作成してください。" });
+  }
+
+  async function resetSemanticIconsToDefault() {
+    const saved = await resetSemanticIconDictionary();
+    await clearSemanticIconIndex();
+    setSemanticIconDictionary(saved);
+    await reloadSemanticIconState();
+    setNotice({ kind: "info", text: "Semantic icon辞書を初期値に戻しました。" });
+  }
+
   async function suggestRelatedRecords(record: CGMPRecord) {
     try {
       const { index } = await createOrRefreshEmbedding(record, true);
+      void assignSemanticIcon(record, false);
       const candidates = (await loadAllRecords()).filter((candidate) => candidate.id !== record.id);
       const results = await searchSimilarByVector({
         vector: index.vector,
@@ -1792,12 +2002,22 @@ export default function Page() {
     let cancelled = false;
     void (async () => {
       try {
-        const [nextRecords, nextSettings, nextBackupSummary, nextDeletedRecords, nextEmbeddingIndex] = await Promise.all([
+        const [
+          nextRecords,
+          nextSettings,
+          nextBackupSummary,
+          nextDeletedRecords,
+          nextEmbeddingIndex,
+          nextSemanticIconDictionary,
+          nextSemanticIconIndex,
+        ] = await Promise.all([
           loadAllRecords(),
           loadSettings(),
           getBackupStatus(),
           loadDeletedRecords(),
           loadEmbeddingIndex(),
+          loadSemanticIconDictionary(),
+          loadSemanticIconIndex(),
         ]);
         if (cancelled) return;
         setRecords(nextRecords);
@@ -1815,6 +2035,16 @@ export default function Page() {
             return item.embedded_at > latest ? item.embedded_at : latest;
           }, ""),
           model: nextEmbeddingIndex[0]?.model || "text-embedding-3-small",
+        });
+        setSemanticIconDictionary(nextSemanticIconDictionary);
+        setSemanticIconIndexStats({
+          dictionaryCount: nextSemanticIconDictionary.length,
+          indexCount: nextSemanticIconIndex.length,
+          latestEmbeddedAt: nextSemanticIconIndex.reduce((latest, item) => {
+            if (!latest) return item.embedded_at;
+            return item.embedded_at > latest ? item.embedded_at : latest;
+          }, ""),
+          model: nextSemanticIconIndex[0]?.model || "text-embedding-3-small",
         });
         setSelectedId(null);
         setIsReady(true);
@@ -2198,7 +2428,8 @@ export default function Page() {
       attachments,
       updated_at: new Date().toISOString(),
     };
-    await upsertRecord(nextRecord);
+    const saved = await upsertRecord(nextRecord);
+    void assignSemanticIcon(saved, true);
     await reloadRecords(nextRecord.id);
     await reloadBackupSummary();
     window.setTimeout(() => {
@@ -2625,6 +2856,7 @@ export default function Page() {
           error,
         });
       });
+      void assignSemanticIcon(syncedRecord, true);
       setNotice({
         kind: syncedRecord.external_action_status === "failed" ? "error" : "info",
         text: syncedRecord.external_action_status === "failed" ? "更新しましたがGoogle側の更新に失敗しました。" : "更新しました。",
@@ -3183,6 +3415,9 @@ export default function Page() {
             embeddingIndexStats={embeddingIndexStats}
             embeddingProgress={embeddingProgress}
             embeddingCancelRef={embeddingCancelRef}
+            semanticIconDictionary={semanticIconDictionary}
+            semanticIconIndexStats={semanticIconIndexStats}
+            semanticIconProgress={semanticIconProgress}
             backupSummary={backupSummary}
             deletedRecordsSummary={deletedRecordsSummary}
             backupProcessing={backupProcessing}
@@ -3209,6 +3444,10 @@ export default function Page() {
             openPromptEditor={openPromptEditor}
             rebuildEmbeddingIndex={rebuildEmbeddingIndex}
             reloadEmbeddingIndexStats={reloadEmbeddingIndexStats}
+            rebuildSemanticIconDictionaryIndex={rebuildSemanticIconDictionaryIndex}
+            reassignSemanticIcons={reassignSemanticIcons}
+            resetSemanticIconsToDefault={resetSemanticIconsToDefault}
+            addSemanticIconEntry={addSemanticIconEntry}
             runBackupQueue={runBackupQueue}
             rebackupAllRecords={rebackupAllRecords}
             loadDriveBackupList={loadDriveBackupList}

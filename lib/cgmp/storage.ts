@@ -6,10 +6,14 @@ import type {
   CGMPExternalDeleteStatus,
   CGMPRecord,
   CGMPSettings,
+  CGMPSemanticIcon,
+  CGMPSemanticIconEntry,
+  CGMPSemanticIconIndex,
   CGMPSemanticSearchResultMode,
 } from "./types";
 import { clearImageBlobs, deleteImageBlobs } from "@/lib/db/imageBlobStore";
 import type { ImageAttachment } from "@/types/image";
+import { DEFAULT_SEMANTIC_ICON_THRESHOLD, createDefaultSemanticIconDictionary } from "./semantic-icon-defaults";
 
 const DB_NAME = "cgmp-pwa";
 const DB_VERSION = 5;
@@ -20,6 +24,8 @@ const IMAGE_BLOBS_STORE = "image_blobs";
 const DELETED_RECORDS_STORE = "deleted_records";
 const EMBEDDING_INDEX_STORE = "embedding_index";
 const SETTINGS_KEY = "settings";
+const SEMANTIC_ICON_DICTIONARY_KEY = "semantic_icon_dictionary";
+const SEMANTIC_ICON_INDEX_KEY = "semantic_icon_index";
 const DEVICE_ID_KEY = "cgmp-device-id";
 const DEFAULT_SEMANTIC_SEARCH_THRESHOLD = 0.45;
 
@@ -188,6 +194,27 @@ function normalizeRecord(record: CGMPRecord): CGMPRecord {
     last_backup_at: record.last_backup_at || "",
     backup_checksum: record.backup_checksum || "",
     attachments: normalizeAttachments(record.attachments),
+    icon: normalizeSemanticIcon(record.icon),
+  };
+}
+
+function normalizeSemanticIcon(value: unknown): CGMPSemanticIcon | undefined {
+  const source = value && typeof value === "object" ? (value as Partial<CGMPSemanticIcon>) : {};
+  if (!source.emoji || !source.key) return undefined;
+  const iconSource =
+    source.source === "embedding" || source.source === "keyword" || source.source === "action_default"
+      ? source.source
+      : "action_default";
+  return {
+    emoji: String(source.emoji),
+    key: String(source.key),
+    label: String(source.label || source.key),
+    source: iconSource,
+    score: Number.isFinite(Number(source.score)) ? Number(source.score) : 0,
+    model: String(source.model || ""),
+    assigned_at: String(source.assigned_at || new Date().toISOString()),
+    text_hash: String(source.text_hash || ""),
+    dictionary_version: String(source.dictionary_version || ""),
   };
 }
 
@@ -228,6 +255,7 @@ export function createDefaultSettings(): CGMPSettings {
     timezone: "Asia/Tokyo",
     semantic_search_threshold: DEFAULT_SEMANTIC_SEARCH_THRESHOLD,
     semantic_search_result_mode: "threshold",
+    semantic_icon_threshold: DEFAULT_SEMANTIC_ICON_THRESHOLD,
     external_sync_past_days: 7,
     external_sync_future_days: 60,
     external_sync_exclude_completed_tasks: true,
@@ -245,6 +273,12 @@ function normalizeSemanticSearchThreshold(value: unknown) {
 
 function normalizeSemanticSearchResultMode(value: unknown): CGMPSemanticSearchResultMode {
   return value === "top10" ? "top10" : "threshold";
+}
+
+function normalizeSemanticIconThreshold(value: unknown) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return DEFAULT_SEMANTIC_ICON_THRESHOLD;
+  return Math.min(1, Math.max(-1, number));
 }
 
 function normalizeExternalSyncDays(value: unknown, fallback: number) {
@@ -266,6 +300,7 @@ export async function loadSettings(): Promise<CGMPSettings> {
       ...merged,
       semantic_search_threshold: normalizeSemanticSearchThreshold(merged.semantic_search_threshold),
       semantic_search_result_mode: normalizeSemanticSearchResultMode(merged.semantic_search_result_mode),
+      semantic_icon_threshold: normalizeSemanticIconThreshold(merged.semantic_icon_threshold),
       external_sync_past_days: normalizeExternalSyncDays(merged.external_sync_past_days, 7),
       external_sync_future_days: normalizeExternalSyncDays(merged.external_sync_future_days, 60),
       external_sync_exclude_completed_tasks: merged.external_sync_exclude_completed_tasks !== false,
@@ -288,6 +323,7 @@ export async function saveSettings(settings: Partial<CGMPSettings>) {
     semantic_search_result_mode: normalizeSemanticSearchResultMode(
       settings.semantic_search_result_mode ?? current.semantic_search_result_mode
     ),
+    semantic_icon_threshold: normalizeSemanticIconThreshold(settings.semantic_icon_threshold ?? current.semantic_icon_threshold),
     external_sync_past_days: normalizeExternalSyncDays(settings.external_sync_past_days ?? current.external_sync_past_days, 7),
     external_sync_future_days: normalizeExternalSyncDays(settings.external_sync_future_days ?? current.external_sync_future_days, 60),
     external_sync_exclude_completed_tasks:
@@ -684,6 +720,112 @@ export async function clearEmbeddingIndex() {
   if (!hasWindow()) return;
   await withTransaction(EMBEDDING_INDEX_STORE, "readwrite", async (store) => {
     store.clear();
+  });
+}
+
+function normalizeSemanticIconEntry(value: unknown): CGMPSemanticIconEntry | null {
+  const source = value && typeof value === "object" ? (value as Partial<CGMPSemanticIconEntry>) : {};
+  const key = String(source.key || "").trim();
+  const emoji = String(source.emoji || "").trim();
+  if (!key || !emoji) return null;
+  const normalizeList = (items: unknown) =>
+    Array.isArray(items)
+      ? items.map((item) => String(item || "").trim()).filter(Boolean)
+      : String(items || "")
+          .split(/[\n,、]+/)
+          .map((item) => item.trim())
+          .filter(Boolean);
+  return {
+    key,
+    emoji,
+    label: String(source.label || key).trim(),
+    description: String(source.description || "").trim(),
+    keywords: normalizeList(source.keywords).slice(0, 20),
+    examples: normalizeList(source.examples).slice(0, 12),
+    enabled: source.enabled !== false,
+    updated_at: String(source.updated_at || new Date().toISOString()),
+  };
+}
+
+function normalizeSemanticIconIndex(value: unknown): CGMPSemanticIconIndex | null {
+  const source = value && typeof value === "object" ? (value as Partial<CGMPSemanticIconIndex>) : {};
+  const vector = Array.isArray(source.vector) ? source.vector.map((item) => Number(item)).filter(Number.isFinite) : [];
+  if (!source.key || vector.length === 0) return null;
+  return {
+    key: String(source.key),
+    vector,
+    model: String(source.model || "text-embedding-3-small"),
+    dimensions: Number.isFinite(Number(source.dimensions)) ? Number(source.dimensions) : vector.length,
+    icon_text_hash: String(source.icon_text_hash || ""),
+    source_updated_at: String(source.source_updated_at || ""),
+    embedded_at: String(source.embedded_at || new Date().toISOString()),
+    dictionary_version: String(source.dictionary_version || ""),
+  };
+}
+
+export async function loadSemanticIconDictionary() {
+  if (!hasWindow()) return createDefaultSemanticIconDictionary();
+
+  const db = await openDatabase();
+  try {
+    const tx = db.transaction(SETTINGS_STORE, "readonly");
+    const store = tx.objectStore(SETTINGS_STORE);
+    const result = await requestToPromise<CGMPSemanticIconEntry[] | undefined>(
+      store.get(SEMANTIC_ICON_DICTIONARY_KEY)
+    );
+    const normalized = (Array.isArray(result) ? result : [])
+      .map(normalizeSemanticIconEntry)
+      .filter((item): item is CGMPSemanticIconEntry => Boolean(item));
+    return normalized.length > 0 ? normalized : createDefaultSemanticIconDictionary();
+  } finally {
+    db.close();
+  }
+}
+
+export async function saveSemanticIconDictionary(entries: CGMPSemanticIconEntry[]) {
+  if (!hasWindow()) return entries;
+  const normalized = entries
+    .map(normalizeSemanticIconEntry)
+    .filter((item): item is CGMPSemanticIconEntry => Boolean(item));
+  const next = normalized.length > 0 ? normalized : createDefaultSemanticIconDictionary();
+  await withTransaction(SETTINGS_STORE, "readwrite", async (store) => {
+    store.put(next, SEMANTIC_ICON_DICTIONARY_KEY);
+  });
+  return next;
+}
+
+export async function loadSemanticIconIndex() {
+  if (!hasWindow()) return [];
+
+  const db = await openDatabase();
+  try {
+    const tx = db.transaction(SETTINGS_STORE, "readonly");
+    const store = tx.objectStore(SETTINGS_STORE);
+    const result = await requestToPromise<CGMPSemanticIconIndex[] | undefined>(store.get(SEMANTIC_ICON_INDEX_KEY));
+    return (Array.isArray(result) ? result : [])
+      .map(normalizeSemanticIconIndex)
+      .filter((item): item is CGMPSemanticIconIndex => Boolean(item));
+  } finally {
+    db.close();
+  }
+}
+
+export async function upsertSemanticIconIndex(index: CGMPSemanticIconIndex) {
+  if (!hasWindow()) return index;
+  const normalized = normalizeSemanticIconIndex(index);
+  if (!normalized) return index;
+  const current = await loadSemanticIconIndex();
+  const next = [...current.filter((item) => item.key !== normalized.key), normalized];
+  await withTransaction(SETTINGS_STORE, "readwrite", async (store) => {
+    store.put(next, SEMANTIC_ICON_INDEX_KEY);
+  });
+  return normalized;
+}
+
+export async function clearSemanticIconIndex() {
+  if (!hasWindow()) return;
+  await withTransaction(SETTINGS_STORE, "readwrite", async (store) => {
+    store.put([], SEMANTIC_ICON_INDEX_KEY);
   });
 }
 

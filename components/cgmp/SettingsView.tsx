@@ -1,6 +1,6 @@
 "use client";
 
-import type { Dispatch, MutableRefObject, RefObject, SetStateAction } from "react";
+import { useState, type Dispatch, type MutableRefObject, type RefObject, type SetStateAction } from "react";
 
 import {
   Badge,
@@ -17,8 +17,9 @@ import {
   softPanelClass,
 } from "@/components/cgmp/ui";
 import { SEMANTIC_CANDIDATE_THRESHOLD } from "@/lib/cgmp/embedding";
+import { DEFAULT_SEMANTIC_ICON_THRESHOLD } from "@/lib/cgmp/semantic-icons";
 import type { ScriptableImportResult } from "@/lib/cgmp/scriptable-import";
-import type { CGMPBackupSummary, CGMPRecord, CGMPSettings } from "@/lib/cgmp/types";
+import type { CGMPBackupSummary, CGMPRecord, CGMPSettings, CGMPSemanticIconEntry } from "@/lib/cgmp/types";
 import {
   normalizeSemanticThreshold,
   type ThemeMode,
@@ -78,6 +79,24 @@ type EmbeddingIndexStats = {
   model: string;
 };
 
+type SemanticIconProgressState = {
+  running: boolean;
+  mode: "dictionary" | "records";
+  total: number;
+  completed: number;
+  skipped: number;
+  failed: number;
+  currentTitle: string;
+  errors: string[];
+};
+
+type SemanticIconIndexStats = {
+  dictionaryCount: number;
+  indexCount: number;
+  latestEmbeddedAt: string;
+  model: string;
+};
+
 type SettingsViewProps = {
   settingsDraft: CGMPSettings | null;
   setSettingsDraft: Dispatch<SetStateAction<CGMPSettings | null>>;
@@ -86,6 +105,9 @@ type SettingsViewProps = {
   embeddingIndexStats: EmbeddingIndexStats | null;
   embeddingProgress: EmbeddingProgressState | null;
   embeddingCancelRef: MutableRefObject<boolean>;
+  semanticIconDictionary: CGMPSemanticIconEntry[];
+  semanticIconIndexStats: SemanticIconIndexStats | null;
+  semanticIconProgress: SemanticIconProgressState | null;
   backupSummary: CGMPBackupSummary | null;
   deletedRecordsSummary: DeletedRecordsSummary | null;
   backupProcessing: boolean;
@@ -112,6 +134,10 @@ type SettingsViewProps = {
   openPromptEditor: () => void;
   rebuildEmbeddingIndex: (force: boolean) => void | Promise<void>;
   reloadEmbeddingIndexStats: () => void | Promise<void>;
+  rebuildSemanticIconDictionaryIndex: (force: boolean) => void | Promise<void>;
+  reassignSemanticIcons: (force: boolean) => void | Promise<void>;
+  resetSemanticIconsToDefault: () => void | Promise<void>;
+  addSemanticIconEntry: (entry: CGMPSemanticIconEntry) => void | Promise<void>;
   runBackupQueue: (showNotice?: boolean) => void | Promise<void>;
   rebackupAllRecords: () => void | Promise<void>;
   loadDriveBackupList: () => void | Promise<void>;
@@ -131,6 +157,9 @@ export function SettingsView({
   embeddingIndexStats,
   embeddingProgress,
   embeddingCancelRef,
+  semanticIconDictionary,
+  semanticIconIndexStats,
+  semanticIconProgress,
   backupSummary,
   deletedRecordsSummary,
   backupProcessing,
@@ -157,6 +186,10 @@ export function SettingsView({
   openPromptEditor,
   rebuildEmbeddingIndex,
   reloadEmbeddingIndexStats,
+  rebuildSemanticIconDictionaryIndex,
+  reassignSemanticIcons,
+  resetSemanticIconsToDefault,
+  addSemanticIconEntry,
   runBackupQueue,
   rebackupAllRecords,
   loadDriveBackupList,
@@ -167,6 +200,44 @@ export function SettingsView({
   handleHardReloadApp,
   handleClearAll,
 }: SettingsViewProps) {
+  const [newIconEmoji, setNewIconEmoji] = useState("");
+  const [newIconLabel, setNewIconLabel] = useState("");
+  const [newIconDescription, setNewIconDescription] = useState("");
+  const [newIconKeywords, setNewIconKeywords] = useState("");
+  const [newIconExamples, setNewIconExamples] = useState("");
+
+  async function handleAddSemanticIcon() {
+    const emoji = newIconEmoji.trim();
+    const label = newIconLabel.trim();
+    if (!emoji || !label) return;
+    const key = `custom_${label
+      .toLowerCase()
+      .replace(/[^a-z0-9ぁ-んァ-ヶ一-龠ー]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 32)}_${Date.now().toString(36)}`;
+    await addSemanticIconEntry({
+      key,
+      emoji,
+      label,
+      description: newIconDescription.trim() || label,
+      keywords: newIconKeywords
+        .split(/[\n,、]+/)
+        .map((item) => item.trim())
+        .filter(Boolean),
+      examples: newIconExamples
+        .split(/[\n,、]+/)
+        .map((item) => item.trim())
+        .filter(Boolean),
+      enabled: true,
+      updated_at: new Date().toISOString(),
+    });
+    setNewIconEmoji("");
+    setNewIconLabel("");
+    setNewIconDescription("");
+    setNewIconKeywords("");
+    setNewIconExamples("");
+  }
+
   return (
           <div className="grid gap-5">
             <section className={panelClass}>
@@ -355,6 +426,159 @@ export function SettingsView({
                         ) : null}
                       </div>
                     ) : null}
+                  </div>
+
+                  <div className={`${softPanelClass} mt-3`}>
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-[var(--text)]">Semantic Icon辞書</div>
+                        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                          メモの意味に近いemojiを自動選択します。閾値未満ならAction defaultへ戻します。
+                        </p>
+                      </div>
+                      <Badge tone="cyan">
+                        {semanticIconIndexStats?.indexCount ?? 0}/{semanticIconIndexStats?.dictionaryCount ?? semanticIconDictionary.length} icons
+                      </Badge>
+                    </div>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                      <LabeledInput
+                        label="Icon推定の閾値"
+                        type="number"
+                        value={String(settingsDraft?.semantic_icon_threshold ?? DEFAULT_SEMANTIC_ICON_THRESHOLD)}
+                        onChange={(value) => {
+                          const next = normalizeSemanticThreshold(value);
+                          setSettingsDraft((prev) => (prev ? { ...prev, semantic_icon_threshold: next } : prev));
+                        }}
+                        placeholder="0.42"
+                      />
+                      <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2 text-xs text-[var(--muted)]">
+                        <div className="text-[var(--subtle)]">latest icon embedding</div>
+                        <div className="mt-1 truncate font-semibold text-[var(--text)]">
+                          {semanticIconIndexStats?.latestEmbeddedAt
+                            ? formatJstDateTime(semanticIconIndexStats.latestEmbeddedAt)
+                            : "未作成"}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void rebuildSemanticIconDictionaryIndex(false)}
+                        disabled={semanticIconProgress?.running}
+                        className={primaryButtonClass}
+                      >
+                        Icon辞書embedding作成
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void rebuildSemanticIconDictionaryIndex(true)}
+                        disabled={semanticIconProgress?.running}
+                        className={secondaryButtonClass}
+                      >
+                        辞書embedding再作成
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void reassignSemanticIcons(true)}
+                        disabled={semanticIconProgress?.running}
+                        className={secondaryButtonClass}
+                      >
+                        全メモのIcon再推定
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void resetSemanticIconsToDefault()}
+                        disabled={semanticIconProgress?.running}
+                        className={secondaryButtonClass}
+                      >
+                        辞書を初期値へ
+                      </button>
+                    </div>
+                    {semanticIconProgress ? (
+                      <div className="mt-4 rounded-2xl border border-[color:var(--border)] bg-[var(--card)] p-3 text-xs text-[var(--muted)]">
+                        <div className="font-semibold text-[var(--text)]">
+                          {semanticIconProgress.running
+                            ? `処理中... ${semanticIconProgress.completed} / ${semanticIconProgress.total}`
+                            : "処理結果"}
+                        </div>
+                        <div className="mt-2 grid grid-cols-2 gap-2">
+                          <span>対象 {semanticIconProgress.total}件</span>
+                          <span>完了 {semanticIconProgress.completed}件</span>
+                          <span>スキップ {semanticIconProgress.skipped}件</span>
+                          <span>失敗 {semanticIconProgress.failed}件</span>
+                        </div>
+                        {semanticIconProgress.currentTitle ? (
+                          <div className="mt-2 rounded-xl bg-[var(--card-soft)] px-3 py-2">
+                            {semanticIconProgress.currentTitle}
+                          </div>
+                        ) : null}
+                        {semanticIconProgress.errors.length > 0 ? (
+                          <details className="mt-3">
+                            <summary className="cursor-pointer font-semibold text-[var(--danger)]">
+                              エラー {semanticIconProgress.errors.length}件
+                            </summary>
+                            <ul className="mt-2 max-h-36 space-y-1 overflow-auto text-[var(--danger)]">
+                              {semanticIconProgress.errors.map((error, index) => (
+                                <li key={`${error}:${index}`}>{error}</li>
+                              ))}
+                            </ul>
+                          </details>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    <details className="mt-4 rounded-2xl border border-[color:var(--border)] bg-[var(--card)] p-3">
+                      <summary className="cursor-pointer text-sm font-semibold text-[var(--text)]">辞書を追加</summary>
+                      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                        <LabeledInput label="Emoji" value={newIconEmoji} onChange={setNewIconEmoji} placeholder="🧯" />
+                        <LabeledInput label="Label" value={newIconLabel} onChange={setNewIconLabel} placeholder="防災" />
+                        <LabeledTextarea
+                          label="Description"
+                          value={newIconDescription}
+                          onChange={setNewIconDescription}
+                          placeholder="どんなメモに使うemojiか"
+                        />
+                        <LabeledTextarea
+                          label="Keywords"
+                          value={newIconKeywords}
+                          onChange={setNewIconKeywords}
+                          placeholder="台風、地震、防災"
+                        />
+                        <LabeledTextarea
+                          label="Examples"
+                          value={newIconExamples}
+                          onChange={setNewIconExamples}
+                          placeholder="台風対策の確認、避難用品の準備"
+                        />
+                      </div>
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void handleAddSemanticIcon()}
+                          disabled={!newIconEmoji.trim() || !newIconLabel.trim()}
+                          className={primaryButtonClass}
+                        >
+                          辞書に追加
+                        </button>
+                      </div>
+                    </details>
+
+                    <details className="mt-4 rounded-2xl border border-[color:var(--border)] bg-[var(--card)] p-3">
+                      <summary className="cursor-pointer text-sm font-semibold text-[var(--text)]">
+                        現在の辞書 {semanticIconDictionary.length}件
+                      </summary>
+                      <div className="mt-3 grid max-h-56 gap-2 overflow-auto text-xs text-[var(--muted)] sm:grid-cols-2">
+                        {semanticIconDictionary.map((entry) => (
+                          <div key={entry.key} className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
+                            <div className="font-semibold text-[var(--text)]">
+                              <span className="mr-2">{entry.emoji}</span>
+                              {entry.label}
+                            </div>
+                            <div className="mt-1 line-clamp-2">{entry.description}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
                   </div>
                 </SettingsAccordion>
 

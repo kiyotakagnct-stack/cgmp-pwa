@@ -109,6 +109,7 @@ export type CGMPRecord = {
   last_backup_at: string;
   backup_checksum: string;
   attachments?: ImageAttachment[];
+  icon?: CGMPSemanticIcon;
   ai: {
     model: string;
     generated_at: string;
@@ -159,6 +160,42 @@ export type CGMPEmbeddingIndex = {
 
 export type CGMPSemanticSearchResultMode = "threshold" | "top10";
 
+export type CGMPSemanticIconSource = "embedding" | "keyword" | "action_default";
+
+export type CGMPSemanticIcon = {
+  emoji: string;
+  key: string;
+  label: string;
+  source: CGMPSemanticIconSource;
+  score: number;
+  model: string;
+  assigned_at: string;
+  text_hash: string;
+  dictionary_version: string;
+};
+
+export type CGMPSemanticIconEntry = {
+  key: string;
+  emoji: string;
+  label: string;
+  description: string;
+  keywords: string[];
+  examples: string[];
+  enabled: boolean;
+  updated_at: string;
+};
+
+export type CGMPSemanticIconIndex = {
+  key: string;
+  vector: number[];
+  model: string;
+  dimensions: number;
+  icon_text_hash: string;
+  source_updated_at: string;
+  embedded_at: string;
+  dictionary_version: string;
+};
+
 export type CGMPDeletedRecord = {
   schema_version: 1;
   record_id: string;
@@ -188,6 +225,7 @@ export type CGMPSettings = {
   timezone: string;
   semantic_search_threshold: number;
   semantic_search_result_mode: CGMPSemanticSearchResultMode;
+  semantic_icon_threshold: number;
   external_sync_past_days: number;
   external_sync_future_days: number;
   external_sync_exclude_completed_tasks: boolean;

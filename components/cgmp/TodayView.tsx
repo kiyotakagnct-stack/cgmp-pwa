@@ -17,6 +17,7 @@ import {
   startOfDay,
   WEEKDAY_LABELS,
 } from "@/lib/cgmp/client-utils";
+import { getRecordSemanticIcon } from "@/lib/cgmp/semantic-icons";
 import type { CGMPRecord, CGMPSettings } from "@/lib/cgmp/types";
 import type { ImageAttachment } from "@/types/image";
 
@@ -45,63 +46,12 @@ const DAY_START_MINUTES = 6 * 60;
 const DAY_END_MINUTES = 24 * 60;
 const TIMELINE_RANGE = DAY_END_MINUTES - DAY_START_MINUTES;
 
-const SEMANTIC_ICON_RULES: Array<{ icon: string; keywords: string[] }> = [
-  { icon: "🦷", keywords: ["歯医者", "歯科", "デンタル"] },
-  { icon: "🏥", keywords: ["病院", "眼科", "耳鼻科", "通院"] },
-  { icon: "👥", keywords: ["会議", "打合せ", "打ち合わせ", "ミーティング", "1on1"] },
-  { icon: "💬", keywords: ["相談", "すり合わせ", "認識合わせ"] },
-  { icon: "📞", keywords: ["電話", "tel", "連絡"] },
-  { icon: "✉️", keywords: ["メール", "返信", "送信"] },
-  { icon: "📄", keywords: ["資料", "文書", "レポート", "議事録"] },
-  { icon: "🔍", keywords: ["確認", "レビュー", "チェック", "検証"] },
-  { icon: "🧭", keywords: ["方針", "整理", "段取り", "計画"] },
-  { icon: "🧳", keywords: ["旅行", "出張", "ホテル", "予約", "旅程"] },
-  { icon: "🛒", keywords: ["買う", "購入", "買い物"] },
-  { icon: "💳", keywords: ["支払い", "精算", "請求", "カード"] },
-  { icon: "🚲", keywords: ["自転車", "ロードバイク", "運動"] },
-  { icon: "🍽️", keywords: ["食事", "ご飯", "弁当", "ランチ"] },
-  { icon: "🎒", keywords: ["学校", "授業", "宿題", "習い事"] },
-  { icon: "🧒", keywords: ["子供", "凜", "瑛", "瑛登"] },
-  { icon: "💡", keywords: ["アイデア", "考える", "構想"] },
-  { icon: "💻", keywords: ["実装", "codex", "コード", "next.js", "scriptable"] },
-  { icon: "🧪", keywords: ["試験", "評価", "実験", "検査"] },
-  { icon: "🏭", keywords: ["生産", "設備", "現場", "ライン"] },
-  { icon: "📦", keywords: ["出荷", "梱包", "物流", "納入"] },
-  { icon: "⏰", keywords: ["締切", "督促", "期限"] },
-];
-
 function recordSummary(record: CGMPRecord) {
   return record.summary || record.user_intent_summary || record.body || record.raw_input || "";
 }
 
-function recordSearchText(record: CGMPRecord) {
-  return [
-    record.title,
-    record.summary,
-    record.body,
-    record.raw_input,
-    ...(record.tags || []),
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-}
-
 function inferSemanticIcon(record: CGMPRecord) {
-  const manualIcon = (record as CGMPRecord & { icon?: { emoji?: string; source?: string } }).icon;
-  if (manualIcon?.emoji && manualIcon.source === "manual") return manualIcon.emoji;
-  if (manualIcon?.emoji) return manualIcon.emoji;
-
-  const text = recordSearchText(record);
-  for (const rule of SEMANTIC_ICON_RULES) {
-    if (rule.keywords.some((keyword) => text.includes(keyword.toLowerCase()))) return rule.icon;
-  }
-
-  if (record.action === "calendar") return "📅";
-  if (record.action === "reminder") return "✅";
-  if (record.action === "note") return "📝";
-  if (record.action === "unclear") return "?";
-  return "•";
+  return getRecordSemanticIcon(record);
 }
 
 function isTask(record: CGMPRecord) {
@@ -575,9 +525,12 @@ export function TodayView({
   const progressText = `${cockpit.completedTodayTasks}/${cockpit.todayTasksAll.length}`;
 
   return (
-    <div className="grid max-w-full gap-3 overflow-hidden sm:gap-4">
-      <section className="px-1 pt-1">
-        <div className="flex items-start justify-between gap-3">
+    <div
+      className="grid max-w-full gap-3 overflow-hidden sm:gap-4"
+      style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 1.5rem)" }}
+    >
+      <section className="px-1">
+        <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="text-3xl font-semibold tracking-tight text-[var(--text)]">Today</h2>
             <div className="mt-1 text-sm text-[var(--muted)]">
@@ -587,7 +540,7 @@ export function TodayView({
           <button
             type="button"
             onClick={() => window.location.reload()}
-            className="rounded-full border border-[color:var(--border)] bg-[var(--card)] px-3 py-2 text-sm font-semibold text-[var(--accent)] shadow-[0_8px_18px_var(--shadow-soft)]"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-[color:var(--border)] bg-[var(--card)] text-lg font-semibold text-[var(--accent)] shadow-[0_8px_18px_var(--shadow-soft)]"
             aria-label="Todayを再読み込み"
           >
             ↻
