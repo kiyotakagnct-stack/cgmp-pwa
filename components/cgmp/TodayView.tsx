@@ -30,6 +30,10 @@ function isIncompleteTask(record: CGMPRecord) {
   return record.google_task_status !== "completed";
 }
 
+function isGoogleTaskLinked(record: CGMPRecord) {
+  return Boolean(record.google_task_id && record.google_task_list_id);
+}
+
 function createdDateKey(record: CGMPRecord) {
   return getJstParts(record.created_at || record.updated_at).dateKey;
 }
@@ -188,9 +192,6 @@ export function TodayView({
     const timedTasks = todayTasks
       .filter((record) => Boolean(record.time) && !record.all_day)
       .sort(sortByTodayTime);
-    const floatingTasks = todayTasks
-      .filter((record) => !record.time || record.all_day)
-      .sort(sortByTodayTime);
     const scheduled = records
       .filter((record) => record.action === "calendar" && record.date === todayKey)
       .sort(sortByTodayTime);
@@ -198,7 +199,7 @@ export function TodayView({
       .filter((record) => record.action === "note" && createdDateKey(record) === todayKey)
       .sort((left, right) => String(right.created_at || right.updated_at).localeCompare(String(left.created_at || left.updated_at)));
     const carryOver = records
-      .filter((record) => isIncompleteTask(record) && Boolean(record.date) && record.date < todayKey)
+      .filter((record) => isIncompleteTask(record) && isGoogleTaskLinked(record) && Boolean(record.date) && record.date < todayKey)
       .sort(sortByTodayTime)
       .slice(0, 5);
 
@@ -216,7 +217,6 @@ export function TodayView({
       upcomingTask ||
       upcomingCalendar ||
       timedTasks[0] ||
-      floatingTasks[0] ||
       carryOver[0] ||
       null;
 
@@ -224,7 +224,6 @@ export function TodayView({
       nextAction,
       timedTasks,
       scheduled,
-      floatingTasks,
       notesToday,
       carryOver,
     };
@@ -246,13 +245,6 @@ export function TodayView({
       tone: "amber",
     },
     {
-      title: "Floating Tasks",
-      subtitle: "今日の日付はあるが、時刻がない未完了タスク。",
-      records: cockpit.floatingTasks,
-      emptyText: "今日の時刻なしタスクはありません。",
-      tone: "cyan",
-    },
-    {
       title: "Notes Captured Today",
       subtitle: "今日作成されたnote。作業ログや気づきの置き場です。",
       records: cockpit.notesToday,
@@ -261,7 +253,7 @@ export function TodayView({
     },
     {
       title: "Carry-over",
-      subtitle: "昨日以前の日付を持つ未完了タスク。まずは最大5件だけ表示します。",
+      subtitle: "Google Tasks連携済みの古い未完了タスク。まずは最大5件だけ表示します。",
       records: cockpit.carryOver,
       emptyText: "持ち越しタスクはありません。",
       tone: "amber",
