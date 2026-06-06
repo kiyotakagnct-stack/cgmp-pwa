@@ -23,6 +23,7 @@ import {
   getTaskInfo,
   type BadgeInfo,
 } from "@/lib/cgmp/client-utils";
+import { getRecordSemanticIcon } from "@/lib/cgmp/semantic-icons";
 import { formatJstDateTime } from "@/lib/cgmp/utils";
 import type { CGMPRecord } from "@/lib/cgmp/types";
 import type { ImageAttachment } from "@/types/image";
@@ -82,6 +83,7 @@ export function RecordCard({
   const isDraft = record.ai_status === "pending_ai";
   const isTaskRegistered = Boolean(record.google_task_id && record.google_task_list_id);
   const isCalendarRegistered = Boolean(record.google_calendar_event_id);
+  const semanticIcon = getRecordSemanticIcon(record);
 
   function handlePhotoFiles(files: File[]) {
     if (files.length === 0) return;
@@ -247,7 +249,12 @@ export function RecordCard({
         </div>
 
         <div className="mt-3">
-          <h3 className="break-words text-base font-semibold text-[var(--text)]">{record.title || "（無題）"}</h3>
+          <div className="flex min-w-0 items-start gap-2">
+            <span className="mt-0.5 shrink-0 text-lg leading-none" title={record.icon?.label || "Semantic icon"}>
+              {semanticIcon}
+            </span>
+            <h3 className="min-w-0 break-words text-base font-semibold text-[var(--text)]">{record.title || "（無題）"}</h3>
+          </div>
           <p className="mt-1 line-clamp-2 text-sm leading-6 text-[var(--muted)]">
             {record.summary || record.body || record.raw_input}
           </p>
@@ -492,4 +499,3 @@ export function MiniRecordCard({
     </button>
   );
 }
-

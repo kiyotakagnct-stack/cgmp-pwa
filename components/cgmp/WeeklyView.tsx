@@ -24,6 +24,7 @@ import {
   WEEKDAY_LABELS,
   WEEKDAY_MINI_LABELS,
 } from "@/lib/cgmp/client-utils";
+import { getRecordSemanticIcon } from "@/lib/cgmp/semantic-icons";
 import { formatJstDateTime } from "@/lib/cgmp/utils";
 import type { CGMPRecord } from "@/lib/cgmp/types";
 import type { ImageAttachment } from "@/types/image";
@@ -50,6 +51,7 @@ function WeekRecordItem({
   const taskProcessing = externalProcessingKey === `task-status:${record.id}`;
   const detailBody = record.body || record.raw_input || "";
   const detailIntent = record.user_intent_summary || record.confirmation || "";
+  const semanticIcon = getRecordSemanticIcon(record);
 
   return (
     <div
@@ -76,7 +78,10 @@ function WeekRecordItem({
         <span className="shrink-0 rounded-full bg-[var(--card-soft)] px-2.5 py-1 text-xs text-[var(--subtle)]">
           {timeline.sourceLabel}
         </span>
-        <span className="shrink-0 text-lg leading-none sm:text-xl">{getActionSymbol(record)}</span>
+        <span className="shrink-0 text-lg leading-none sm:text-xl" title={record.icon?.label || "Semantic icon"}>
+          {semanticIcon}
+        </span>
+        <span className="shrink-0 text-sm leading-none opacity-70 sm:text-base">{getActionSymbol(record)}</span>
         <span className="shrink-0 text-lg leading-none sm:text-xl">{getDomainSymbol(record.domain)}</span>
         <h3 className="min-w-[12rem] flex-1 truncate text-base font-semibold leading-7 text-[var(--text)] sm:text-lg">
           {record.title || "（無題）"}
@@ -432,4 +437,3 @@ export function WeeklyView({
     </div>
   );
 }
-

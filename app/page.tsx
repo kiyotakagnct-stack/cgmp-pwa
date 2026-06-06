@@ -1698,7 +1698,7 @@ export default function Page() {
     });
   }
 
-  async function assignSemanticIcon(record: CGMPRecord, force = false) {
+  async function assignSemanticIcon(record: CGMPRecord, force = false, thresholdOverride?: number) {
     try {
       if (typeof navigator !== "undefined" && !navigator.onLine) return record;
       const quickHash = await hashEmbeddingText(buildRecordIconText(record));
@@ -1712,7 +1712,7 @@ export default function Page() {
       const result = await inferSemanticIconForRecord({
         record,
         provider: embeddingProviderRef.current,
-        threshold: settingsDraft?.semantic_icon_threshold ?? DEFAULT_SEMANTIC_ICON_THRESHOLD,
+        threshold: thresholdOverride ?? settingsDraft?.semantic_icon_threshold ?? DEFAULT_SEMANTIC_ICON_THRESHOLD,
         recordVector: index.vector,
       });
       const nextRecord = { ...record, icon: result.icon };
@@ -1780,6 +1780,15 @@ export default function Page() {
 
   async function reassignSemanticIcons(force = false) {
     if (semanticIconProgress?.running) return;
+    const threshold = settingsDraft?.semantic_icon_threshold ?? DEFAULT_SEMANTIC_ICON_THRESHOLD;
+    if (settingsDraft) {
+      try {
+        const savedSettings = await saveSettings(settingsDraft);
+        setSettingsDraft(savedSettings);
+      } catch (error) {
+        console.debug("[cgmp:semantic-icon] failed to persist threshold before reassign", error);
+      }
+    }
     const targets = force ? records : records.filter((record) => !record.icon?.emoji);
     setSemanticIconProgress({
       running: true,
@@ -1802,7 +1811,7 @@ export default function Page() {
     for (const record of targets) {
       setSemanticIconProgress((prev) => (prev ? { ...prev, currentTitle: record.title || record.id } : prev));
       try {
-        await assignSemanticIcon(record, true);
+        await assignSemanticIcon(record, true, threshold);
         completed += 1;
       } catch (error) {
         failed += 1;
