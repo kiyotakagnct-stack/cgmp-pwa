@@ -6,7 +6,21 @@ import type { CSSProperties } from "react";
 import { ImageAttachmentGrid } from "@/components/ImageAttachmentGrid";
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { ImageUploader } from "@/components/ImageUploader";
+import { HomeView } from "@/components/cgmp/HomeView";
+import { PostSaveSuggestionsModal, type ExternalConfirmState } from "@/components/cgmp/PostSaveSuggestionsModal";
 import { RecordEditor } from "@/components/cgmp/RecordEditor";
+import { MiniRecordCard, RecordCard } from "@/components/cgmp/RecordCards";
+import {
+  BackupSyncProgressModal,
+  ExternalSyncProgressModal,
+  WebhookTestModal,
+  type BackupSyncReportItem,
+  type BackupSyncProgressState,
+  type ExternalSyncReportItem,
+  type ExternalSyncProgressState,
+  type ShortcutWebhookTestReport,
+} from "@/components/cgmp/ProgressModals";
+import { PromptSettingsModal, type PromptEditorDefinition } from "@/components/cgmp/PromptSettingsModal";
 import { WeeklyView } from "@/components/cgmp/WeeklyView";
 import { deleteImageBlobs, getImageBlob, putImageBlob } from "@/lib/db/imageBlobStore";
 import { analyzeImageWithVision, fallbackImageAnalysis } from "@/lib/image/analyzeImageWithVision";
@@ -56,7 +70,7 @@ import type {
   CGMPSettings,
   CGMPSemanticSearchResultMode,
 } from "@/lib/cgmp/types";
-import type { CGMPPromptConfigFile, CGMPPromptDefinition, CGMPPromptKey } from "@/lib/cgmp/prompt-config";
+import type { CGMPPromptConfigFile, CGMPPromptKey } from "@/lib/cgmp/prompt-config";
 import {
   formatJstDateTime,
   normalizeAction,
@@ -70,32 +84,19 @@ import {
   applyTheme,
   blankForm,
   dateKeyFromDate,
-  DOMAIN_FILTER_OPTIONS,
   formFromRecord,
   formToRecord,
   formatWeekDate,
   formatWeekRange,
   getActionInfo,
-  getActionLabel,
-  getActionSymbol,
-  getBackupInfo,
-  getBackupLabel,
-  getBackupTone,
-  getCalendarInfo,
   getDateSortValue,
   getDomainInfo,
-  getDomainSymbol,
   getDraftRecordTitle,
   getEffectivePara,
   getExternalSyncWindow,
   getMondayOfWeek,
   getParaInfo,
-  getParaLabel,
-  getPhotoBackupBadge,
-  getPhotoBackupInfo,
   getRecordText,
-  getRecordTimeline,
-  getTaskInfo,
   matchesMiniQuery,
   matchesQuery,
   normalizeSemanticThreshold,
@@ -104,8 +105,6 @@ import {
   shouldSyncExternalRecord,
   startOfDay,
   THEME_STORAGE_KEY,
-  WEEKDAY_LABELS,
-  WEEKDAY_MINI_LABELS,
   type BadgeInfo,
   type RecordFormState,
   type ThemeMode,
@@ -117,7 +116,6 @@ import {
   dangerButtonClass,
   DomainBadge,
   fieldClass,
-  getDomainColorVar,
   LabeledInput,
   LabeledNumber,
   LabeledSelect,
@@ -144,7 +142,6 @@ type SyncActivity = {
   startedAt: number;
 };
 type LightboxState = { imageUrl: string; title: string } | null;
-type PromptEditorDefinition = Omit<CGMPPromptDefinition, "hiddenContract">;
 type DeployInfo = {
   ok?: boolean;
   commitMessage?: string;
@@ -221,90 +218,6 @@ type GoogleExternalSyncPayload = {
   }>;
   error?: string;
 };
-type ExternalSyncReportItem = {
-  recordId: string;
-  title: string;
-  ok: boolean;
-  changed: boolean;
-  elapsedMs: number;
-  taskElapsedMs: number;
-  calendarElapsedMs: number;
-  applyElapsedMs: number;
-  hasTask: boolean;
-  hasCalendar: boolean;
-  error: string;
-};
-type ExternalSyncProgressState = {
-  phase: "preparing" | "checking" | "applying" | "done" | "error";
-  total: number;
-  checked: number;
-  applied: number;
-  changed: number;
-  failed: number;
-  message: string;
-  currentTitle: string;
-  startedAt: number;
-  checkingElapsedMs: number;
-  applyingElapsedMs: number;
-  reloadElapsedMs: number;
-  reportItems: ExternalSyncReportItem[];
-  finishedAt?: number;
-};
-type BackupSyncReportItem = {
-  recordId: string;
-  title: string;
-  ok: boolean;
-  itemType: string;
-  skipped: boolean;
-  attachmentId: string;
-  elapsedMs: number;
-  blobElapsedMs: number;
-  uploadElapsedMs: number;
-  previewSizeBytes: number;
-  thumbnailSizeBytes: number;
-  error: string;
-};
-type BackupSyncProgressState = {
-  phase: "processing" | "done" | "error";
-  message: string;
-  startedAt: number;
-  finishedAt?: number;
-  total: number;
-  succeeded: number;
-  failed: number;
-  processElapsedMs: number;
-  reloadElapsedMs: number;
-  reportItems: BackupSyncReportItem[];
-};
-type ShortcutWebhookTraceStep = {
-  id: string;
-  label: string;
-  status: "running" | "success" | "error" | "skipped";
-  startedAt: number;
-  endedAt?: number;
-  elapsedMs?: number;
-  detail?: string;
-  error?: string;
-};
-type ShortcutWebhookDebugTrace = {
-  enabled: true;
-  totalElapsedMs: number;
-  steps: ShortcutWebhookTraceStep[];
-};
-type ShortcutWebhookTestReport = {
-  ok?: boolean;
-  message?: string;
-  action?: string;
-  title?: string;
-  summary?: string;
-  recordId?: string;
-  date?: string;
-  time?: string;
-  confirmationText?: string;
-  errorCode?: string;
-  error?: string;
-  debugTrace?: ShortcutWebhookDebugTrace;
-};
 type EmbeddingProgressState = {
   running: boolean;
   total: number;
@@ -325,477 +238,6 @@ type DeletedRecordsSummary = {
   count: number;
   latestDeletedAt: string;
 };
-type ExternalConfirmState = {
-  recordId: string;
-  action: "reminder" | "calendar";
-  title: string;
-} | null;
-function RecordCard({
-  record,
-  onOpen,
-  onEdit,
-  onDelete,
-  onRegisterGoogleTask,
-  onToggleGoogleTaskStatus,
-  onRegisterGoogleCalendarEvent,
-  onOpenImage,
-  onReanalyzeAttachment,
-  onDeleteAttachment,
-  onAddPhotos,
-  onSyncOne,
-  onAnalyzeRecord,
-  onShowBadgeInfo,
-  externalProcessingKey = "",
-  isPhotoProcessing = false,
-  isBackupProcessing = false,
-  isChecked = false,
-  onToggleCheck,
-  isSelected = false,
-}: {
-  record: CGMPRecord;
-  onOpen: (id: string) => void;
-  onEdit: (id: string) => void;
-  onDelete: (id: string) => void;
-  onRegisterGoogleTask: (id: string) => void;
-  onToggleGoogleTaskStatus: (id: string) => void;
-  onRegisterGoogleCalendarEvent: (id: string) => void;
-  onOpenImage: (attachment: ImageAttachment, imageUrl: string) => void;
-  onReanalyzeAttachment: (recordId: string, attachmentId: string) => void;
-  onDeleteAttachment: (recordId: string, attachmentId: string) => void;
-  onAddPhotos: (recordId: string, files: File[]) => void;
-  onSyncOne: (recordId: string) => void;
-  onAnalyzeRecord: (recordId: string) => void;
-  onShowBadgeInfo: (info: NonNullable<BadgeInfo>) => void;
-  externalProcessingKey?: string;
-  isPhotoProcessing?: boolean;
-  isBackupProcessing?: boolean;
-  isChecked?: boolean;
-  onToggleCheck: (id: string) => void;
-  isSelected?: boolean;
-}) {
-  const para = getEffectivePara(record);
-  const rawText = record.raw_input || record.summary || record.body || "（原文なし）";
-  const bodyText = record.body && record.body !== record.raw_input ? record.body : "";
-  const intentText = record.user_intent_summary || record.confirmation || "";
-  const photoInputRef = useRef<HTMLInputElement | null>(null);
-  const photoBackupBadge = getPhotoBackupBadge(record);
-  const taskProcessing = externalProcessingKey === `task:${record.id}` || externalProcessingKey === `task-status:${record.id}`;
-  const calendarProcessing = externalProcessingKey === `calendar:${record.id}`;
-  const aiProcessing = externalProcessingKey === `draft-ai:${record.id}`;
-  const isDraft = record.ai_status === "pending_ai";
-  const isTaskRegistered = Boolean(record.google_task_id && record.google_task_list_id);
-  const isCalendarRegistered = Boolean(record.google_calendar_event_id);
-
-  function handlePhotoFiles(files: File[]) {
-    if (files.length === 0) return;
-    onAddPhotos(record.id, files);
-  }
-
-  return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={() => onOpen(record.id)}
-      onKeyDown={(event) => {
-        if (event.key !== " " && event.key !== "Enter") return;
-        event.preventDefault();
-        onOpen(record.id);
-      }}
-      id={`record-card-${record.id}`}
-      className="group w-full min-w-0 overflow-hidden scroll-mt-24 text-left"
-      aria-expanded={isSelected}
-    >
-      <div
-        className={`min-w-0 overflow-hidden rounded-[22px] border p-3 transition duration-300 sm:rounded-[24px] sm:p-4 ${
-          isChecked
-            ? "border-[color:var(--orange)] bg-[var(--orange-soft)] shadow-[0_16px_42px_var(--shadow-soft)]"
-            : isSelected
-            ? "border-[color:var(--accent)] bg-[var(--accent-soft)] shadow-[0_16px_42px_var(--shadow-soft)]"
-            : "border-[color:var(--border)] bg-[var(--card)] group-hover:border-[color:var(--accent)] group-hover:bg-[var(--accent-soft)]"
-        }`}
-      >
-        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-          <span
-            role="checkbox"
-            aria-checked={isChecked}
-            tabIndex={0}
-            onClick={(event) => {
-              event.stopPropagation();
-              onToggleCheck(record.id);
-            }}
-            onKeyDown={(event) => {
-              if (event.key !== " " && event.key !== "Enter") return;
-              event.preventDefault();
-              event.stopPropagation();
-              onToggleCheck(record.id);
-            }}
-            className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border text-xs font-bold transition ${
-              isChecked
-                ? "border-[color:var(--orange)] bg-[var(--orange)] text-white shadow-[0_8px_18px_var(--shadow-soft)]"
-                : "border-[color:var(--border)] bg-[var(--card)] text-transparent group-hover:border-[color:var(--accent)]"
-            }`}
-            aria-label={`${record.title || "メモ"}を選択`}
-          >
-            ✓
-          </span>
-          {isDraft ? (
-            <Badge compact tone="amber">下書き</Badge>
-          ) : (
-            <>
-              <Badge
-                compact
-                tone={record.action === "calendar" ? "amber" : record.action === "reminder" ? "rose" : record.action === "unclear" ? "slate" : "cyan"}
-                title="Actionの意味を表示"
-                onClick={() => onShowBadgeInfo(getActionInfo(record.action))}
-              >
-                {getActionLabel(record.action)}
-              </Badge>
-              <DomainBadge compact domain={record.domain || "other"} onClick={() => onShowBadgeInfo(getDomainInfo(record.domain || "other"))} />
-              <Badge compact tone="slate" title="PARAの意味を表示" onClick={() => onShowBadgeInfo(getParaInfo(para))}>
-                {getParaLabel(para)}
-              </Badge>
-              <Badge compact tone={getBackupTone(record)} title="同期状態の意味を表示" onClick={() => onShowBadgeInfo(getBackupInfo(record))}>
-                {getBackupLabel(record)}
-              </Badge>
-            </>
-          )}
-          {!isDraft && photoBackupBadge ? (
-            <Badge compact tone={photoBackupBadge.tone} title="写真同期状態の意味を表示" onClick={() => onShowBadgeInfo(getPhotoBackupInfo(record))}>
-              {photoBackupBadge.label}
-            </Badge>
-          ) : null}
-          {!isDraft && isTaskRegistered ? (
-            <Badge compact tone={record.google_task_status === "completed" ? "emerald" : "amber"} title="Google Tasks状態の意味を表示" onClick={() => onShowBadgeInfo(getTaskInfo(record))}>
-              {record.google_task_status === "completed" ? "Task完" : "Task未"}
-            </Badge>
-          ) : null}
-          {!isDraft && isCalendarRegistered ? (
-            <Badge compact tone="amber" title="Google Calendar状態の意味を表示" onClick={() => onShowBadgeInfo(getCalendarInfo())}>
-              GCal
-            </Badge>
-          ) : null}
-          {!isDraft && record.external_action_status === "failed" ? <Badge compact tone="rose">外部失敗</Badge> : null}
-          <span className="min-w-0 max-w-full truncate text-[11px] text-[var(--subtle)]">
-            {isDraft ? `created ${formatJstDateTime(record.created_at)}` : formatJstDateTime(record.updated_at)}
-          </span>
-          <div className="flex w-full max-w-full shrink-0 items-center justify-end gap-1.5 sm:ml-auto sm:w-auto">
-            {isDraft ? (
-              <button
-                type="button"
-                disabled={aiProcessing}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onAnalyzeRecord(record.id);
-                }}
-                onKeyDown={(event) => event.stopPropagation()}
-                className="whitespace-nowrap rounded-full border border-[color:var(--accent)] bg-[var(--accent)] px-3 py-1 text-[11px] font-semibold text-[var(--accent-contrast)] shadow-[0_6px_16px_var(--shadow-soft)] transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {aiProcessing ? "解析中..." : "AI解析"}
-              </button>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  disabled={aiProcessing}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onAnalyzeRecord(record.id);
-                  }}
-                  onKeyDown={(event) => event.stopPropagation()}
-                  className="whitespace-nowrap rounded-full border border-[color:var(--accent)] bg-[var(--accent)] px-2.5 py-1 text-[11px] font-semibold text-[var(--accent-contrast)] shadow-[0_6px_16px_var(--shadow-soft)] transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {aiProcessing ? "解析中..." : "AI解析"}
-                </button>
-                <button
-                  type="button"
-                  disabled={isBackupProcessing}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onSyncOne(record.id);
-                  }}
-                  onKeyDown={(event) => event.stopPropagation()}
-                  className="whitespace-nowrap rounded-full border border-[color:var(--border)] bg-[var(--card)] px-2.5 py-1 text-[11px] font-semibold text-[var(--text)] shadow-[0_6px_16px_var(--shadow-soft)] transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  同期
-                </button>
-                <input
-                  ref={photoInputRef}
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  className="hidden"
-                  onClick={(event) => event.stopPropagation()}
-                  onChange={(event) => {
-                    event.stopPropagation();
-                    const files = Array.from(event.target.files || []);
-                    event.target.value = "";
-                    handlePhotoFiles(files);
-                  }}
-                />
-                <button
-                  type="button"
-                  disabled={isPhotoProcessing}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    photoInputRef.current?.click();
-                  }}
-                  onKeyDown={(event) => event.stopPropagation()}
-                  className="whitespace-nowrap rounded-full border border-[color:var(--accent)] bg-[var(--card)] px-2.5 py-1 text-[11px] font-semibold text-[var(--accent)] shadow-[0_6px_16px_var(--shadow-soft)] transition hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  ＋写真
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-
-        <div className="mt-3">
-          <h3 className="break-words text-base font-semibold text-[var(--text)]">{record.title || "（無題）"}</h3>
-          <p className="mt-1 line-clamp-2 text-sm leading-6 text-[var(--muted)]">
-            {record.summary || record.body || record.raw_input}
-          </p>
-        </div>
-
-        <div className="mt-4 flex flex-wrap gap-2">
-          {(record.tags || []).slice(0, 5).map((tag) => (
-            <Badge key={tag} compact>{`#${tag}`}</Badge>
-          ))}
-        </div>
-
-        <div className="mt-4 flex flex-wrap gap-2 text-xs text-[var(--subtle)]">
-          {isDraft ? (
-            <span>created {formatJstDateTime(record.created_at)}</span>
-          ) : (
-            <>
-              <span>{record.date || "未設定日付"}</span>
-              <span>{record.time || "未設定時刻"}</span>
-              <span>{record.external_action_status}</span>
-              {record.last_backup_at ? <span>backup {formatJstDateTime(record.last_backup_at)}</span> : null}
-            </>
-          )}
-        </div>
-
-        <ImageAttachmentGrid attachments={record.attachments} compact maxItems={3} onOpen={onOpenImage} />
-
-        <div
-          className={`overflow-hidden transition-[height,opacity,margin-top] duration-300 ease-out ${
-            isSelected
-              ? "mt-4 h-[28rem] opacity-100 sm:h-[30rem]"
-              : "mt-0 h-0 opacity-0 group-focus-visible:mt-4 group-focus-visible:h-[28rem] group-focus-visible:opacity-100 sm:group-focus-visible:h-[30rem]"
-          }`}
-        >
-          <div className="flex h-full flex-col rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-4 py-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="text-[11px] uppercase tracking-[0.28em] text-[var(--accent)]">Detail</div>
-              <div className="flex flex-wrap gap-2">
-                {isDraft ? (
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onAnalyzeRecord(record.id);
-                    }}
-                    onKeyDown={(event) => event.stopPropagation()}
-                    className="rounded-xl border border-[color:var(--accent)] bg-[var(--accent)] px-3 py-1.5 text-xs font-semibold text-[var(--accent-contrast)] transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
-                    disabled={aiProcessing}
-                  >
-                    {aiProcessing ? "解析中..." : "AI解析"}
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onAnalyzeRecord(record.id);
-                    }}
-                    onKeyDown={(event) => event.stopPropagation()}
-                    className="rounded-xl border border-[color:var(--accent)] bg-[var(--accent)] px-3 py-1.5 text-xs font-semibold text-[var(--accent-contrast)] transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
-                    disabled={aiProcessing}
-                  >
-                    {aiProcessing ? "解析中..." : "AI解析"}
-                  </button>
-                )}
-                {!isDraft && record.action === "reminder" ? (
-                  isTaskRegistered ? (
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onToggleGoogleTaskStatus(record.id);
-                      }}
-                      onKeyDown={(event) => event.stopPropagation()}
-                      className="rounded-xl border border-teal-200 bg-teal-50 px-3 py-1.5 text-xs font-semibold text-teal-700 transition hover:border-teal-300 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
-                      disabled={taskProcessing}
-                    >
-                      {taskProcessing ? "同期中..." : record.google_task_status === "completed" ? "未完了に戻す" : "完了にする"}
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onRegisterGoogleTask(record.id);
-                      }}
-                      onKeyDown={(event) => event.stopPropagation()}
-                      className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
-                      disabled={taskProcessing}
-                    >
-                      {taskProcessing ? "登録中..." : "Tasks登録"}
-                    </button>
-                  )
-                ) : null}
-                {!isDraft && record.action === "calendar" ? (
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onRegisterGoogleCalendarEvent(record.id);
-                    }}
-                    onKeyDown={(event) => event.stopPropagation()}
-                    className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-700 transition hover:border-orange-300 hover:bg-orange-100 disabled:cursor-not-allowed disabled:opacity-50"
-                    disabled={calendarProcessing || isCalendarRegistered}
-                  >
-                    {calendarProcessing ? "登録中..." : isCalendarRegistered ? "Cal登録済" : "Calendar登録"}
-                  </button>
-                ) : null}
-                {!isDraft ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onSyncOne(record.id);
-                      }}
-                      onKeyDown={(event) => event.stopPropagation()}
-                      className="rounded-xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--text)] transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50"
-                      disabled={isBackupProcessing}
-                    >
-                      1件同期
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        photoInputRef.current?.click();
-                      }}
-                      onKeyDown={(event) => event.stopPropagation()}
-                      className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-700 transition hover:border-orange-300 hover:bg-orange-100 disabled:cursor-not-allowed disabled:opacity-50"
-                      disabled={isPhotoProcessing}
-                    >
-                      写真追加
-                    </button>
-                  </>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onEdit(record.id);
-                  }}
-                  onKeyDown={(event) => event.stopPropagation()}
-                  className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 transition hover:border-blue-300 hover:bg-blue-100"
-                >
-                  編集
-                </button>
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onDelete(record.id);
-                  }}
-                  onKeyDown={(event) => event.stopPropagation()}
-                  className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-100"
-                >
-                  削除
-                </button>
-              </div>
-            </div>
-            <div className="mt-3 flex-1 space-y-4 overflow-auto overscroll-contain pr-1 text-sm leading-6 text-[var(--text)]">
-              <section>
-                <div className="text-[11px] uppercase tracking-[0.24em] text-slate-400">AI要約</div>
-                <p className="mt-1 whitespace-pre-wrap break-words">{record.summary || "（要約なし）"}</p>
-              </section>
-              {intentText ? (
-                <section>
-                  <div className="text-[11px] uppercase tracking-[0.24em] text-slate-400">Intent / Confirmation</div>
-                  <p className="mt-1 whitespace-pre-wrap break-words">{intentText}</p>
-                </section>
-              ) : null}
-              {bodyText ? (
-                <section>
-                  <div className="text-[11px] uppercase tracking-[0.24em] text-slate-400">本文</div>
-                  <pre className="mt-1 m-0 whitespace-pre-wrap break-words font-sans">{bodyText}</pre>
-                </section>
-              ) : null}
-              <section>
-                <div className="text-[11px] uppercase tracking-[0.24em] text-slate-400">原文</div>
-                <pre className="mt-1 m-0 whitespace-pre-wrap break-words font-sans">{rawText}</pre>
-              </section>
-              {(record.attachments || []).length > 0 ? (
-                <section>
-                  <div className="text-[11px] uppercase tracking-[0.24em] text-slate-400">写真</div>
-                  <div className="mt-2" onClick={(event) => event.stopPropagation()}>
-                    <ImageAttachmentGrid
-                      attachments={record.attachments}
-                      onOpen={onOpenImage}
-                      onReanalyze={(attachmentId) => onReanalyzeAttachment(record.id, attachmentId)}
-                      onDelete={(attachmentId) => onDeleteAttachment(record.id, attachmentId)}
-                    />
-                  </div>
-                </section>
-              ) : null}
-              <section>
-                <div className="text-[11px] uppercase tracking-[0.24em] text-slate-400">メタ情報</div>
-                <div className="mt-1 grid gap-1 text-xs text-slate-500 sm:grid-cols-2">
-                  <span>作成: {formatJstDateTime(record.created_at)}</span>
-                  <span>更新: {formatJstDateTime(record.updated_at)}</span>
-                  <span>日付: {record.date || "未設定"}</span>
-                  <span>時刻: {record.time || "未設定"}</span>
-                  <span>場所: {record.location || "未設定"}</span>
-                  <span>AI: {record.ai_status || "none"}</span>
-                  {record.google_task_id ? <span>Task: {record.google_task_status || "needsAction"}</span> : null}
-                  {record.google_calendar_event_id ? <span>Calendar: registered</span> : null}
-                  {record.external_error ? <span className="text-rose-500">外部連携: {record.external_error}</span> : null}
-                </div>
-              </section>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function MiniRecordCard({
-  record,
-  onOpen,
-}: {
-  record: CGMPRecord;
-  onOpen: (id: string) => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={() => onOpen(record.id)}
-      className="group w-full text-left"
-    >
-      <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-4 py-3 transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)]">
-        <div className="flex items-center gap-2 text-[11px] text-[var(--subtle)]">
-          <span>{record.updated_at ? formatJstDateTime(record.updated_at) : "未設定"}</span>
-          <span>/</span>
-          <span>{record.action || "note"}</span>
-        </div>
-        <div className="mt-1 line-clamp-2 text-sm font-semibold leading-6 text-[var(--text)]">
-          {record.title || "（無題）"}
-        </div>
-        <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--muted)]">
-          {record.summary || record.raw_input || ""}
-        </p>
-      </div>
-    </button>
-  );
-}
-
 export default function Page() {
   const [tab, setTab] = useState<AppTab>("home");
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
@@ -3576,746 +3018,107 @@ export default function Page() {
           </div>
         ) : null}
 
-        {externalConfirm || relatedCandidates.length > 0 ? (
-          <div className="fixed inset-0 z-[92] flex items-end justify-center bg-white/65 px-4 py-5 backdrop-blur-sm dark:bg-slate-950/55 sm:items-center">
-            <div
-              className={`grid w-full gap-3 ${
-                externalConfirm && relatedCandidates.length > 0 ? "max-w-5xl sm:grid-cols-2" : "max-w-lg"
-              }`}
-            >
-              {externalConfirm ? (
-                <section className="w-full rounded-[28px] border border-[color:var(--border)] bg-[var(--card)] p-5 shadow-[0_28px_90px_var(--shadow-soft)]">
-                  <div className="text-[11px] uppercase tracking-[0.34em] text-[var(--accent)]">Google Sync</div>
-                  <h2 className="mt-2 text-xl font-semibold text-[var(--text)]">
-                    {externalConfirm.action === "calendar" ? "Google Calendarにも登録しますか？" : "Google Tasksにも登録しますか？"}
-                  </h2>
-                  <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
-                    「{externalConfirm.title}」を保存しました。Google側にも作成すると、以後の完了状態や日時変更をCGMPと同期できます。
-                  </p>
-                  <div className="mt-5 flex flex-wrap gap-2">
-                    <button type="button" onClick={confirmExternalRegistration} className={primaryButtonClass}>
-                      登録する
-                    </button>
-                    <button type="button" onClick={() => setExternalConfirm(null)} className={secondaryButtonClass}>
-                      今はしない
-                    </button>
-                  </div>
-                </section>
-              ) : null}
+        <PostSaveSuggestionsModal
+          externalConfirm={externalConfirm}
+          relatedCandidates={relatedCandidates}
+          onConfirmExternalRegistration={confirmExternalRegistration}
+          onDismissExternalConfirm={() => setExternalConfirm(null)}
+          onDismissRelatedCandidates={() => setRelatedCandidates([])}
+          onOpenRelatedRecord={(recordId) => {
+            setRelatedCandidates([]);
+            setSelectedId(recordId);
+            setTab("home");
+            window.setTimeout(() => {
+              document.getElementById(`record-card-${recordId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+            }, 80);
+          }}
+        />
 
-              {relatedCandidates.length > 0 ? (
-                <section className="w-full rounded-[28px] border border-[color:var(--border)] bg-[var(--card)] p-5 shadow-[0_28px_90px_var(--shadow-soft)]">
-                  <div className="text-[11px] uppercase tracking-[0.34em] text-[var(--accent)]">Related Notes</div>
-                  <h2 className="mt-2 text-xl font-semibold text-[var(--text)]">こんなの関連しませんか？</h2>
-                  <div className="mt-4 max-h-[50vh] space-y-3 overflow-auto pr-1">
-                    {relatedCandidates.map((item) => (
-                      <article key={item.record.id} className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] p-3">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <DomainBadge domain={item.record.domain || "other"} />
-                          <Badge compact tone={item.record.action === "calendar" ? "amber" : item.record.action === "reminder" ? "rose" : "cyan"}>
-                            {item.record.action}
-                          </Badge>
-                          <Badge compact tone={item.level === "strong" ? "emerald" : "slate"}>
-                            関連度 {item.level === "strong" ? "高" : "中"} {Math.round(item.score * 100)}%
-                          </Badge>
-                        </div>
-                        <h3 className="mt-3 text-base font-semibold text-[var(--text)]">{item.record.title || "Untitled"}</h3>
-                        <p className="mt-1 line-clamp-2 text-sm leading-6 text-[var(--muted)]">
-                          {item.record.summary || item.record.body || item.record.raw_input}
-                        </p>
-                        {(item.record.tags || []).length > 0 ? (
-                          <div className="mt-2 flex flex-wrap gap-1.5">
-                            {(item.record.tags || []).slice(0, 4).map((tag) => (
-                              <Badge compact key={tag}>#{tag}</Badge>
-                            ))}
-                          </div>
-                        ) : null}
-                        <div className="mt-3 flex justify-end">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setRelatedCandidates([]);
-                              setSelectedId(item.record.id);
-                              setTab("home");
-                              window.setTimeout(() => {
-                                document.getElementById(`record-card-${item.record.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
-                              }, 80);
-                            }}
-                            className={secondaryButtonClass}
-                          >
-                            開く
-                          </button>
-                        </div>
-                      </article>
-                    ))}
-                  </div>
-                  <div className="mt-5 flex justify-end">
-                    <button type="button" onClick={() => setRelatedCandidates([])} className={primaryButtonClass}>
-                      閉じる
-                    </button>
-                  </div>
-                </section>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
+        <ExternalSyncProgressModal
+          progress={externalSyncProgress}
+          onClose={() => setExternalSyncProgress(null)}
+        />
 
-        {externalSyncProgress ? (
-          <div className="fixed inset-0 z-[95] flex items-end justify-center bg-white/65 px-4 py-5 backdrop-blur-sm dark:bg-slate-950/55 sm:items-center">
-            {(() => {
-              const done = externalSyncProgress.phase === "done" || externalSyncProgress.phase === "error";
-              const elapsed = Math.round((externalSyncProgress.finishedAt || performance.now()) - externalSyncProgress.startedAt);
-              const activeCount =
-                externalSyncProgress.phase === "applying"
-                  ? externalSyncProgress.applied
-                  : Math.max(externalSyncProgress.checked, externalSyncProgress.applied);
-              const ratio = Math.min(100, Math.round((activeCount / Math.max(1, externalSyncProgress.total)) * 100));
-              const slowestItems = [...externalSyncProgress.reportItems]
-                .sort((a, b) => b.elapsedMs + b.applyElapsedMs - (a.elapsedMs + a.applyElapsedMs))
-                .slice(0, 6);
-              return (
-                <section className="w-full max-w-md rounded-[28px] border border-[color:var(--border)] bg-[var(--card)] p-5 shadow-[0_28px_90px_var(--shadow-soft)]">
-                  <div className="text-[11px] uppercase tracking-[0.34em] text-[var(--accent)]">Google Sync</div>
-                  <div className="mt-3 flex items-start justify-between gap-3">
-                    <div>
-                      <h2 className="text-xl font-semibold text-[var(--text)]">
-                        {externalSyncProgress.phase === "done"
-                          ? "同期が完了しました"
-                          : externalSyncProgress.phase === "error"
-                            ? "同期で停止しました"
-                            : "Google状態を同期中"}
-                      </h2>
-                      <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{externalSyncProgress.message}</p>
-                    </div>
-                    {!done ? (
-                      <div className="mt-1 h-9 w-9 shrink-0 animate-spin rounded-full border-4 border-[color:var(--accent-soft)] border-t-[color:var(--accent)]" />
-                    ) : (
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--accent-soft)] text-sm font-bold text-[var(--accent)]">
-                        {externalSyncProgress.phase === "done" ? "✓" : "!"}
-                      </div>
-                    )}
-                  </div>
-                  {externalSyncProgress.currentTitle ? (
-                    <div className="mt-4 rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
-                      {externalSyncProgress.currentTitle}
-                    </div>
-                  ) : null}
-                  <div className="mt-5 h-2 overflow-hidden rounded-full bg-[var(--accent-soft)]">
-                    <div
-                      className="h-full rounded-full bg-[var(--accent)] transition-all duration-300"
-                      style={{ width: `${ratio}%` }}
-                    />
-                  </div>
-                  <div className="mt-4 grid grid-cols-2 gap-2 text-xs text-[var(--muted)]">
-                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
-                      照合 {externalSyncProgress.checked}/{externalSyncProgress.total}
-                    </div>
-                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
-                      反映 {externalSyncProgress.applied}/{externalSyncProgress.total}
-                    </div>
-                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
-                      更新 {externalSyncProgress.changed}件
-                    </div>
-                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
-                      失敗 {externalSyncProgress.failed}件
-                    </div>
-                  </div>
-                  <div className="mt-3 text-xs text-[var(--subtle)]">経過 {elapsed} ms</div>
-                  {done ? (
-                    <div className="mt-4 rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] p-3 text-xs text-[var(--muted)]">
-                      <div className="font-semibold text-[var(--text)]">同期レポート</div>
-                      <div className="mt-2 grid grid-cols-2 gap-2">
-                        <span>照合: {externalSyncProgress.checkingElapsedMs} ms</span>
-                        <span>反映: {externalSyncProgress.applyingElapsedMs} ms</span>
-                        <span>再読込: {externalSyncProgress.reloadElapsedMs} ms</span>
-                        <span>合計: {elapsed} ms</span>
-                      </div>
-                      {slowestItems.length > 0 ? (
-                        <div className="mt-3">
-                          <div className="font-semibold text-[var(--text)]">遅い順</div>
-                          <div className="mt-2 max-h-44 space-y-2 overflow-auto pr-1">
-                            {slowestItems.map((item) => (
-                              <div key={item.recordId} className="rounded-xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
-                                <div className="truncate font-semibold text-[var(--text)]">
-                                  {item.ok ? "" : "失敗: "}
-                                  {item.title}
-                                </div>
-                                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
-                                  <span>total {item.elapsedMs}ms</span>
-                                  {item.hasTask ? <span>Tasks {item.taskElapsedMs}ms</span> : null}
-                                  {item.hasCalendar ? <span>Calendar {item.calendarElapsedMs}ms</span> : null}
-                                  <span>反映 {item.applyElapsedMs}ms</span>
-                                  {item.changed ? <span>更新あり</span> : <span>変更なし</span>}
-                                </div>
-                                {item.error ? <div className="mt-1 text-[11px] text-[var(--danger)]">{item.error}</div> : null}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-                      <p className="mt-3 text-[11px] leading-5 text-[var(--subtle)]">
-                        この内容はブラウザconsoleにも出力しています。スクショやconsoleログを見れば、どこが遅いか追いやすくなります。
-                      </p>
-                    </div>
-                  ) : null}
-                  {done ? (
-                    <div className="mt-5 flex justify-end">
-                      <button type="button" onClick={() => setExternalSyncProgress(null)} className={secondaryButtonClass}>
-                        閉じる
-                      </button>
-                    </div>
-                  ) : null}
-                </section>
-              );
-            })()}
-          </div>
-        ) : null}
+        <BackupSyncProgressModal
+          progress={backupSyncProgress}
+          progressNow={backupProgressNow}
+          onClose={() => setBackupSyncProgress(null)}
+        />
 
-        {backupSyncProgress ? (
-          <div className="fixed inset-0 z-[95] flex items-end justify-center bg-white/65 px-4 py-5 backdrop-blur-sm dark:bg-slate-950/55 sm:items-center">
-            {(() => {
-              const done = backupSyncProgress.phase === "done" || backupSyncProgress.phase === "error";
-              const elapsed = Math.round(
-                (backupSyncProgress.finishedAt || backupProgressNow || performance.now()) - backupSyncProgress.startedAt
-              );
-              const detailItems =
-                backupSyncProgress.reportItems.length <= 20
-                  ? backupSyncProgress.reportItems
-                  : [...backupSyncProgress.reportItems].sort((a, b) => b.elapsedMs - a.elapsedMs).slice(0, 20);
-              return (
-                <section className="w-full max-w-md rounded-[28px] border border-[color:var(--border)] bg-[var(--card)] p-5 shadow-[0_28px_90px_var(--shadow-soft)]">
-                  <div className="text-[11px] uppercase tracking-[0.34em] text-[var(--accent)]">Drive Backup</div>
-                  <div className="mt-3 flex items-start justify-between gap-3">
-                    <div>
-                      <h2 className="text-xl font-semibold text-[var(--text)]">
-                        {backupSyncProgress.phase === "done"
-                          ? "バックアップが完了しました"
-                          : backupSyncProgress.phase === "error"
-                            ? "バックアップで停止しました"
-                            : "Google Driveへ同期中"}
-                      </h2>
-                      <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{backupSyncProgress.message}</p>
-                    </div>
-                    {!done ? (
-                      <div className="mt-1 h-9 w-9 shrink-0 animate-spin rounded-full border-4 border-[color:var(--accent-soft)] border-t-[color:var(--accent)]" />
-                    ) : (
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--accent-soft)] text-sm font-bold text-[var(--accent)]">
-                        {backupSyncProgress.phase === "done" ? "✓" : "!"}
-                      </div>
-                    )}
-                  </div>
-                  <div className="mt-4 grid grid-cols-2 gap-2 text-xs text-[var(--muted)]">
-                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
-                      対象 {backupSyncProgress.total}件
-                    </div>
-                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
-                      成功 {backupSyncProgress.succeeded}件
-                    </div>
-                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
-                      失敗 {backupSyncProgress.failed}件
-                    </div>
-                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
-                      経過 {elapsed} ms
-                    </div>
-                  </div>
-                  {done ? (
-                    <div className="mt-4 rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] p-3 text-xs text-[var(--muted)]">
-                      <div className="font-semibold text-[var(--text)]">Drive同期レポート</div>
-                      <div className="mt-2 grid grid-cols-2 gap-2">
-                        <span>処理: {backupSyncProgress.processElapsedMs} ms</span>
-                        <span>再読込: {backupSyncProgress.reloadElapsedMs} ms</span>
-                        <span>合計: {elapsed} ms</span>
-                        <span>対象: {backupSyncProgress.total}件</span>
-                      </div>
-                      {detailItems.length > 0 ? (
-                        <div className="mt-3">
-                          <div className="font-semibold text-[var(--text)]">
-                            {backupSyncProgress.reportItems.length <= 20 ? "処理詳細" : "遅い順 20件"}
-                          </div>
-                          <div className="mt-2 max-h-44 space-y-2 overflow-auto pr-1">
-                            {detailItems.map((item) => (
-                              <div
-                                key={`${item.recordId}:${item.itemType}:${item.attachmentId}`}
-                                className="rounded-xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2"
-                              >
-                                <div className="truncate font-semibold text-[var(--text)]">
-                                  {item.ok ? "" : "失敗: "}
-                                  {item.title}
-                                </div>
-                                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
-                                  <span>{item.skipped ? "SKIP" : item.ok ? "OK" : "FAILED"}</span>
-                                  <span>{item.itemType}</span>
-                                  {item.attachmentId ? <span>attachment {item.attachmentId}</span> : null}
-                                  <span>total {item.elapsedMs}ms</span>
-                                  {item.blobElapsedMs > 0 ? <span>画像読込 {item.blobElapsedMs}ms</span> : null}
-                                  {item.uploadElapsedMs > 0 ? <span>Upload {item.uploadElapsedMs}ms</span> : null}
-                                  {item.previewSizeBytes > 0 ? <span>{Math.round(item.previewSizeBytes / 1024)}KB</span> : null}
-                                </div>
-                                {item.error ? <div className="mt-1 text-[11px] text-[var(--danger)]">{item.error}</div> : null}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-                      <p className="mt-3 text-[11px] leading-5 text-[var(--subtle)]">
-                        この内容はブラウザconsoleにも出力しています。Drive同期が遅い原因の切り分けに使えます。
-                      </p>
-                    </div>
-                  ) : null}
-                  {done ? (
-                    <div className="mt-5 flex justify-end">
-                      <button type="button" onClick={() => setBackupSyncProgress(null)} className={secondaryButtonClass}>
-                        閉じる
-                      </button>
-                    </div>
-                  ) : null}
-                </section>
-              );
-            })()}
-          </div>
-        ) : null}
+        <WebhookTestModal
+          open={isWebhookTestModalOpen}
+          running={webhookTestRunning}
+          report={webhookTestReport}
+          elapsedMs={webhookTestElapsedMs}
+          onClose={() => setIsWebhookTestModalOpen(false)}
+        />
 
-        {isWebhookTestModalOpen ? (
-          <div className="fixed inset-0 z-[95] flex items-end justify-center bg-white/65 px-4 py-5 backdrop-blur-sm dark:bg-slate-950/55 sm:items-center">
-            {(() => {
-              const trace = webhookTestReport?.debugTrace;
-              const steps =
-                trace?.steps ||
-                ([
-                  { id: "received", label: "Webhook受信", status: "running" },
-                  { id: "duplicate_lookup", label: "重複チェック", status: "running" },
-                  { id: "ai_analyze", label: "AI解析", status: "running" },
-                  { id: "external_register", label: "Google Tasks / Calendar登録", status: "running" },
-                  { id: "initial_drive_backup", label: "Drive初回バックアップ", status: "running" },
-                  { id: "final_drive_backup", label: "外部ID反映バックアップ", status: "running" },
-                ] as Array<Partial<ShortcutWebhookTraceStep> & { id: string; label: string; status: ShortcutWebhookTraceStep["status"] }>);
-              const done = !webhookTestRunning && Boolean(webhookTestReport);
-              const elapsed = trace?.totalElapsedMs ?? webhookTestElapsedMs;
-              const statusTone = webhookTestReport?.ok ? "text-[var(--accent)]" : webhookTestReport ? "text-[var(--danger)]" : "text-[var(--muted)]";
-              return (
-                <section className="w-full max-w-xl rounded-[28px] border border-[color:var(--border)] bg-[var(--card)] p-5 shadow-[0_28px_90px_var(--shadow-soft)]">
-                  <div className="text-[11px] uppercase tracking-[0.34em] text-[var(--accent)]">Webhook Test</div>
-                  <div className="mt-3 flex items-start justify-between gap-3">
-                    <div>
-                      <h2 className="text-xl font-semibold text-[var(--text)]">
-                        {done ? "Webhookテストが完了しました" : "Webhookと同じ処理を実行中"}
-                      </h2>
-                      <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                        同じ `/api/shortcut-webhook` にdebug付きでPOSTしています。新しい処理経路は使っていません。
-                      </p>
-                    </div>
-                    {!done ? (
-                      <div className="mt-1 h-9 w-9 shrink-0 animate-spin rounded-full border-4 border-[color:var(--accent-soft)] border-t-[color:var(--accent)]" />
-                    ) : (
-                      <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--card-soft)] text-sm font-bold ${statusTone}`}>
-                        {webhookTestReport?.ok ? "✓" : "!"}
-                      </div>
-                    )}
-                  </div>
-                  <div className="mt-4 grid grid-cols-2 gap-2 text-xs text-[var(--muted)]">
-                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
-                      経過 {elapsed} ms
-                    </div>
-                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
-                      結果 {webhookTestReport ? (webhookTestReport.ok ? "成功" : "失敗") : "実行中"}
-                    </div>
-                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
-                      Action {webhookTestReport?.action || "-"}
-                    </div>
-                    <div className="rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
-                      Date {webhookTestReport?.date || "-"} {webhookTestReport?.time || ""}
-                    </div>
-                  </div>
-
-                  <div className="mt-4 rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] p-3 text-xs text-[var(--muted)]">
-                    <div className="font-semibold text-[var(--text)]">処理ステップ</div>
-                    <div className="mt-3 max-h-72 space-y-2 overflow-auto pr-1">
-                      {steps.map((step) => {
-                        const stepStatus = step.status || "running";
-                        const badgeClass =
-                          stepStatus === "success"
-                            ? "border-[color:var(--accent)] text-[var(--accent)]"
-                            : stepStatus === "error"
-                              ? "border-[color:var(--danger)] text-[var(--danger)]"
-                              : stepStatus === "skipped"
-                                ? "border-[color:var(--border)] text-[var(--subtle)]"
-                                : "border-[color:var(--orange)] text-[var(--orange)]";
-                        return (
-                          <div key={step.id} className="rounded-xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2">
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="min-w-0">
-                                <div className="truncate font-semibold text-[var(--text)]">{step.label}</div>
-                                {step.detail ? <div className="mt-1 text-[11px] leading-4 text-[var(--subtle)]">{step.detail}</div> : null}
-                              </div>
-                              <div className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-semibold uppercase ${badgeClass}`}>
-                                {stepStatus}
-                              </div>
-                            </div>
-                            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
-                              {typeof step.startedAt === "number" ? <span>start {step.startedAt}ms</span> : null}
-                              {typeof step.elapsedMs === "number" ? <span>elapsed {step.elapsedMs}ms</span> : null}
-                            </div>
-                            {step.error ? <div className="mt-1 text-[11px] leading-5 text-[var(--danger)]">{step.error}</div> : null}
-                          </div>
-                        );
-                      })}
-                    </div>
-                    {webhookTestReport?.confirmationText ? (
-                      <div className="mt-3 rounded-xl border border-[color:var(--border)] bg-[var(--card)] px-3 py-2 text-sm leading-6 text-[var(--text)]">
-                        {webhookTestReport.confirmationText}
-                      </div>
-                    ) : null}
-                    {webhookTestReport?.error ? (
-                      <div className="mt-3 rounded-xl border border-[color:var(--danger)] bg-[var(--danger-soft)] px-3 py-2 text-xs leading-5 text-[var(--danger)]">
-                        {webhookTestReport.error}
-                      </div>
-                    ) : null}
-                  </div>
-
-                  {done ? (
-                    <div className="mt-5 flex justify-end">
-                      <button type="button" onClick={() => setIsWebhookTestModalOpen(false)} className={secondaryButtonClass}>
-                        閉じる
-                      </button>
-                    </div>
-                  ) : null}
-                </section>
-              );
-            })()}
-          </div>
-        ) : null}
-
-        {isPromptEditorOpen ? (
-          <div className="fixed inset-0 z-[96] overflow-y-auto overscroll-contain bg-white/70 px-3 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] backdrop-blur-sm dark:bg-slate-950/60 sm:px-4 sm:py-6">
-            {(() => {
-              const activeDefinition =
-                promptDefinitions.find((item) => item.key === activePromptKey) || promptDefinitions[0] || null;
-              const activePrompt = activeDefinition
-                ? promptConfigDraft?.prompts?.[activeDefinition.key]?.userPrompt || activeDefinition.defaultUserPrompt
-                : "";
-              const activePromptRows = Math.min(42, Math.max(14, activePrompt.split("\n").length + 2));
-              return (
-                <section className="mx-auto my-2 w-full max-w-5xl rounded-[28px] border border-[color:var(--border)] bg-[var(--card)] p-4 shadow-[0_28px_90px_var(--shadow-soft)] sm:p-5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="section-eyebrow">Prompt Settings</div>
-                      <h2 className="mt-2 text-2xl font-semibold text-[var(--text)]">AIプロンプト編集</h2>
-                      <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                        ここではAIの判断方針だけを編集します。JSON形式・必須フィールド・余計な文章禁止などの出力制約は非表示で固定しています。
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setIsPromptEditorOpen(false)}
-                      className={`${secondaryButtonClass} shrink-0 whitespace-nowrap`}
-                    >
-                      閉じる
-                    </button>
-                  </div>
-
-                  {promptConfigError ? (
-                    <div className="mt-4 rounded-2xl border border-[color:var(--danger)] bg-[var(--danger-soft)] px-4 py-3 text-sm text-[var(--danger)]">
-                      {promptConfigError}
-                    </div>
-                  ) : null}
-
-                  {promptConfigLoading ? (
-                    <div className="mt-5 flex min-h-64 items-center justify-center rounded-3xl border border-[color:var(--border)] bg-[var(--card-soft)] text-sm text-[var(--muted)]">
-                      Google Driveからプロンプト設定を読み込み中...
-                    </div>
-                  ) : (
-                    <div className="mt-5 grid gap-4 md:grid-cols-[240px_minmax(0,1fr)]">
-                      <div className="max-h-72 space-y-2 overflow-auto rounded-3xl border border-[color:var(--border)] bg-[var(--card-soft)] p-2 overscroll-contain md:max-h-[64dvh]">
-                        {promptDefinitions.length > 0 ? (
-                          promptDefinitions.map((definition) => {
-                            const isActive = activeDefinition?.key === definition.key;
-                            return (
-                              <button
-                                key={definition.key}
-                                type="button"
-                                onClick={() => setActivePromptKey(definition.key)}
-                                className={`w-full rounded-2xl border px-3 py-3 text-left transition ${
-                                  isActive
-                                    ? "border-[color:var(--accent)] bg-[color:var(--accent-soft)] text-[var(--text)]"
-                                    : "border-transparent text-[var(--muted)] hover:border-[color:var(--border)] hover:bg-[var(--card)]"
-                                }`}
-                              >
-                                <span className="block text-sm font-semibold">{definition.label}</span>
-                                <span className="mt-1 block text-xs leading-5">{definition.description}</span>
-                              </button>
-                            );
-                          })
-                        ) : (
-                          <div className="px-3 py-8 text-center text-sm text-[var(--muted)]">
-                            プロンプト項目が読み込まれていません。
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="rounded-3xl border border-[color:var(--border)] bg-[var(--card-soft)] p-4">
-                        {activeDefinition ? (
-                          <>
-                            <div className="flex flex-wrap items-start justify-between gap-3">
-                              <div>
-                                <h3 className="text-lg font-semibold text-[var(--text)]">{activeDefinition.label}</h3>
-                                <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
-                                  {activeDefinition.description}
-                                </p>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={resetActivePromptToDefault}
-                                className={`${secondaryButtonClass} shrink-0 whitespace-nowrap`}
-                              >
-                                初期値へ
-                              </button>
-                            </div>
-                            <textarea
-                              value={activePrompt}
-                              onChange={(event) => updatePromptDraft(activeDefinition.key, event.target.value)}
-                              rows={activePromptRows}
-                              className="mt-4 min-h-80 w-full resize-y rounded-3xl border border-[color:var(--border)] bg-[var(--card)] px-4 py-4 font-mono text-sm leading-6 text-[var(--text)] outline-none transition focus:border-[color:var(--accent)] focus:ring-4 focus:ring-[color:var(--accent-ring)]"
-                              placeholder="AIに守らせたい判断方針を書きます"
-                              spellCheck={false}
-                            />
-                            <p className="mt-3 text-xs leading-5 text-[var(--subtle)]">
-                              保存先はGoogle Driveの `CGMP_Backup/prompts.json` です。AI解析時はこのテキストに、アプリ固定の出力契約を合成して使います。
-                            </p>
-                          </>
-                        ) : (
-                          <div className="flex min-h-64 items-center justify-center text-sm text-[var(--muted)]">
-                            左の項目を選択してください。
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="mt-5 flex flex-wrap justify-end gap-2 border-t border-[color:var(--border)] pt-4">
-                    <button
-                      type="button"
-                      onClick={loadPromptConfigForEditor}
-                      disabled={promptConfigLoading || promptConfigSaving}
-                      className={`${secondaryButtonClass} shrink-0 whitespace-nowrap`}
-                    >
-                      Driveから再読込
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setIsPromptEditorOpen(false)}
-                      className={`${secondaryButtonClass} shrink-0 whitespace-nowrap`}
-                    >
-                      キャンセル
-                    </button>
-                    <button
-                      type="button"
-                      onClick={savePromptConfig}
-                      disabled={!promptConfigDraft || promptConfigLoading || promptConfigSaving}
-                      className={`${primaryButtonClass} shrink-0 whitespace-nowrap`}
-                    >
-                      {promptConfigSaving ? "保存中..." : "Google Driveへ保存"}
-                    </button>
-                  </div>
-                </section>
-              );
-            })()}
-          </div>
-        ) : null}
+        <PromptSettingsModal
+          open={isPromptEditorOpen}
+          definitions={promptDefinitions}
+          configDraft={promptConfigDraft}
+          loading={promptConfigLoading}
+          saving={promptConfigSaving}
+          error={promptConfigError}
+          activePromptKey={activePromptKey}
+          onActivePromptKeyChange={setActivePromptKey}
+          onClose={() => setIsPromptEditorOpen(false)}
+          onReload={loadPromptConfigForEditor}
+          onSave={savePromptConfig}
+          onResetActivePromptToDefault={resetActivePromptToDefault}
+          onUpdatePromptDraft={updatePromptDraft}
+        />
 
         {tab === "home" ? (
-          <div className="grid min-w-0 gap-3 sm:gap-4">
-            <section className={panelClass}>
-              <SectionHeading
-                eyebrow="Home"
-                title="一覧・検索・フィルター"
-              />
-
-              <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-                <LabeledInput label="Text search" value={query} onChange={setQuery} placeholder="title / summary / body" />
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setIsFilterOpen((open) => !open)}
-                    className={secondaryButtonClass}
-                    aria-expanded={isFilterOpen}
-                  >
-                    {isFilterOpen ? "フィルターを閉じる" : `フィルター${activeFilterCount > 0 ? ` ${activeFilterCount}` : ""}`}
-                  </button>
-                  <button type="button" onClick={() => setTab("compose")} className={primaryButtonClass}>
-                    新規入力へ
-                  </button>
-                </div>
-              </div>
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                {[
-                  { value: "text", label: "通常検索" },
-                  { value: "semantic", label: "意味検索" },
-                ].map((item) => (
-                  <button
-                    key={item.value}
-                    type="button"
-                    onClick={() => setSearchMode(item.value as SearchMode)}
-                    className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
-                      searchMode === item.value
-                        ? "border-[color:var(--accent)] bg-[var(--accent)] text-[var(--accent-contrast)]"
-                        : "border-[color:var(--border)] bg-[var(--card-soft)] text-[var(--muted)]"
-                    }`}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-                {searchMode === "semantic" ? (
-                  <span className="text-xs text-[var(--muted)]">
-                    {semanticStatusText}
-                  </span>
-                ) : null}
-              </div>
-
-              <div className="mt-3 min-w-0">
-                <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                  {DOMAIN_FILTER_OPTIONS.map((item) => {
-                    const isActive = domainFilter === item.value;
-                    const color = getDomainColorVar(item.value);
-                    return (
-                      <button
-                        key={item.value}
-                        type="button"
-                        onClick={() => setDomainFilter(isActive ? "all" : item.value)}
-                        className={`shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-semibold leading-5 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] ${
-                          isActive ? "shadow-[0_8px_18px_var(--shadow-soft)]" : "opacity-70 hover:opacity-100"
-                        }`}
-                        style={{
-                          color,
-                          borderColor: color,
-                          backgroundColor: isActive
-                            ? `color-mix(in srgb, ${color} 18%, var(--card))`
-                            : `color-mix(in srgb, ${color} 7%, var(--card))`,
-                        }}
-                        aria-pressed={isActive}
-                        title={`${item.value}で絞り込み${isActive ? "を解除" : ""}`}
-                      >
-                        {item.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div
-                className={`overflow-hidden transition-[max-height,opacity,margin-top] duration-300 ease-out ${
-                  isFilterOpen ? "mt-3 max-h-[32rem] opacity-100" : "mt-0 max-h-0 opacity-0"
-                }`}
-              >
-                <div className="rounded-[20px] border border-[color:var(--border)] bg-[var(--card-soft)] p-3">
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <LabeledInput label="Tag search" value={tagQuery} onChange={setTagQuery} placeholder="例: 仕様" />
-                    <LabeledSelect
-                      label="並び順"
-                      value={sortKey}
-                      onChange={(value) =>
-                        setSortKey(value === "datetime" ? "datetime" : value === "created_at" ? "created_at" : "updated_at")
-                      }
-                      options={[
-                        { value: "updated_at", label: "更新順" },
-                        { value: "created_at", label: "作成順" },
-                        { value: "datetime", label: "日時順" },
-                      ]}
-                    />
-                  </div>
-                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                    <LabeledSelect
-                      label="Action"
-                      value={actionFilter}
-                      onChange={(value) => setActionFilter(value === "all" ? "all" : normalizeAction(value))}
-                      options={[
-                        { value: "all", label: "すべて" },
-                        { value: "note", label: "note" },
-                        { value: "reminder", label: "reminder" },
-                        { value: "calendar", label: "calendar" },
-                        { value: "unclear", label: "unclear" },
-                      ]}
-                    />
-                    <LabeledSelect
-                      label="Domain"
-                      value={domainFilter}
-                      onChange={(value) => setDomainFilter(value === "all" ? "all" : normalizeDomain(value))}
-                      options={[
-                        { value: "all", label: "すべて" },
-                        { value: "work", label: "work" },
-                        { value: "family", label: "family" },
-                        { value: "self", label: "self" },
-                        { value: "health", label: "health" },
-                        { value: "finance", label: "finance" },
-                        { value: "learning", label: "learning" },
-                        { value: "creation", label: "creation" },
-                        { value: "life_admin", label: "life_admin" },
-                        { value: "other", label: "other" },
-                      ]}
-                    />
-                    <LabeledSelect
-                      label="PARA"
-                      value={paraFilter}
-                      onChange={(value) => setParaFilter(value === "all" ? "all" : normalizePara(value))}
-                      options={[
-                        { value: "all", label: "すべて" },
-                        { value: "project", label: "project" },
-                        { value: "area", label: "area" },
-                        { value: "resource", label: "resource" },
-                        { value: "archive", label: "archive" },
-                      ]}
-                    />
-                  </div>
-
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <button type="button" onClick={() => {
-                      setQuery("");
-                      setTagQuery("");
-                      setActionFilter("all");
-                      setDomainFilter("all");
-                      setParaFilter("all");
-                      setSortKey("updated_at");
-                    }} className={secondaryButtonClass}>
-                      クリア
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            <section className="grid min-w-0 gap-3 overflow-hidden">
-              {filteredRecords.length > 0 ? (
-                filteredRecords.map((record) => (
-                  <RecordCard
-                    key={record.id}
-                    record={record}
-                    onOpen={(id) => setSelectedId((current) => (current === id ? null : id))}
-                    onEdit={openEditPanel}
-                    onDelete={deleteRecordById}
-                    onRegisterGoogleTask={registerGoogleTask}
-                    onToggleGoogleTaskStatus={toggleGoogleTaskStatus}
-                    onRegisterGoogleCalendarEvent={registerGoogleCalendarEvent}
-                    onOpenImage={(attachment, imageUrl) => setLightbox({ imageUrl, title: attachment.summary_80 || "添付画像" })}
-                    onReanalyzeAttachment={handleReanalyzeAttachment}
-                    onDeleteAttachment={handleDeleteAttachment}
-                    onAddPhotos={handleAddPhotos}
-                    onSyncOne={runSingleRecordBackup}
-                    onAnalyzeRecord={analyzeRecordWithAI}
-                    onShowBadgeInfo={setBadgeInfo}
-                    externalProcessingKey={externalProcessingKey}
-                    isPhotoProcessing={photoProcessingCount > 0}
-                    isBackupProcessing={backupProcessing}
-                    isChecked={checkedRecordIds.includes(record.id)}
-                    onToggleCheck={toggleCheckedRecord}
-                    isSelected={record.id === selectedId}
-                  />
-                ))
-              ) : (
-                <div className={`${softPanelClass} text-sm text-slate-500`}>
-                  条件に一致する記録がありません。まずは Compose で1件保存してみてください。
-                </div>
-              )}
-            </section>
-          </div>
+          <HomeView
+            records={filteredRecords}
+            selectedId={selectedId}
+            checkedRecordIds={checkedRecordIds}
+            query={query}
+            tagQuery={tagQuery}
+            actionFilter={actionFilter}
+            domainFilter={domainFilter}
+            paraFilter={paraFilter}
+            sortKey={sortKey}
+            searchMode={searchMode}
+            semanticStatusText={semanticStatusText}
+            isFilterOpen={isFilterOpen}
+            activeFilterCount={activeFilterCount}
+            externalProcessingKey={externalProcessingKey}
+            isPhotoProcessing={photoProcessingCount > 0}
+            isBackupProcessing={backupProcessing}
+            onQueryChange={setQuery}
+            onTagQueryChange={setTagQuery}
+            onActionFilterChange={setActionFilter}
+            onDomainFilterChange={setDomainFilter}
+            onParaFilterChange={setParaFilter}
+            onSortKeyChange={setSortKey}
+            onSearchModeChange={setSearchMode}
+            onFilterOpenChange={setIsFilterOpen}
+            onGoCompose={() => setTab("compose")}
+            onClearFilters={() => {
+              setQuery("");
+              setTagQuery("");
+              setActionFilter("all");
+              setDomainFilter("all");
+              setParaFilter("all");
+              setSortKey("updated_at");
+            }}
+            onOpenRecord={(id) => setSelectedId((current) => (current === id ? null : id))}
+            onEdit={openEditPanel}
+            onDelete={deleteRecordById}
+            onRegisterGoogleTask={registerGoogleTask}
+            onToggleGoogleTaskStatus={toggleGoogleTaskStatus}
+            onRegisterGoogleCalendarEvent={registerGoogleCalendarEvent}
+            onOpenImage={(attachment, imageUrl) => setLightbox({ imageUrl, title: attachment.summary_80 || "添付画像" })}
+            onReanalyzeAttachment={handleReanalyzeAttachment}
+            onDeleteAttachment={handleDeleteAttachment}
+            onAddPhotos={handleAddPhotos}
+            onSyncOne={runSingleRecordBackup}
+            onAnalyzeRecord={analyzeRecordWithAI}
+            onShowBadgeInfo={setBadgeInfo}
+            onToggleCheck={toggleCheckedRecord}
+          />
         ) : null}
 
         {tab === "week" ? (
