@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, TouchEvent } from "react";
 
 import { ImageAttachmentGrid } from "@/components/ImageAttachmentGrid";
 import { ImageLightbox } from "@/components/ImageLightbox";
@@ -138,9 +138,24 @@ import {
 } from "@/components/cgmp/ui";
 
 type AppTab = "home" | "today" | "week" | "compose" | "settings";
+const APP_TABS: Array<{ key: AppTab; label: string }> = [
+  { key: "home", label: "Home" },
+  { key: "today", label: "Today" },
+  { key: "week", label: "Week" },
+  { key: "compose", label: "Compose" },
+  { key: "settings", label: "Settings" },
+];
+const SWIPE_MIN_DISTANCE_PX = 64;
+const SWIPE_MAX_DURATION_MS = 800;
 type SortKey = "updated_at" | "created_at" | "datetime";
 type SearchMode = "text" | "semantic";
 type Notice = { kind: "info" | "error"; text: string } | null;
+type SwipeStart = {
+  x: number;
+  y: number;
+  startedAt: number;
+  ignored: boolean;
+};
 type SyncActivity = {
   id: number;
   status: "running" | "done" | "error";
@@ -361,6 +376,92 @@ export default function Page() {
   const scriptableImportInputRef = useRef<HTMLInputElement | null>(null);
   const embeddingProviderRef = useRef(new ApiEmbeddingProvider());
   const embeddingCancelRef = useRef(false);
+  const swipeStartRef = useRef<SwipeStart | null>(null);
+
+  function scrollActiveTabToTop() {
+    window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+  }
+
+  function selectTab(nextTab: AppTab) {
+    if (nextTab === tab) {
+      scrollActiveTabToTop();
+      return;
+    }
+    setTab(nextTab);
+  }
+
+  function isTabSwipeBlocked() {
+    return Boolean(
+      lightbox ||
+        isEditPanelOpen ||
+        isMiniListOpen ||
+        isPromptEditorOpen ||
+        externalConfirm ||
+        reanalysisExternalConfirm ||
+        externalSyncProgress ||
+        backupSyncProgress ||
+        isWebhookTestModalOpen ||
+        badgeInfo ||
+        relatedCandidates.length > 0,
+    );
+  }
+
+  function switchTabBySwipe(direction: "previous" | "next") {
+    const currentIndex = APP_TABS.findIndex((item) => item.key === tab);
+    if (currentIndex < 0) return;
+    const delta = direction === "next" ? 1 : -1;
+    const nextIndex = currentIndex + delta;
+    if (nextIndex < 0 || nextIndex >= APP_TABS.length) return;
+    setTab(APP_TABS[nextIndex].key);
+  }
+
+  function shouldIgnoreSwipeTarget(target: EventTarget | null) {
+    if (!(target instanceof Element)) return true;
+    return Boolean(
+      target.closest(
+        "button, input, textarea, select, a, summary, [role='button'], [role='dialog'], [data-swipe-ignore='true']",
+      ),
+    );
+  }
+
+  function handleTouchStart(event: TouchEvent<HTMLElement>) {
+    const touch = event.touches[0];
+    if (!touch || event.touches.length !== 1) {
+      swipeStartRef.current = null;
+      return;
+    }
+    swipeStartRef.current = {
+      x: touch.clientX,
+      y: touch.clientY,
+      startedAt: window.performance.now(),
+      ignored: isTabSwipeBlocked() || shouldIgnoreSwipeTarget(event.target),
+    };
+  }
+
+  function handleTouchMove(event: TouchEvent<HTMLElement>) {
+    const start = swipeStartRef.current;
+    const touch = event.touches[0];
+    if (!start || !touch || start.ignored) return;
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+    if (Math.abs(dy) > 28 && Math.abs(dy) > Math.abs(dx)) {
+      swipeStartRef.current = null;
+    }
+  }
+
+  function handleTouchEnd(event: TouchEvent<HTMLElement>) {
+    const start = swipeStartRef.current;
+    const touch = event.changedTouches[0];
+    swipeStartRef.current = null;
+    if (!start || !touch || start.ignored) return;
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+    const elapsed = window.performance.now() - start.startedAt;
+    if (elapsed > SWIPE_MAX_DURATION_MS) return;
+    if (Math.abs(dx) < SWIPE_MIN_DISTANCE_PX) return;
+    if (Math.abs(dx) < Math.abs(dy) * 1.25) return;
+    switchTabBySwipe(dx < 0 ? "next" : "previous");
+  }
 
   function changeThemeMode(mode: ThemeMode) {
     setThemeMode(mode);
@@ -3296,7 +3397,15 @@ export default function Page() {
   }
 
   return (
-    <main className="min-h-screen w-full overflow-x-hidden bg-[var(--bg)] bg-[image:var(--app-bg)] text-[var(--text)]">
+    <main
+      className="min-h-screen w-full overflow-x-hidden bg-[var(--bg)] bg-[image:var(--app-bg)] text-[var(--text)]"
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      onTouchCancel={() => {
+        swipeStartRef.current = null;
+      }}
+    >
       <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col overflow-x-hidden px-2 py-3 pb-28 sm:px-5 lg:px-7">
         {notice ? (
           <div className="pointer-events-none fixed inset-x-0 top-[max(0.75rem,env(safe-area-inset-top))] z-[110] flex justify-center px-3 sm:justify-end sm:px-5">
@@ -3826,19 +3935,16 @@ export default function Page() {
 
       <AiProcessingOverlay state={aiProcessingOverlay} elapsedMs={aiProcessingElapsedMs} />
 
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-[color:var(--border)] bg-[var(--card)] px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 backdrop-blur-xl">
+      <nav
+        className="fixed inset-x-0 bottom-0 z-40 border-t border-[color:var(--border)] bg-[var(--card)] px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 backdrop-blur-xl"
+        data-swipe-ignore="true"
+      >
         <div className="mx-auto grid max-w-3xl grid-cols-5 gap-2">
-          {[
-            { key: "home", label: "Home" },
-            { key: "today", label: "Today" },
-            { key: "week", label: "Week" },
-            { key: "compose", label: "Compose" },
-            { key: "settings", label: "Settings" },
-          ].map((item) => (
+          {APP_TABS.map((item) => (
             <button
               key={item.key}
               type="button"
-              onClick={() => setTab(item.key as AppTab)}
+              onClick={() => selectTab(item.key)}
               className={`rounded-2xl px-2 py-3 text-xs font-medium transition sm:px-4 sm:text-sm ${
                 tab === item.key
                   ? "bg-[var(--accent)] text-[var(--accent-contrast)] shadow-[0_10px_24px_var(--shadow-soft)]"
