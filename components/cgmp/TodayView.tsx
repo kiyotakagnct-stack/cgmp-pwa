@@ -178,7 +178,7 @@ function calculateLoad(records: CGMPRecord[], todayKey: string, today: Date) {
 
 function MiniMetric({ label, value, subText }: { label: string; value: string; subText?: string }) {
   return (
-    <div className="min-w-0 rounded-2xl border border-[color:var(--border)] bg-[var(--card)]/55 px-3 py-2">
+    <div className="min-w-0 border-l border-[color:var(--border)] pl-3 first:border-l-0 first:pl-0">
       <div className="text-[10px] uppercase tracking-[0.18em] text-[var(--accent)]">{label}</div>
       <div className="mt-1 truncate text-lg font-semibold text-[var(--text)]">{value}</div>
       {subText ? <div className="mt-0.5 truncate text-[11px] text-[var(--muted)]">{subText}</div> : null}
@@ -191,23 +191,27 @@ function MissionRecordPreview({
   record,
   emptyTitle,
   emptySummary,
+  compact = false,
 }: {
   label: string;
   record: CGMPRecord | null;
   emptyTitle: string;
   emptySummary: string;
+  compact?: boolean;
 }) {
+  const timeLabel = record ? getRecordTimeline(record).timeLabel : "";
   return (
-    <div className="min-w-0 border-t border-[color:var(--border)] pt-3 first:border-t-0 first:pt-0">
+    <div className="min-w-0 border-t border-[color:var(--border)] pt-2 first:border-t-0 first:pt-0">
       <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">
         <span>{label}</span>
       </div>
       {record ? (
         <div className="mt-1 flex min-w-0 items-start gap-2">
-          <span className="mt-0.5 text-xl leading-none">{inferSemanticIcon(record)}</span>
+          {!compact ? <span className="font-mono text-3xl font-semibold leading-none text-[var(--text)]">{timeLabel}</span> : null}
+          <span className={`${compact ? "mt-0.5 text-lg" : "mt-1 text-2xl"} leading-none`}>{inferSemanticIcon(record)}</span>
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-[var(--text)]">{record.title || "（無題）"}</div>
-            <div className="mt-0.5 line-clamp-1 text-xs text-[var(--muted)]">{recordSummary(record)}</div>
+            <div className={`${compact ? "text-sm" : "text-base"} truncate font-semibold text-[var(--text)]`}>{record.title || "（無題）"}</div>
+            <div className="mt-0.5 line-clamp-1 text-xs leading-5 text-[var(--muted)]">{recordSummary(record)}</div>
           </div>
         </div>
       ) : (
@@ -229,8 +233,8 @@ function DayTimeline({ items, nowMinutes }: { items: TimelineItem[]; nowMinutes:
         <span>◷</span>
         <span>Day Timeline</span>
       </div>
-      <div className="mt-4 px-2">
-        <div className="relative h-24">
+      <div className="mt-3 px-1">
+        <div className="relative h-20">
           <div className="absolute left-0 right-0 top-7 h-1 rounded-full bg-[var(--border)]" />
           <div className="absolute left-0 right-0 top-7 h-1 rounded-full bg-gradient-to-r from-[var(--accent)] via-[var(--success)] to-[var(--orange)] opacity-60" />
           {labels.map((hour) => (
@@ -246,12 +250,12 @@ function DayTimeline({ items, nowMinutes }: { items: TimelineItem[]; nowMinutes:
             <button
               key={item.id}
               type="button"
-              className="absolute top-[18px] flex -translate-x-1/2 flex-col items-center gap-1"
+              className="absolute top-[18px] flex -translate-x-1/2 flex-col items-center gap-0.5"
               style={{ left: `${item.position}%` }}
               title={item.title}
             >
               <span
-                className="flex h-7 w-7 items-center justify-center rounded-full border text-sm shadow-[0_8px_18px_var(--shadow-soft)]"
+                className="flex h-6 w-6 items-center justify-center rounded-full border text-xs shadow-[0_8px_18px_var(--shadow-soft)]"
                 style={{
                   backgroundColor: `color-mix(in srgb, ${item.color} 20%, var(--card))`,
                   borderColor: item.color,
@@ -263,16 +267,16 @@ function DayTimeline({ items, nowMinutes }: { items: TimelineItem[]; nowMinutes:
             </button>
           ))}
           <div
-            className="absolute top-3 h-12 w-px bg-[var(--accent)]"
+            className="absolute top-3 h-11 w-px bg-[var(--accent)]"
             style={{ left: `${nowPosition}%` }}
           >
-            <span className="absolute left-1 top-11 rounded-full bg-[var(--accent)] px-2 py-0.5 text-[10px] font-semibold text-[var(--accent-contrast)]">
+            <span className="absolute left-1 top-10 rounded-full bg-[var(--accent)] px-2 py-0.5 text-[10px] font-semibold text-[var(--accent-contrast)]">
               NOW
             </span>
           </div>
         </div>
       </div>
-      <div className="mt-2 flex flex-wrap justify-center gap-3 text-[11px] text-[var(--muted)]">
+      <div className="mt-1 flex flex-wrap justify-center gap-3 text-[11px] text-[var(--muted)]">
         <span><span className="text-[var(--accent)]">●</span> タスク</span>
         <span><span className="text-[var(--success)]">●</span> 予定</span>
         <span><span className="text-[var(--purple)]">●</span> メモ</span>
@@ -301,13 +305,14 @@ function DayFlow({
         <span>♪</span>
         <span>Day Flow</span>
       </div>
-      <div className="mt-4 grid gap-3">
-        {items.map((item) => {
+      <div className="mt-3">
+        {items.map((item, index) => {
           const record = item.record;
           const domainColor = record ? getDomainColorVar(record.domain || "other") : "var(--accent)";
           const taskProcessing = record ? externalProcessingKey === `task-status:${record.id}` : false;
+          const isLast = index === items.length - 1;
           return (
-            <article
+            <div
               key={item.id}
               role={record ? "button" : undefined}
               tabIndex={record ? 0 : undefined}
@@ -321,12 +326,15 @@ function DayFlow({
                     }
                   : undefined
               }
-              className="grid grid-cols-[4.4rem_2.4rem_minmax(0,1fr)] gap-2 rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] p-3"
+              className={`grid w-full grid-cols-[4rem_2.1rem_minmax(0,1fr)] gap-2 py-2 text-left ${record ? "cursor-pointer" : ""}`}
             >
-              <div className="font-mono text-base font-semibold text-[var(--text)]">{item.timeLabel}</div>
+              <div className="pt-0.5 font-mono text-xl font-semibold leading-8 text-[var(--text)]">{item.timeLabel}</div>
               <div className="relative flex justify-center">
+                {!isLast ? (
+                  <span className="absolute left-1/2 top-8 h-[calc(100%+0.75rem)] w-px -translate-x-1/2 bg-[var(--border)]" />
+                ) : null}
                 <span
-                  className="z-10 flex h-8 w-8 items-center justify-center rounded-full border text-lg"
+                  className="z-10 flex h-8 w-8 items-center justify-center rounded-full border text-base"
                   style={{
                     backgroundColor: `color-mix(in srgb, ${domainColor} 16%, var(--card))`,
                     borderColor: domainColor,
@@ -335,11 +343,11 @@ function DayFlow({
                   {item.icon}
                 </span>
               </div>
-              <div className="min-w-0">
+              <div className={`min-w-0 ${!isLast ? "border-b border-[color:var(--border)] pb-2" : ""}`}>
                 <div className="flex min-w-0 items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <h3 className="line-clamp-2 text-sm font-semibold text-[var(--text)]">{item.title}</h3>
-                    {item.summary ? <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--muted)]">{item.summary}</p> : null}
+                    <h3 className="line-clamp-2 text-base font-semibold leading-6 text-[var(--text)]">{item.title}</h3>
+                    {item.summary ? <p className="mt-0.5 line-clamp-2 text-sm leading-5 text-[var(--muted)]">{item.summary}</p> : null}
                   </div>
                   {record?.google_task_id && record.google_task_list_id ? (
                     <button
@@ -367,7 +375,7 @@ function DayFlow({
                   </div>
                 ) : null}
               </div>
-            </article>
+            </div>
           );
         })}
       </div>
@@ -394,14 +402,14 @@ function CompactLoopList({
         <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--purple)]">{title}</div>
         <Badge compact tone={tone}>{records.length}件</Badge>
       </div>
-      <div className="mt-3 grid gap-2">
+      <div className="mt-3 divide-y divide-[color:var(--border)]">
         {records.length > 0 ? (
           records.slice(0, 3).map((record) => (
             <button
               key={record.id}
               type="button"
               onClick={() => onOpenRecord(record.id)}
-              className="flex min-w-0 items-center justify-between gap-2 rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2 text-left"
+              className="flex w-full min-w-0 items-center justify-between gap-2 py-2 text-left"
             >
               <span className="min-w-0 truncate text-sm font-semibold text-[var(--text)]">
                 <span className="mr-2">{inferSemanticIcon(record)}</span>
@@ -413,7 +421,7 @@ function CompactLoopList({
             </button>
           ))
         ) : (
-          <div className="rounded-2xl border border-dashed border-[color:var(--border)] px-4 py-4 text-sm text-[var(--subtle)]">
+          <div className="rounded-2xl border border-dashed border-[color:var(--border)] px-4 py-3 text-sm text-[var(--subtle)]">
             {emptyText}
           </div>
         )}
@@ -548,16 +556,16 @@ export function TodayView({
         </div>
       </section>
 
-      <section className={panelClass}>
+      <section className={`${panelClass} p-4 sm:p-5`}>
         <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--accent)]">◎ Mission Control</div>
-        <div className="mt-4 grid gap-4 md:grid-cols-[0.9fr_1.4fr]">
-          <div className="rounded-3xl border border-[color:var(--border)] bg-[var(--card-soft)] p-4">
+        <div className="mt-3 grid grid-cols-[0.78fr_1.22fr] gap-3">
+          <div className="min-w-0 border-r border-[color:var(--border)] pr-3">
             <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">Now</div>
-            <div className="mt-2 font-mono text-5xl font-semibold text-[var(--text)]">{nowTimeLabel}</div>
-            <div className="mt-3 text-3xl text-[var(--accent)]">☾</div>
-            <div className="mt-1 text-sm text-[var(--muted)]">{getTimeBandLabel(nowMinutes)}</div>
+            <div className="mt-1 font-mono text-[42px] font-semibold leading-none text-[var(--text)]">{nowTimeLabel}</div>
+            <div className="mt-2 text-2xl leading-none text-[var(--accent)]">☾</div>
+            <div className="mt-1 text-xs leading-5 text-[var(--muted)]">{getTimeBandLabel(nowMinutes)}</div>
           </div>
-          <div className="grid gap-3">
+          <div className="grid min-w-0 gap-2">
             <MissionRecordPreview
               label="Next"
               record={cockpit.nextEvent}
@@ -569,8 +577,9 @@ export function TodayView({
               record={cockpit.focusTask}
               emptyTitle="今すぐ処理すべきタスクはありません"
               emptySummary="未完了の集中対象は落ち着いています。"
+              compact
             />
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-3 gap-2 border-t border-[color:var(--border)] pt-2">
               <MiniMetric label="Progress" value={progressText} subText="完了" />
               <MiniMetric label="Carry" value={`${cockpit.carryOver.length}件`} subText="持ち越し" />
               <MiniMetric label="Load" value={cockpit.load.label} subText={cockpit.load.subText} />

@@ -214,8 +214,9 @@ function WeeklyMinimap({
         {days.map((day, index) => {
           const isActive = activeDay === index;
           const isToday = day.dateKey === todayKey;
-          const minimapRecords = day.records.slice(0, isExpanded ? 16 : 10);
-          const hiddenCount = Math.max(0, day.records.length - minimapRecords.length);
+          const lineCount = Math.max(1, day.records.length);
+          const lineHeight = lineCount > 18 ? (isExpanded ? 3 : 2) : lineCount > 10 ? (isExpanded ? 4 : 2) : isExpanded ? 6 : 4;
+          const lineGap = lineCount > 18 ? 1 : lineCount > 10 ? 2 : isExpanded ? 3 : 2;
           return (
             <div
               key={day.dateKey}
@@ -251,19 +252,27 @@ function WeeklyMinimap({
               >
                 {WEEKDAY_MINI_LABELS[index]}
               </div>
-              <div className={isExpanded ? "min-w-0 overflow-hidden space-y-1 pt-0.5" : "overflow-hidden space-y-0.5"}>
+              <div
+                className={isExpanded ? "min-w-0 overflow-hidden pt-0.5" : "overflow-hidden"}
+                style={{ display: "grid", gap: `${lineGap}px` } as CSSProperties}
+              >
                 {day.records.length > 0 ? (
-                  minimapRecords.map((record) => {
+                  day.records.map((record) => {
                     const color = getDomainColorVar(record.domain || "other");
                     return (
                       <div
                         key={record.id}
-                        className={`flex w-full items-center overflow-hidden rounded-sm ${isExpanded ? "h-2.5" : "h-2"}`}
+                        className="flex w-full items-center overflow-hidden rounded-sm"
+                        style={{ height: `${lineHeight}px` } as CSSProperties}
                         aria-hidden="true"
                       >
                         <span
-                          className={`min-w-0 flex-1 rounded-full ${isExpanded ? "h-1 opacity-90" : "h-0.5 opacity-65"}`}
-                          style={{ backgroundColor: color } as CSSProperties}
+                          className="min-w-0 flex-1 rounded-full"
+                          style={{
+                            backgroundColor: color,
+                            height: `${Math.max(1, Math.floor(lineHeight / 2))}px`,
+                            opacity: isExpanded ? 0.9 : 0.65,
+                          } as CSSProperties}
                         />
                       </div>
                     );
@@ -271,13 +280,6 @@ function WeeklyMinimap({
                 ) : (
                   <div className="mx-auto h-0.5 w-3 rounded-full bg-[var(--border)] opacity-60" />
                 )}
-                {hiddenCount > 0 ? (
-                  <div
-                    className={`rounded-full bg-[var(--muted)] opacity-50 ${isExpanded ? "h-1 w-full" : "mx-auto h-0.5 w-3"}`}
-                    title={`${hiddenCount}件を省略`}
-                    aria-hidden="true"
-                  />
-                ) : null}
               </div>
             </div>
           );
