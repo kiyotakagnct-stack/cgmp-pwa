@@ -214,6 +214,8 @@ function WeeklyMinimap({
         {days.map((day, index) => {
           const isActive = activeDay === index;
           const isToday = day.dateKey === todayKey;
+          const minimapRecords = day.records.slice(0, isExpanded ? 16 : 10);
+          const hiddenCount = Math.max(0, day.records.length - minimapRecords.length);
           return (
             <div
               key={day.dateKey}
@@ -229,7 +231,7 @@ function WeeklyMinimap({
               }}
               role="button"
               tabIndex={0}
-              className={`min-h-0 flex-1 rounded-2xl border transition ${
+              className={`min-h-0 flex-1 overflow-hidden rounded-2xl border transition ${
                 isExpanded && isActive
                   ? "border-[color:var(--accent)] bg-[var(--accent-soft)] shadow-[inset_0_0_0_1px_var(--accent)]"
                   : isExpanded
@@ -249,9 +251,9 @@ function WeeklyMinimap({
               >
                 {WEEKDAY_MINI_LABELS[index]}
               </div>
-              <div className={isExpanded ? "min-w-0 space-y-1 pt-0.5" : "space-y-0.5"}>
+              <div className={isExpanded ? "min-w-0 overflow-hidden space-y-1 pt-0.5" : "overflow-hidden space-y-0.5"}>
                 {day.records.length > 0 ? (
-                  day.records.map((record) => {
+                  minimapRecords.map((record) => {
                     const color = getDomainColorVar(record.domain || "other");
                     return (
                       <div
@@ -269,6 +271,13 @@ function WeeklyMinimap({
                 ) : (
                   <div className="mx-auto h-0.5 w-3 rounded-full bg-[var(--border)] opacity-60" />
                 )}
+                {hiddenCount > 0 ? (
+                  <div
+                    className={`rounded-full bg-[var(--muted)] opacity-50 ${isExpanded ? "h-1 w-full" : "mx-auto h-0.5 w-3"}`}
+                    title={`${hiddenCount}件を省略`}
+                    aria-hidden="true"
+                  />
+                ) : null}
               </div>
             </div>
           );
