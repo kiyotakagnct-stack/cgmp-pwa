@@ -204,15 +204,15 @@ function WeeklyMinimap({
         if (event.currentTarget.contains(event.relatedTarget)) return;
         setIsExpanded(false);
       }}
-      className={`fixed right-1 top-[7.75rem] max-h-[min(34rem,calc(100svh-12rem))] select-none overflow-hidden rounded-3xl border transition-all duration-200 sm:right-3 sm:top-24 ${
+      className={`fixed right-1 top-[7.75rem] select-none overflow-hidden rounded-3xl border transition-all duration-200 sm:right-3 sm:top-24 ${
         isExpanded
-          ? "z-[70] w-16 border-[color:var(--border)] bg-[var(--card)] px-1.5 py-2 opacity-95 shadow-[0_18px_44px_var(--shadow-soft)] backdrop-blur-xl sm:w-[4.5rem]"
-          : "z-30 w-9 border-transparent bg-transparent px-1 py-1 opacity-40 shadow-none backdrop-blur-none hover:opacity-70 sm:w-10"
+          ? "z-[70] h-[min(38rem,calc(100svh-12rem))] w-16 border-[color:var(--border)] bg-[var(--card)] px-1.5 py-2 opacity-95 shadow-[0_18px_44px_var(--shadow-soft)] backdrop-blur-xl sm:w-[4.5rem]"
+          : "z-30 h-[min(34rem,calc(100svh-13rem))] w-9 border-transparent bg-transparent px-1 py-1 opacity-40 shadow-none backdrop-blur-none hover:opacity-70 sm:w-10"
       }`}
       aria-label="Weekly Minimap"
     >
       <div
-        className={`max-h-[inherit] overflow-y-auto overscroll-contain ${isExpanded ? "space-y-1.5 pr-0.5" : "space-y-1"}`}
+        className={`flex h-full flex-col overflow-hidden ${isExpanded ? "gap-1.5 pr-0.5" : "gap-1"}`}
       >
         {days.map((day, index) => {
           const isActive = activeDay === index;
@@ -241,9 +241,10 @@ function WeeklyMinimap({
                   ? "border-[color:var(--accent)] bg-[var(--accent-soft)] shadow-[inset_0_0_0_1px_var(--accent)]"
                   : isExpanded
                     ? "border-transparent hover:border-[color:var(--border)] hover:bg-[var(--card-soft)]"
-                    : "border-transparent bg-transparent shadow-none"
+                  : "border-transparent bg-transparent shadow-none"
               } ${isExpanded ? "grid grid-cols-[1.65rem_minmax(0,1fr)] items-start gap-1 px-1.5 py-1" : "px-1 py-0.5 text-left"}`}
               aria-label={`${WEEKDAY_MINI_LABELS[index]}へ移動`}
+              style={{ flex: "1 1 0", minHeight: 0 } as CSSProperties}
             >
               <div
                 className={`w-fit rounded-full px-1 font-semibold ${
