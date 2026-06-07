@@ -198,25 +198,29 @@ function WeeklyMinimap({
 
   return (
     <aside
+      data-swipe-ignore="true"
       onPointerDown={revealMinimap}
       onBlur={(event) => {
         if (event.currentTarget.contains(event.relatedTarget)) return;
         setIsExpanded(false);
       }}
-      className={`fixed right-1 top-28 bottom-32 select-none overflow-hidden rounded-3xl border transition-all duration-200 sm:right-3 sm:top-20 sm:bottom-24 ${
+      className={`fixed right-1 top-[7.75rem] max-h-[min(34rem,calc(100svh-12rem))] select-none overflow-hidden rounded-3xl border transition-all duration-200 sm:right-3 sm:top-24 ${
         isExpanded
           ? "z-[70] w-16 border-[color:var(--border)] bg-[var(--card)] px-1.5 py-2 opacity-95 shadow-[0_18px_44px_var(--shadow-soft)] backdrop-blur-xl sm:w-[4.5rem]"
           : "z-30 w-9 border-transparent bg-transparent px-1 py-1 opacity-40 shadow-none backdrop-blur-none hover:opacity-70 sm:w-10"
       }`}
       aria-label="Weekly Minimap"
     >
-      <div className={`flex h-full flex-col overflow-hidden ${isExpanded ? "gap-1.5" : "gap-1"}`}>
+      <div
+        className={`max-h-[inherit] overflow-y-auto overscroll-contain ${isExpanded ? "space-y-1.5 pr-0.5" : "space-y-1"}`}
+      >
         {days.map((day, index) => {
           const isActive = activeDay === index;
           const isToday = day.dateKey === todayKey;
           const lineCount = Math.max(1, day.records.length);
-          const lineHeight = lineCount > 18 ? (isExpanded ? 3 : 2) : lineCount > 10 ? (isExpanded ? 4 : 2) : isExpanded ? 6 : 4;
-          const lineGap = lineCount > 18 ? 1 : lineCount > 10 ? 2 : isExpanded ? 3 : 2;
+          const lineHeight =
+            lineCount > 24 ? (isExpanded ? 2 : 1) : lineCount > 14 ? (isExpanded ? 3 : 1) : isExpanded ? 4 : 3;
+          const lineGap = lineCount > 18 ? 1 : isExpanded ? 2 : 1;
           return (
             <div
               key={day.dateKey}
@@ -232,7 +236,7 @@ function WeeklyMinimap({
               }}
               role="button"
               tabIndex={0}
-              className={`min-h-0 flex-1 overflow-hidden rounded-2xl border transition ${
+              className={`overflow-hidden rounded-2xl border transition ${
                 isExpanded && isActive
                   ? "border-[color:var(--accent)] bg-[var(--accent-soft)] shadow-[inset_0_0_0_1px_var(--accent)]"
                   : isExpanded

@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, TouchEvent } from "react";
 
 import { ImageAttachmentGrid } from "@/components/ImageAttachmentGrid";
 import { ImageLightbox } from "@/components/ImageLightbox";
@@ -145,17 +144,9 @@ const APP_TABS: Array<{ key: AppTab; label: string }> = [
   { key: "compose", label: "Compose" },
   { key: "settings", label: "Settings" },
 ];
-const SWIPE_MIN_DISTANCE_PX = 72;
-const SWIPE_VISUAL_MAX_OFFSET_PX = 118;
 type SortKey = "updated_at" | "created_at" | "datetime";
 type SearchMode = "text" | "semantic";
 type Notice = { kind: "info" | "error"; text: string } | null;
-type SwipeStart = {
-  x: number;
-  y: number;
-  ignored: boolean;
-};
-type TabSlideDirection = "previous" | "next" | null;
 type SyncActivity = {
   id: number;
   status: "running" | "done" | "error";
@@ -286,9 +277,6 @@ type ReanalysisExternalConfirmState = {
 } | null;
 export default function Page() {
   const [tab, setTab] = useState<AppTab>("home");
-  const [tabDragOffset, setTabDragOffset] = useState(0);
-  const [isTabDragging, setIsTabDragging] = useState(false);
-  const [tabSlideDirection, setTabSlideDirection] = useState<TabSlideDirection>(null);
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [weekStart, setWeekStart] = useState<Date>(() => getMondayOfWeek(new Date()));
   const [records, setRecords] = useState<CGMPRecord[]>([]);
@@ -379,16 +367,6 @@ export default function Page() {
   const scriptableImportInputRef = useRef<HTMLInputElement | null>(null);
   const embeddingProviderRef = useRef(new ApiEmbeddingProvider());
   const embeddingCancelRef = useRef(false);
-  const swipeStartRef = useRef<SwipeStart | null>(null);
-  const tabSlideTimerRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (tabSlideTimerRef.current) {
-        window.clearTimeout(tabSlideTimerRef.current);
-      }
-    };
-  }, []);
 
   function scrollActiveTabToTop() {
     window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
@@ -399,104 +377,7 @@ export default function Page() {
       scrollActiveTabToTop();
       return;
     }
-    setTabSlideDirection(null);
-    setTabDragOffset(0);
-    setIsTabDragging(false);
     setTab(nextTab);
-  }
-
-  function isTabSwipeBlocked() {
-    return Boolean(
-      lightbox ||
-        isEditPanelOpen ||
-        isMiniListOpen ||
-        isPromptEditorOpen ||
-        externalConfirm ||
-        reanalysisExternalConfirm ||
-        externalSyncProgress ||
-        backupSyncProgress ||
-        isWebhookTestModalOpen ||
-        badgeInfo ||
-        relatedCandidates.length > 0,
-    );
-  }
-
-  function switchTabBySwipe(direction: "previous" | "next") {
-    const currentIndex = APP_TABS.findIndex((item) => item.key === tab);
-    if (currentIndex < 0) return false;
-    const delta = direction === "next" ? 1 : -1;
-    const nextIndex = currentIndex + delta;
-    if (nextIndex < 0 || nextIndex >= APP_TABS.length) return false;
-    if (tabSlideTimerRef.current) {
-      window.clearTimeout(tabSlideTimerRef.current);
-      tabSlideTimerRef.current = null;
-    }
-    setTabSlideDirection(direction);
-    setTabDragOffset(0);
-    setIsTabDragging(false);
-    setTab(APP_TABS[nextIndex].key);
-    tabSlideTimerRef.current = window.setTimeout(() => {
-      setTabSlideDirection(null);
-      tabSlideTimerRef.current = null;
-    }, 280);
-    return true;
-  }
-
-  function shouldIgnoreSwipeTarget(target: EventTarget | null) {
-    if (!(target instanceof Element)) return true;
-    return Boolean(
-      target.closest(
-        "button, input, textarea, select, a, summary, [role='button'], [role='dialog'], [data-swipe-ignore='true']",
-      ),
-    );
-  }
-
-  function handleTouchStart(event: TouchEvent<HTMLElement>) {
-    const touch = event.touches[0];
-    if (!touch || event.touches.length !== 1) {
-      swipeStartRef.current = null;
-      return;
-    }
-    swipeStartRef.current = {
-      x: touch.clientX,
-      y: touch.clientY,
-      ignored: isTabSwipeBlocked() || shouldIgnoreSwipeTarget(event.target),
-    };
-    setTabSlideDirection(null);
-  }
-
-  function handleTouchMove(event: TouchEvent<HTMLElement>) {
-    const start = swipeStartRef.current;
-    const touch = event.touches[0];
-    if (!start || !touch || start.ignored) return;
-    const dx = touch.clientX - start.x;
-    const dy = touch.clientY - start.y;
-    if (Math.abs(dy) > 28 && Math.abs(dy) > Math.abs(dx)) {
-      swipeStartRef.current = null;
-      setIsTabDragging(false);
-      setTabDragOffset(0);
-      return;
-    }
-    if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.15) {
-      setIsTabDragging(true);
-      const limitedOffset =
-        Math.sign(dx) * Math.min(Math.abs(dx) * 0.62, SWIPE_VISUAL_MAX_OFFSET_PX);
-      setTabDragOffset(limitedOffset);
-    }
-  }
-
-  function handleTouchEnd(event: TouchEvent<HTMLElement>) {
-    const start = swipeStartRef.current;
-    const touch = event.changedTouches[0];
-    swipeStartRef.current = null;
-    if (!start || !touch || start.ignored) return;
-    const dx = touch.clientX - start.x;
-    const dy = touch.clientY - start.y;
-    setIsTabDragging(false);
-    setTabDragOffset(0);
-    if (Math.abs(dx) < SWIPE_MIN_DISTANCE_PX) return;
-    if (Math.abs(dx) < Math.abs(dy) * 1.15) return;
-    switchTabBySwipe(dx < 0 ? "next" : "previous");
   }
 
   function changeThemeMode(mode: ThemeMode) {
@@ -3432,29 +3313,11 @@ export default function Page() {
     );
   }
 
-  const tabContentStyle: CSSProperties = {
-    transform: tabDragOffset ? `translate3d(${tabDragOffset}px, 0, 0)` : undefined,
-    transition: isTabDragging ? "none" : "transform 180ms cubic-bezier(0.22, 1, 0.36, 1)",
-  };
-  const tabContentClass = [
-    "min-w-0 will-change-transform",
-    tabSlideDirection === "next" ? "cgmp-tab-slide-in-next" : "",
-    tabSlideDirection === "previous" ? "cgmp-tab-slide-in-previous" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const tabContentClass = "min-w-0";
 
   return (
     <main
       className="min-h-screen w-full overflow-x-hidden bg-[var(--bg)] bg-[image:var(--app-bg)] text-[var(--text)]"
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
-      onTouchCancel={() => {
-        swipeStartRef.current = null;
-        setIsTabDragging(false);
-        setTabDragOffset(0);
-      }}
     >
       <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col overflow-x-hidden px-2 py-3 pb-28 sm:px-5 lg:px-7">
         {notice ? (
@@ -3612,7 +3475,7 @@ export default function Page() {
           onUpdatePromptDraft={updatePromptDraft}
         />
 
-        <div className={tabContentClass} style={tabContentStyle}>
+        <div className={tabContentClass}>
           {tab === "home" ? (
             <HomeView
               records={filteredRecords}
