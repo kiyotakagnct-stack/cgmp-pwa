@@ -262,6 +262,13 @@ type DeletedRecordsSummary = {
   count: number;
   latestDeletedAt: string;
 };
+type ReanalysisExternalChoice = "rebuild" | "keep" | "cancel";
+type ReanalysisExternalConfirmState = {
+  recordId: string;
+  title: string;
+  externalLabel: string;
+  resolve: (choice: ReanalysisExternalChoice) => void;
+} | null;
 export default function Page() {
   const [tab, setTab] = useState<AppTab>("home");
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
@@ -324,6 +331,7 @@ export default function Page() {
   const [photoProcessingCount, setPhotoProcessingCount] = useState(0);
   const [externalProcessingKey, setExternalProcessingKey] = useState("");
   const [externalConfirm, setExternalConfirm] = useState<ExternalConfirmState>(null);
+  const [reanalysisExternalConfirm, setReanalysisExternalConfirm] = useState<ReanalysisExternalConfirmState>(null);
   const [externalSyncing, setExternalSyncing] = useState(false);
   const [externalSyncProgress, setExternalSyncProgress] = useState<ExternalSyncProgressState | null>(null);
   const [aiProcessingOverlay, setAiProcessingOverlay] = useState<AiProcessingOverlayState | null>(null);
@@ -811,14 +819,60 @@ export default function Page() {
     }
   }
 
-  async function saveExternalRecordUpdate(nextRecord: CGMPRecord) {
+  function getRegisteredExternalLabel(record: CGMPRecord) {
+    const labels: string[] = [];
+    if (record.google_task_id && record.google_task_list_id) labels.push("Google Tasks");
+    if (record.google_calendar_event_id && record.google_calendar_id) labels.push("Google Calendar");
+    return labels.join(" / ");
+  }
+
+  function clearExternalRegistrationFields(record: CGMPRecord, externalError = ""): CGMPRecord {
+    return {
+      ...record,
+      external_action_status: externalError ? "failed" : "none",
+      external_target: "",
+      external_registered_at: "",
+      external_error: externalError,
+      google_task_id: "",
+      google_task_list_id: "",
+      google_task_status: "",
+      google_task_updated_at: "",
+      google_calendar_event_id: "",
+      google_calendar_id: "",
+      google_calendar_updated_at: "",
+    };
+  }
+
+  function askReanalysisExternalChoice(record: CGMPRecord): Promise<ReanalysisExternalChoice> {
+    const externalLabel = getRegisteredExternalLabel(record);
+    if (!externalLabel) return Promise.resolve("keep");
+
+    return new Promise((resolve) => {
+      setReanalysisExternalConfirm({
+        recordId: record.id,
+        title: record.title || record.summary || "（無題）",
+        externalLabel,
+        resolve,
+      });
+    });
+  }
+
+  function resolveReanalysisExternalChoice(choice: ReanalysisExternalChoice) {
+    const resolver = reanalysisExternalConfirm?.resolve;
+    setReanalysisExternalConfirm(null);
+    resolver?.(choice);
+  }
+
+  async function saveExternalRecordUpdate(nextRecord: CGMPRecord, options: { backup?: boolean } = {}) {
     const saved = await upsertRecord(nextRecord);
     setRecords((current) => current.map((record) => (record.id === saved.id ? saved : record)));
     if (selectedId === saved.id) {
       setDetailDraft(formFromRecord(saved));
     }
     await Promise.all([reloadRecords(), reloadBackupSummary()]);
-    void runBackupQueue(false);
+    if (options.backup !== false) {
+      void runBackupQueue(false);
+    }
     return saved;
   }
 
@@ -1258,10 +1312,13 @@ export default function Page() {
     }
   }
 
-  async function registerGoogleTask(recordId: string) {
-    const record = records.find((candidate) => candidate.id === recordId);
-    if (!record) return;
-    const processingKey = `task:${recordId}`;
+  async function registerGoogleTaskRecord(
+    record: CGMPRecord,
+    options: { backupAfterSave?: boolean; showNotice?: boolean } = {}
+  ) {
+    const backupAfterSave = options.backupAfterSave !== false;
+    const showNotice = options.showNotice !== false;
+    const processingKey = `task:${record.id}`;
     const activityId = startSyncActivity("Sync Reminder", record.title || record.summary || "Google Tasks", "登録中");
     setExternalProcessingKey(processingKey);
     try {
@@ -1274,7 +1331,7 @@ export default function Page() {
       if (!response.ok || !payload.ok || !payload.taskId || !payload.taskListId) {
         throw new Error(payload.error || "GOOGLE_TASK_CREATE_FAILED");
       }
-      await saveExternalRecordUpdate({
+      const saved = await saveExternalRecordUpdate({
         ...record,
         updated_at: new Date().toISOString(),
         external_action_status: "registered",
@@ -1285,24 +1342,36 @@ export default function Page() {
         google_task_list_id: payload.taskListId,
         google_task_status: payload.status || "needsAction",
         google_task_updated_at: payload.updatedAt || new Date().toISOString(),
-      });
-      setNotice({ kind: "info", text: "Google Tasksへ登録しました。" });
+      }, { backup: backupAfterSave });
+      if (showNotice) {
+        setNotice({ kind: "info", text: "Google Tasksへ登録しました。" });
+      }
       finishSyncActivity(activityId, "done", "Reminder synced", record.title || "Google Tasks");
+      return saved;
     } catch (error) {
-      await saveExternalRecordUpdate({
+      const saved = await saveExternalRecordUpdate({
         ...record,
         external_action_status: "failed",
         external_target: "reminder",
         external_error: error instanceof Error ? error.message : "Google Tasks登録に失敗しました",
-      });
-      setNotice({
-        kind: "error",
-        text: error instanceof Error ? error.message : "Google Tasks登録に失敗しました",
-      });
+      }, { backup: backupAfterSave });
+      if (showNotice) {
+        setNotice({
+          kind: "error",
+          text: error instanceof Error ? error.message : "Google Tasks登録に失敗しました",
+        });
+      }
       finishSyncActivity(activityId, "error", "Reminder sync failed", error instanceof Error ? error.message : "Google Tasks登録に失敗しました");
+      return saved;
     } finally {
       setExternalProcessingKey("");
     }
+  }
+
+  async function registerGoogleTask(recordId: string) {
+    const record = records.find((candidate) => candidate.id === recordId);
+    if (!record) return;
+    await registerGoogleTaskRecord(record);
   }
 
   async function toggleGoogleTaskStatus(recordId: string) {
@@ -1357,10 +1426,13 @@ export default function Page() {
     }
   }
 
-  async function registerGoogleCalendarEvent(recordId: string) {
-    const record = records.find((candidate) => candidate.id === recordId);
-    if (!record) return;
-    const processingKey = `calendar:${recordId}`;
+  async function registerGoogleCalendarRecord(
+    record: CGMPRecord,
+    options: { backupAfterSave?: boolean; showNotice?: boolean } = {}
+  ) {
+    const backupAfterSave = options.backupAfterSave !== false;
+    const showNotice = options.showNotice !== false;
+    const processingKey = `calendar:${record.id}`;
     const activityId = startSyncActivity("Sync Calendar", record.title || record.summary || "Google Calendar", "登録中");
     setExternalProcessingKey(processingKey);
     try {
@@ -1373,7 +1445,7 @@ export default function Page() {
       if (!response.ok || !payload.ok || !payload.eventId || !payload.calendarId) {
         throw new Error(payload.error || "GOOGLE_CALENDAR_CREATE_FAILED");
       }
-      await saveExternalRecordUpdate({
+      const saved = await saveExternalRecordUpdate({
         ...record,
         updated_at: new Date().toISOString(),
         external_action_status: "registered",
@@ -1383,24 +1455,36 @@ export default function Page() {
         google_calendar_event_id: payload.eventId,
         google_calendar_id: payload.calendarId,
         google_calendar_updated_at: payload.updatedAt || new Date().toISOString(),
-      });
-      setNotice({ kind: "info", text: "Google Calendarへ登録しました。" });
+      }, { backup: backupAfterSave });
+      if (showNotice) {
+        setNotice({ kind: "info", text: "Google Calendarへ登録しました。" });
+      }
       finishSyncActivity(activityId, "done", "Calendar synced", record.title || "Google Calendar");
+      return saved;
     } catch (error) {
-      await saveExternalRecordUpdate({
+      const saved = await saveExternalRecordUpdate({
         ...record,
         external_action_status: "failed",
         external_target: "calendar",
         external_error: error instanceof Error ? error.message : "Google Calendar登録に失敗しました",
-      });
-      setNotice({
-        kind: "error",
-        text: error instanceof Error ? error.message : "Google Calendar登録に失敗しました",
-      });
+      }, { backup: backupAfterSave });
+      if (showNotice) {
+        setNotice({
+          kind: "error",
+          text: error instanceof Error ? error.message : "Google Calendar登録に失敗しました",
+        });
+      }
       finishSyncActivity(activityId, "error", "Calendar sync failed", error instanceof Error ? error.message : "Google Calendar登録に失敗しました");
+      return saved;
     } finally {
       setExternalProcessingKey("");
     }
+  }
+
+  async function registerGoogleCalendarEvent(recordId: string) {
+    const record = records.find((candidate) => candidate.id === recordId);
+    if (!record) return;
+    await registerGoogleCalendarRecord(record);
   }
 
   async function rebackupAllRecords() {
@@ -2742,12 +2826,15 @@ export default function Page() {
       return;
     }
 
+    const externalChoice = isDraftRecord ? "keep" : await askReanalysisExternalChoice(targetRecord);
+    if (externalChoice === "cancel") return;
+
     setExternalProcessingKey(`draft-ai:${recordId}`);
     const processingId = beginAiProcessing("text", isDraftRecord ? "下書きAI解析中" : "メモAI再解析中");
     try {
       const payload = await requestTextAnalysis(rawInput);
       const analyzedForm = applyAnalysisToDraft(formFromRecord(targetRecord), rawInput, payload.result);
-      const nextRecord = formToRecord(analyzedForm, {
+      let nextRecord = formToRecord(analyzedForm, {
         existing: targetRecord,
         aiStatus: "done",
         aiError: "",
@@ -2757,25 +2844,46 @@ export default function Page() {
         },
         backupStatus: "pending_backup",
       });
-      const savedRecord = await upsertRecord({
+
+      let externalDeleteErrors: string[] = [];
+      if (externalChoice === "rebuild") {
+        externalDeleteErrors = await deleteRegisteredExternalItems(targetRecord);
+        nextRecord = clearExternalRegistrationFields(nextRecord, externalDeleteErrors.join(" / "));
+      }
+
+      let savedRecord = await upsertRecord({
         ...nextRecord,
         backup_retry_count: 0,
         backup_last_error: "",
         backup_next_retry_at: "",
       });
       await Promise.all([reloadRecords(savedRecord.id), reloadBackupSummary()]);
+
+      const canRecreateExternal = externalChoice === "rebuild" && externalDeleteErrors.length === 0;
+      if (canRecreateExternal && savedRecord.action === "reminder") {
+        savedRecord = await registerGoogleTaskRecord(savedRecord, { backupAfterSave: false, showNotice: false });
+      } else if (canRecreateExternal && savedRecord.action === "calendar") {
+        savedRecord = await registerGoogleCalendarRecord(savedRecord, { backupAfterSave: false, showNotice: false });
+      }
+
+      await runSingleRecordBackup(savedRecord.id);
       setNotice({
-        kind: "info",
-        text: isDraftRecord ? "下書きをAI解析して通常メモにしました。" : "メモをAI再解析しました。",
+        kind: externalDeleteErrors.length > 0 ? "error" : "info",
+        text:
+          externalDeleteErrors.length > 0
+            ? `AI再解析後のDrive上書きは完了しましたが、Google側の削除に失敗しました: ${externalDeleteErrors.join(" / ")}`
+            : externalChoice === "rebuild"
+              ? "AI再解析とGoogle Driveへの上書き同期が完了しました。"
+              : isDraftRecord
+                ? "下書きをAI解析して通常メモにしました。Google Driveへ同期しました。"
+                : "メモをAI再解析してGoogle Driveへ上書きしました。",
       });
-      if (savedRecord.action === "reminder") {
+      const alreadyRegistered = Boolean(getRegisteredExternalLabel(savedRecord));
+      if (externalChoice !== "rebuild" && !alreadyRegistered && savedRecord.action === "reminder") {
         setExternalConfirm({ recordId: savedRecord.id, action: "reminder", title: savedRecord.title || "（無題）" });
-      } else if (savedRecord.action === "calendar") {
+      } else if (externalChoice !== "rebuild" && !alreadyRegistered && savedRecord.action === "calendar") {
         setExternalConfirm({ recordId: savedRecord.id, action: "calendar", title: savedRecord.title || "（無題）" });
       }
-      window.setTimeout(() => {
-        void runBackupQueue(false);
-      }, 0);
       void suggestRelatedRecords(savedRecord);
     } catch (error) {
       const message = error instanceof Error ? error.message : "AI解析に失敗しました";
@@ -3270,6 +3378,45 @@ export default function Page() {
             }, 80);
           }}
         />
+
+        {reanalysisExternalConfirm ? (
+          <div className="fixed inset-0 z-[96] flex items-end justify-center bg-white/65 px-4 py-5 backdrop-blur-sm dark:bg-slate-950/55 sm:items-center">
+            <section className="w-full max-w-lg rounded-[28px] border border-[color:var(--border)] bg-[var(--card)] p-5 shadow-[0_28px_90px_var(--shadow-soft)]">
+              <div className="text-[11px] uppercase tracking-[0.34em] text-[var(--accent)]">AI Reanalysis</div>
+              <h2 className="mt-2 text-xl font-semibold text-[var(--text)]">Google側の登録を作り直しますか？</h2>
+              <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
+                「{reanalysisExternalConfirm.title}」は {reanalysisExternalConfirm.externalLabel} に登録済みです。
+                AI再解析で内容・日時・actionが変わる可能性があります。
+              </p>
+              <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                「削除して作り直す」を選ぶと、再解析前のGoogle側データを削除し、再解析後の内容で再登録してからDriveへ上書きします。
+              </p>
+              <div className="mt-5 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => resolveReanalysisExternalChoice("rebuild")}
+                  className={primaryButtonClass}
+                >
+                  削除して作り直す
+                </button>
+                <button
+                  type="button"
+                  onClick={() => resolveReanalysisExternalChoice("keep")}
+                  className={secondaryButtonClass}
+                >
+                  Google側は触らず再解析
+                </button>
+                <button
+                  type="button"
+                  onClick={() => resolveReanalysisExternalChoice("cancel")}
+                  className={secondaryButtonClass}
+                >
+                  キャンセル
+                </button>
+              </div>
+            </section>
+          </div>
+        ) : null}
 
         <ExternalSyncProgressModal
           progress={externalSyncProgress}
