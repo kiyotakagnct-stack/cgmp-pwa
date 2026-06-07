@@ -145,17 +145,17 @@ const APP_TABS: Array<{ key: AppTab; label: string }> = [
   { key: "compose", label: "Compose" },
   { key: "settings", label: "Settings" },
 ];
-const SWIPE_MIN_DISTANCE_PX = 64;
-const SWIPE_MAX_DURATION_MS = 800;
+const SWIPE_MIN_DISTANCE_PX = 72;
+const SWIPE_VISUAL_MAX_OFFSET_PX = 118;
 type SortKey = "updated_at" | "created_at" | "datetime";
 type SearchMode = "text" | "semantic";
 type Notice = { kind: "info" | "error"; text: string } | null;
 type SwipeStart = {
   x: number;
   y: number;
-  startedAt: number;
   ignored: boolean;
 };
+type TabSlideDirection = "previous" | "next" | null;
 type SyncActivity = {
   id: number;
   status: "running" | "done" | "error";
@@ -286,6 +286,9 @@ type ReanalysisExternalConfirmState = {
 } | null;
 export default function Page() {
   const [tab, setTab] = useState<AppTab>("home");
+  const [tabDragOffset, setTabDragOffset] = useState(0);
+  const [isTabDragging, setIsTabDragging] = useState(false);
+  const [tabSlideDirection, setTabSlideDirection] = useState<TabSlideDirection>(null);
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [weekStart, setWeekStart] = useState<Date>(() => getMondayOfWeek(new Date()));
   const [records, setRecords] = useState<CGMPRecord[]>([]);
@@ -377,6 +380,15 @@ export default function Page() {
   const embeddingProviderRef = useRef(new ApiEmbeddingProvider());
   const embeddingCancelRef = useRef(false);
   const swipeStartRef = useRef<SwipeStart | null>(null);
+  const tabSlideTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (tabSlideTimerRef.current) {
+        window.clearTimeout(tabSlideTimerRef.current);
+      }
+    };
+  }, []);
 
   function scrollActiveTabToTop() {
     window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
@@ -387,6 +399,9 @@ export default function Page() {
       scrollActiveTabToTop();
       return;
     }
+    setTabSlideDirection(null);
+    setTabDragOffset(0);
+    setIsTabDragging(false);
     setTab(nextTab);
   }
 
@@ -408,11 +423,23 @@ export default function Page() {
 
   function switchTabBySwipe(direction: "previous" | "next") {
     const currentIndex = APP_TABS.findIndex((item) => item.key === tab);
-    if (currentIndex < 0) return;
+    if (currentIndex < 0) return false;
     const delta = direction === "next" ? 1 : -1;
     const nextIndex = currentIndex + delta;
-    if (nextIndex < 0 || nextIndex >= APP_TABS.length) return;
+    if (nextIndex < 0 || nextIndex >= APP_TABS.length) return false;
+    if (tabSlideTimerRef.current) {
+      window.clearTimeout(tabSlideTimerRef.current);
+      tabSlideTimerRef.current = null;
+    }
+    setTabSlideDirection(direction);
+    setTabDragOffset(0);
+    setIsTabDragging(false);
     setTab(APP_TABS[nextIndex].key);
+    tabSlideTimerRef.current = window.setTimeout(() => {
+      setTabSlideDirection(null);
+      tabSlideTimerRef.current = null;
+    }, 280);
+    return true;
   }
 
   function shouldIgnoreSwipeTarget(target: EventTarget | null) {
@@ -433,9 +460,9 @@ export default function Page() {
     swipeStartRef.current = {
       x: touch.clientX,
       y: touch.clientY,
-      startedAt: window.performance.now(),
       ignored: isTabSwipeBlocked() || shouldIgnoreSwipeTarget(event.target),
     };
+    setTabSlideDirection(null);
   }
 
   function handleTouchMove(event: TouchEvent<HTMLElement>) {
@@ -446,6 +473,15 @@ export default function Page() {
     const dy = touch.clientY - start.y;
     if (Math.abs(dy) > 28 && Math.abs(dy) > Math.abs(dx)) {
       swipeStartRef.current = null;
+      setIsTabDragging(false);
+      setTabDragOffset(0);
+      return;
+    }
+    if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.15) {
+      setIsTabDragging(true);
+      const limitedOffset =
+        Math.sign(dx) * Math.min(Math.abs(dx) * 0.62, SWIPE_VISUAL_MAX_OFFSET_PX);
+      setTabDragOffset(limitedOffset);
     }
   }
 
@@ -456,10 +492,10 @@ export default function Page() {
     if (!start || !touch || start.ignored) return;
     const dx = touch.clientX - start.x;
     const dy = touch.clientY - start.y;
-    const elapsed = window.performance.now() - start.startedAt;
-    if (elapsed > SWIPE_MAX_DURATION_MS) return;
+    setIsTabDragging(false);
+    setTabDragOffset(0);
     if (Math.abs(dx) < SWIPE_MIN_DISTANCE_PX) return;
-    if (Math.abs(dx) < Math.abs(dy) * 1.25) return;
+    if (Math.abs(dx) < Math.abs(dy) * 1.15) return;
     switchTabBySwipe(dx < 0 ? "next" : "previous");
   }
 
@@ -3396,6 +3432,18 @@ export default function Page() {
     );
   }
 
+  const tabContentStyle: CSSProperties = {
+    transform: tabDragOffset ? `translate3d(${tabDragOffset}px, 0, 0)` : undefined,
+    transition: isTabDragging ? "none" : "transform 180ms cubic-bezier(0.22, 1, 0.36, 1)",
+  };
+  const tabContentClass = [
+    "min-w-0 will-change-transform",
+    tabSlideDirection === "next" ? "cgmp-tab-slide-in-next" : "",
+    tabSlideDirection === "previous" ? "cgmp-tab-slide-in-previous" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
     <main
       className="min-h-screen w-full overflow-x-hidden bg-[var(--bg)] bg-[image:var(--app-bg)] text-[var(--text)]"
@@ -3404,6 +3452,8 @@ export default function Page() {
       onTouchEnd={handleTouchEnd}
       onTouchCancel={() => {
         swipeStartRef.current = null;
+        setIsTabDragging(false);
+        setTabDragOffset(0);
       }}
     >
       <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col overflow-x-hidden px-2 py-3 pb-28 sm:px-5 lg:px-7">
@@ -3562,168 +3612,170 @@ export default function Page() {
           onUpdatePromptDraft={updatePromptDraft}
         />
 
-        {tab === "home" ? (
-          <HomeView
-            records={filteredRecords}
-            selectedId={selectedId}
-            checkedRecordIds={checkedRecordIds}
-            query={query}
-            tagQuery={tagQuery}
-            actionFilter={actionFilter}
-            domainFilter={domainFilter}
-            paraFilter={paraFilter}
-            sortKey={sortKey}
-            searchMode={searchMode}
-            semanticStatusText={semanticStatusText}
-            isFilterOpen={isFilterOpen}
-            activeFilterCount={activeFilterCount}
-            externalProcessingKey={externalProcessingKey}
-            isPhotoProcessing={photoProcessingCount > 0}
-            isBackupProcessing={backupProcessing}
-            onQueryChange={setQuery}
-            onTagQueryChange={setTagQuery}
-            onActionFilterChange={setActionFilter}
-            onDomainFilterChange={setDomainFilter}
-            onParaFilterChange={setParaFilter}
-            onSortKeyChange={setSortKey}
-            onSearchModeChange={setSearchMode}
-            onFilterOpenChange={setIsFilterOpen}
-            onGoCompose={() => setTab("compose")}
-            onClearFilters={() => {
-              setQuery("");
-              setTagQuery("");
-              setActionFilter("all");
-              setDomainFilter("all");
-              setParaFilter("all");
-              setSortKey("updated_at");
-            }}
-            onOpenRecord={(id) => setSelectedId((current) => (current === id ? null : id))}
-            onEdit={openEditPanel}
-            onDelete={deleteRecordById}
-            onRegisterGoogleTask={registerGoogleTask}
-            onToggleGoogleTaskStatus={toggleGoogleTaskStatus}
-            onRegisterGoogleCalendarEvent={registerGoogleCalendarEvent}
-            onOpenImage={(attachment, imageUrl) => setLightbox({ imageUrl, title: attachment.summary_80 || "添付画像" })}
-            onReanalyzeAttachment={handleReanalyzeAttachment}
-            onDeleteAttachment={handleDeleteAttachment}
-            onAddPhotos={handleAddPhotos}
-            onSyncOne={runSingleRecordBackup}
-            onAnalyzeRecord={analyzeRecordWithAI}
-            onShowBadgeInfo={setBadgeInfo}
-            onToggleCheck={toggleCheckedRecord}
-          />
-        ) : null}
+        <div className={tabContentClass} style={tabContentStyle}>
+          {tab === "home" ? (
+            <HomeView
+              records={filteredRecords}
+              selectedId={selectedId}
+              checkedRecordIds={checkedRecordIds}
+              query={query}
+              tagQuery={tagQuery}
+              actionFilter={actionFilter}
+              domainFilter={domainFilter}
+              paraFilter={paraFilter}
+              sortKey={sortKey}
+              searchMode={searchMode}
+              semanticStatusText={semanticStatusText}
+              isFilterOpen={isFilterOpen}
+              activeFilterCount={activeFilterCount}
+              externalProcessingKey={externalProcessingKey}
+              isPhotoProcessing={photoProcessingCount > 0}
+              isBackupProcessing={backupProcessing}
+              onQueryChange={setQuery}
+              onTagQueryChange={setTagQuery}
+              onActionFilterChange={setActionFilter}
+              onDomainFilterChange={setDomainFilter}
+              onParaFilterChange={setParaFilter}
+              onSortKeyChange={setSortKey}
+              onSearchModeChange={setSearchMode}
+              onFilterOpenChange={setIsFilterOpen}
+              onGoCompose={() => setTab("compose")}
+              onClearFilters={() => {
+                setQuery("");
+                setTagQuery("");
+                setActionFilter("all");
+                setDomainFilter("all");
+                setParaFilter("all");
+                setSortKey("updated_at");
+              }}
+              onOpenRecord={(id) => setSelectedId((current) => (current === id ? null : id))}
+              onEdit={openEditPanel}
+              onDelete={deleteRecordById}
+              onRegisterGoogleTask={registerGoogleTask}
+              onToggleGoogleTaskStatus={toggleGoogleTaskStatus}
+              onRegisterGoogleCalendarEvent={registerGoogleCalendarEvent}
+              onOpenImage={(attachment, imageUrl) => setLightbox({ imageUrl, title: attachment.summary_80 || "添付画像" })}
+              onReanalyzeAttachment={handleReanalyzeAttachment}
+              onDeleteAttachment={handleDeleteAttachment}
+              onAddPhotos={handleAddPhotos}
+              onSyncOne={runSingleRecordBackup}
+              onAnalyzeRecord={analyzeRecordWithAI}
+              onShowBadgeInfo={setBadgeInfo}
+              onToggleCheck={toggleCheckedRecord}
+            />
+          ) : null}
 
-        {tab === "today" ? (
-          <TodayView
-            records={records}
-            settings={settingsDraft}
-            onOpenRecord={(id) => {
-              setSelectedId(id);
-              setTab("home");
-              setPendingMiniJumpId(id);
-            }}
-            onOpenImage={(attachment, imageUrl) => setLightbox({ imageUrl, title: attachment.summary_80 || "添付画像" })}
-            onToggleGoogleTaskStatus={toggleGoogleTaskStatus}
-            externalProcessingKey={externalProcessingKey}
-          />
-        ) : null}
+          {tab === "today" ? (
+            <TodayView
+              records={records}
+              settings={settingsDraft}
+              onOpenRecord={(id) => {
+                setSelectedId(id);
+                setTab("home");
+                setPendingMiniJumpId(id);
+              }}
+              onOpenImage={(attachment, imageUrl) => setLightbox({ imageUrl, title: attachment.summary_80 || "添付画像" })}
+              onToggleGoogleTaskStatus={toggleGoogleTaskStatus}
+              externalProcessingKey={externalProcessingKey}
+            />
+          ) : null}
 
-        {tab === "week" ? (
-          <WeeklyView
-            weekStart={weekStart}
-            records={filteredRecords}
-            onPreviousWeek={() => setWeekStart((current) => addDays(current, -7))}
-            onNextWeek={() => setWeekStart((current) => addDays(current, 7))}
-            onThisWeek={() => setWeekStart(getMondayOfWeek(new Date()))}
-            onOpenRecord={(id) => {
-              setSelectedId(id);
-              setTab("home");
-              setPendingMiniJumpId(id);
-            }}
-            onOpenImage={(attachment, imageUrl) => setLightbox({ imageUrl, title: attachment.summary_80 || "添付画像" })}
-            onToggleGoogleTaskStatus={toggleGoogleTaskStatus}
-            externalProcessingKey={externalProcessingKey}
-          />
-        ) : null}
+          {tab === "week" ? (
+            <WeeklyView
+              weekStart={weekStart}
+              records={filteredRecords}
+              onPreviousWeek={() => setWeekStart((current) => addDays(current, -7))}
+              onNextWeek={() => setWeekStart((current) => addDays(current, 7))}
+              onThisWeek={() => setWeekStart(getMondayOfWeek(new Date()))}
+              onOpenRecord={(id) => {
+                setSelectedId(id);
+                setTab("home");
+                setPendingMiniJumpId(id);
+              }}
+              onOpenImage={(attachment, imageUrl) => setLightbox({ imageUrl, title: attachment.summary_80 || "添付画像" })}
+              onToggleGoogleTaskStatus={toggleGoogleTaskStatus}
+              externalProcessingKey={externalProcessingKey}
+            />
+          ) : null}
 
-        {tab === "compose" ? (
-          <ComposeView
-            draft={composeDraft}
-            loading={composeLoading}
-            aiStatus={composeAiStatus}
-            aiError={composeAiError}
-            aiMeta={composeAiMeta}
-            rawInputRef={composeRawInputRef}
-            confirmSectionRef={confirmSectionRef}
-            onDraftChange={(patch) => setComposeDraft((prev) => ({ ...prev, ...patch }))}
-            onAnalyze={handleAnalyze}
-            onSave={() => saveCompose()}
-            onSaveWithoutAi={() => saveCompose(true)}
-            onSaveDraft={() => void saveComposeDraft()}
-            onClear={() => {
-              setComposeDraft(blankForm(""));
-              setComposeAiStatus("none");
-              setComposeAiError("");
-              setComposeAiMeta(null);
-            }}
-            onGoHome={() => setTab("home")}
-          />
-        ) : null}
+          {tab === "compose" ? (
+            <ComposeView
+              draft={composeDraft}
+              loading={composeLoading}
+              aiStatus={composeAiStatus}
+              aiError={composeAiError}
+              aiMeta={composeAiMeta}
+              rawInputRef={composeRawInputRef}
+              confirmSectionRef={confirmSectionRef}
+              onDraftChange={(patch) => setComposeDraft((prev) => ({ ...prev, ...patch }))}
+              onAnalyze={handleAnalyze}
+              onSave={() => saveCompose()}
+              onSaveWithoutAi={() => saveCompose(true)}
+              onSaveDraft={() => void saveComposeDraft()}
+              onClear={() => {
+                setComposeDraft(blankForm(""));
+                setComposeAiStatus("none");
+                setComposeAiError("");
+                setComposeAiMeta(null);
+              }}
+              onGoHome={() => setTab("home")}
+            />
+          ) : null}
 
-        {tab === "settings" ? (
-          <SettingsView
-            settingsDraft={settingsDraft}
-            setSettingsDraft={setSettingsDraft}
-            settingsSaving={settingsSaving}
-            themeMode={themeMode}
-            embeddingIndexStats={embeddingIndexStats}
-            embeddingProgress={embeddingProgress}
-            embeddingCancelRef={embeddingCancelRef}
-            semanticIconDictionary={semanticIconDictionary}
-            semanticIconIndexStats={semanticIconIndexStats}
-            semanticIconProgress={semanticIconProgress}
-            backupSummary={backupSummary}
-            deletedRecordsSummary={deletedRecordsSummary}
-            backupProcessing={backupProcessing}
-            driveBackupLoading={driveBackupLoading}
-            driveImporting={driveImporting}
-            externalSyncing={externalSyncing}
-            webhookTestText={webhookTestText}
-            setWebhookTestText={setWebhookTestText}
-            webhookTestToken={webhookTestToken}
-            setWebhookTestToken={setWebhookTestToken}
-            webhookTestRunning={webhookTestRunning}
-            webhookTestReport={webhookTestReport}
-            setIsWebhookTestModalOpen={setIsWebhookTestModalOpen}
-            driveBackupRecords={driveBackupRecords}
-            driveBackupCheckedAt={driveBackupCheckedAt}
-            scriptableImportInputRef={scriptableImportInputRef}
-            scriptableImporting={scriptableImporting}
-            scriptableImportResult={scriptableImportResult}
-            deployInfoLoading={deployInfoLoading}
-            deployInfo={deployInfo}
-            handleSaveSettings={handleSaveSettings}
-            reloadSettings={reloadSettings}
-            changeThemeMode={changeThemeMode}
-            openPromptEditor={openPromptEditor}
-            rebuildEmbeddingIndex={rebuildEmbeddingIndex}
-            reloadEmbeddingIndexStats={reloadEmbeddingIndexStats}
-            rebuildSemanticIconDictionaryIndex={rebuildSemanticIconDictionaryIndex}
-            reassignSemanticIcons={reassignSemanticIcons}
-            resetSemanticIconsToDefault={resetSemanticIconsToDefault}
-            addSemanticIconEntry={addSemanticIconEntry}
-            runBackupQueue={runBackupQueue}
-            rebackupAllRecords={rebackupAllRecords}
-            loadDriveBackupList={loadDriveBackupList}
-            importMissingFromDrive={importMissingFromDrive}
-            syncExternalStatuses={syncExternalStatuses}
-            runShortcutWebhookTest={runShortcutWebhookTest}
-            handleScriptableImportFile={handleScriptableImportFile}
-            handleHardReloadApp={handleHardReloadApp}
-            handleClearAll={handleClearAll}
-          />
-        ) : null}
+          {tab === "settings" ? (
+            <SettingsView
+              settingsDraft={settingsDraft}
+              setSettingsDraft={setSettingsDraft}
+              settingsSaving={settingsSaving}
+              themeMode={themeMode}
+              embeddingIndexStats={embeddingIndexStats}
+              embeddingProgress={embeddingProgress}
+              embeddingCancelRef={embeddingCancelRef}
+              semanticIconDictionary={semanticIconDictionary}
+              semanticIconIndexStats={semanticIconIndexStats}
+              semanticIconProgress={semanticIconProgress}
+              backupSummary={backupSummary}
+              deletedRecordsSummary={deletedRecordsSummary}
+              backupProcessing={backupProcessing}
+              driveBackupLoading={driveBackupLoading}
+              driveImporting={driveImporting}
+              externalSyncing={externalSyncing}
+              webhookTestText={webhookTestText}
+              setWebhookTestText={setWebhookTestText}
+              webhookTestToken={webhookTestToken}
+              setWebhookTestToken={setWebhookTestToken}
+              webhookTestRunning={webhookTestRunning}
+              webhookTestReport={webhookTestReport}
+              setIsWebhookTestModalOpen={setIsWebhookTestModalOpen}
+              driveBackupRecords={driveBackupRecords}
+              driveBackupCheckedAt={driveBackupCheckedAt}
+              scriptableImportInputRef={scriptableImportInputRef}
+              scriptableImporting={scriptableImporting}
+              scriptableImportResult={scriptableImportResult}
+              deployInfoLoading={deployInfoLoading}
+              deployInfo={deployInfo}
+              handleSaveSettings={handleSaveSettings}
+              reloadSettings={reloadSettings}
+              changeThemeMode={changeThemeMode}
+              openPromptEditor={openPromptEditor}
+              rebuildEmbeddingIndex={rebuildEmbeddingIndex}
+              reloadEmbeddingIndexStats={reloadEmbeddingIndexStats}
+              rebuildSemanticIconDictionaryIndex={rebuildSemanticIconDictionaryIndex}
+              reassignSemanticIcons={reassignSemanticIcons}
+              resetSemanticIconsToDefault={resetSemanticIconsToDefault}
+              addSemanticIconEntry={addSemanticIconEntry}
+              runBackupQueue={runBackupQueue}
+              rebackupAllRecords={rebackupAllRecords}
+              loadDriveBackupList={loadDriveBackupList}
+              importMissingFromDrive={importMissingFromDrive}
+              syncExternalStatuses={syncExternalStatuses}
+              runShortcutWebhookTest={runShortcutWebhookTest}
+              handleScriptableImportFile={handleScriptableImportFile}
+              handleHardReloadApp={handleHardReloadApp}
+              handleClearAll={handleClearAll}
+            />
+          ) : null}
+        </div>
       </div>
 
       <div className="fixed bottom-[calc(6rem+env(safe-area-inset-bottom))] right-[max(1rem,env(safe-area-inset-right))] z-50 flex flex-col items-end gap-3 sm:right-[max(1.5rem,env(safe-area-inset-right))]">

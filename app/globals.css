@@ -174,6 +174,38 @@ textarea::placeholder {
   color: var(--subtle);
 }
 
+.cgmp-tab-slide-in-next {
+  animation: cgmpTabSlideInNext 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.cgmp-tab-slide-in-previous {
+  animation: cgmpTabSlideInPrevious 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes cgmpTabSlideInNext {
+  from {
+    opacity: 0.86;
+    transform: translate3d(42px, 0, 0);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes cgmpTabSlideInPrevious {
+  from {
+    opacity: 0.86;
+    transform: translate3d(-42px, 0, 0);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
 /* Compatibility layer while older component classes are migrated to tokens. */
 [data-theme="dark"] .bg-white,
 [data-theme="dark"] .bg-white\/95,
