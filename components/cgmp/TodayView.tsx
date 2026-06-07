@@ -42,6 +42,11 @@ type TimelineItem = TodayFlowItem & {
   color: string;
 };
 
+type UnprocessedReason = {
+  label: string;
+  tone: "cyan" | "emerald" | "amber" | "rose" | "slate";
+};
+
 const DAY_START_MINUTES = 6 * 60;
 const DAY_END_MINUTES = 24 * 60;
 const TIMELINE_RANGE = DAY_END_MINUTES - DAY_START_MINUTES;
@@ -73,6 +78,99 @@ function isGoogleTaskLinked(record: CGMPRecord) {
 
 function createdDateKey(record: CGMPRecord) {
   return getJstParts(record.created_at || record.updated_at).dateKey;
+}
+
+function isCreatedToday(record: CGMPRecord, todayKey: string) {
+  if (!record.created_at) return false;
+  return getJstParts(record.created_at).dateKey === todayKey;
+}
+
+function createdTimeLabel(record: CGMPRecord) {
+  if (!record.created_at) return "";
+  const parts = getJstParts(record.created_at);
+  return parts.time;
+}
+
+function booleanMeta(record: CGMPRecord, key: string) {
+  return Boolean((record as CGMPRecord & Record<string, unknown>)[key]);
+}
+
+function stringMeta(record: CGMPRecord, key: string) {
+  const value = (record as CGMPRecord & Record<string, unknown>)[key];
+  return typeof value === "string" ? value : "";
+}
+
+function getUnprocessedReason(record: CGMPRecord): UnprocessedReason | null {
+  if (record.action === "unclear") return { label: "action確認", tone: "amber" };
+  if (booleanMeta(record, "pending_ai") || record.ai_status === "pending_ai") return { label: "AI待ち", tone: "amber" };
+  if (record.ai_status === "error" || record.ai_status === "timeout") return { label: "AI失敗", tone: "rose" };
+  if (booleanMeta(record, "needsReview") || stringMeta(record, "confirmationStatus") === "pending") {
+    return { label: "確認待ち", tone: "amber" };
+  }
+  if (record.external_action_status === "pending_confirmation") return { label: "確認待ち", tone: "amber" };
+  if (record.external_action_status === "failed") return { label: "登録失敗", tone: "rose" };
+  if (record.action === "calendar" && record.external_action_status === "registered" && !record.google_calendar_event_id) {
+    return { label: "Calendar確認", tone: "amber" };
+  }
+  if (record.action === "reminder" && record.external_action_status === "registered" && !record.google_task_id) {
+    return { label: "Task確認", tone: "amber" };
+  }
+  if (record.backup_status === "backup_failed" || record.backup_status === "conflicted" || booleanMeta(record, "sync_error")) {
+    return { label: "同期失敗", tone: "rose" };
+  }
+  if (
+    record.backup_status === "pending_backup" ||
+    record.backup_status === "backing_up" ||
+    booleanMeta(record, "pending_sync")
+  ) {
+    return { label: "同期待ち", tone: "cyan" };
+  }
+
+  const attachments = record.attachments || [];
+  const failedAttachment = attachments.find(
+    (attachment) =>
+      attachment.analysis_status === "failed" ||
+      attachment.backup_status === "backup_failed" ||
+      attachment.backup_status === "conflicted" ||
+      attachment.blob_upload_status === "backup_failed" ||
+      attachment.blob_upload_status === "conflicted"
+  );
+  if (failedAttachment) {
+    return failedAttachment.analysis_status === "failed"
+      ? { label: "画像解析失敗", tone: "rose" }
+      : { label: "写真同期失敗", tone: "rose" };
+  }
+
+  const pendingAttachment = attachments.find(
+    (attachment) =>
+      attachment.analysis_status === "pending" ||
+      attachment.analysis_status === "analyzing" ||
+      attachment.backup_status === "pending_backup" ||
+      attachment.backup_status === "backing_up" ||
+      attachment.blob_upload_status === "pending_backup" ||
+      attachment.blob_upload_status === "backing_up"
+  );
+  if (pendingAttachment) {
+    return pendingAttachment.analysis_status === "pending" || pendingAttachment.analysis_status === "analyzing"
+      ? { label: "画像解析待ち", tone: "amber" }
+      : { label: "写真同期待ち", tone: "cyan" };
+  }
+
+  if ((record.action === "calendar" || record.action === "reminder") && !record.date) {
+    return { label: "日時確認", tone: "amber" };
+  }
+
+  return null;
+}
+
+function isUnprocessedRecord(record: CGMPRecord) {
+  return Boolean(getUnprocessedReason(record));
+}
+
+function getTodaysInboxRecords(records: CGMPRecord[], todayKey: string) {
+  return records
+    .filter((record) => isCreatedToday(record, todayKey) && isUnprocessedRecord(record))
+    .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)));
 }
 
 function compareByTime(left: CGMPRecord, right: CGMPRecord) {
@@ -431,6 +529,63 @@ function CompactLoopList({
   );
 }
 
+function TodaysInbox({
+  records,
+  onOpenRecord,
+}: {
+  records: CGMPRecord[];
+  onOpenRecord: (id: string) => void;
+}) {
+  return (
+    <section className={`${panelClass} mb-[calc(5rem+env(safe-area-inset-bottom,0px))]`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--accent)]">Today&apos;s Inbox</div>
+          <p className="mt-1 text-xs leading-5 text-[var(--muted)]">今日作成され、まだ処理が完了していない項目です。</p>
+        </div>
+        <Badge compact tone={records.length > 0 ? "amber" : "slate"}>{records.length}件</Badge>
+      </div>
+
+      {records.length > 0 ? (
+        <div className="mt-3 divide-y divide-[color:var(--border)]">
+          {records.slice(0, 3).map((record) => {
+            const reason = getUnprocessedReason(record) || { label: "確認待ち", tone: "amber" as const };
+            const title = record.title || record.raw_input || "（無題）";
+            return (
+              <button
+                key={record.id}
+                type="button"
+                onClick={() => onOpenRecord(record.id)}
+                className="grid w-full grid-cols-[1.7rem_minmax(0,1fr)_auto] items-center gap-2 py-2 text-left"
+              >
+                <span className="text-lg leading-none">{inferSemanticIcon(record)}</span>
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-semibold text-[var(--text)]">{title}</span>
+                  <span className="mt-0.5 block text-[11px] text-[var(--muted)]">{createdTimeLabel(record)}</span>
+                </span>
+                <Badge compact tone={reason.tone}>{reason.label}</Badge>
+              </button>
+            );
+          })}
+          {records.length > 3 ? (
+            <button
+              type="button"
+              onClick={() => onOpenRecord(records[3].id)}
+              className="w-full py-2 text-right text-xs font-semibold text-[var(--accent)]"
+            >
+              すべて見る（ほか {records.length - 3}件）
+            </button>
+          ) : null}
+        </div>
+      ) : (
+        <div className="mt-3 rounded-2xl border border-dashed border-[color:var(--border)] px-4 py-3 text-sm text-[var(--subtle)]">
+          今日の未処理はありません。
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function TodayView({
   records,
   settings,
@@ -514,7 +669,7 @@ export function TodayView({
         color,
       };
     });
-    const openLoops = [...todayFloatingTasksIncomplete, ...carryOver];
+    const todayInbox = getTodaysInboxRecords(records, todayKey);
 
     return {
       todayTasksAll,
@@ -524,9 +679,9 @@ export function TodayView({
       load,
       flowItems,
       timelineItems,
-      openLoops,
       notesToday,
       carryOver,
+      todayInbox,
     };
   }, [nowMinutes, nowTimeLabel, records, settings, today, todayKey]);
 
@@ -599,20 +754,14 @@ export function TodayView({
       />
 
       <CompactLoopList
-        title="Open Loops"
-        tone="amber"
-        records={cockpit.openLoops}
-        emptyText="時間軸に載らない未完了の輪っかはありません。"
-        onOpenRecord={onOpenRecord}
-      />
-
-      <CompactLoopList
         title="Today's Notes"
         tone="cyan"
         records={cockpit.notesToday}
         emptyText="今日作成されたnoteはまだありません。思いついたことをメモしておきましょう。"
         onOpenRecord={onOpenRecord}
       />
+
+      <TodaysInbox records={cockpit.todayInbox} onOpenRecord={onOpenRecord} />
     </div>
   );
 }
