@@ -144,7 +144,7 @@ export function IssueNotesView({
   const [draft, setDraft] = useState<CGMPIssueNote | null>(null);
   const [query, setQuery] = useState("");
   const [recordQuery, setRecordQuery] = useState("");
-  const [previewMode, setPreviewMode] = useState<"edit" | "preview">("edit");
+  const [previewMode, setPreviewMode] = useState<"viewer" | "editor">("viewer");
   const [saving, setSaving] = useState(false);
   const [captioningId, setCaptioningId] = useState("");
   const imageInputRef = useRef<HTMLInputElement | null>(null);
@@ -214,7 +214,7 @@ export function IssueNotesView({
     if (!issue) return;
     setSelectedId(issue.id);
     setDraft(issue);
-    setPreviewMode("edit");
+    setPreviewMode("editor");
   }
 
   async function handleSave() {
@@ -320,7 +320,7 @@ export function IssueNotesView({
                   key={issue.id}
                   onClick={() => {
                     setSelectedId(issue.id);
-                    setPreviewMode("edit");
+                    setPreviewMode("viewer");
                   }}
                   className={`w-full rounded-2xl border p-3 text-left transition ${
                     issue.id === draft?.id
@@ -354,182 +354,224 @@ export function IssueNotesView({
             <>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <div className="text-[11px] uppercase tracking-[0.3em] text-[var(--accent)]">Editor</div>
+                  <div className="text-[11px] uppercase tracking-[0.3em] text-[var(--accent)]">
+                    {previewMode === "viewer" ? "Viewer" : "Editor"}
+                  </div>
                   <h2 className="mt-1 text-xl font-semibold text-[var(--text)]">{draft.title || "Untitled Issue"}</h2>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <button type="button" onClick={() => updateDraft({ pinned: !draft.pinned })} className={secondaryButtonClass}>
-                    {draft.pinned ? "ピン解除" : "ピン留め"}
-                  </button>
-                  <button type="button" disabled={saving} onClick={handleSave} className={primaryButtonClass}>
-                    {saving ? "保存中..." : "保存"}
-                  </button>
+                  {previewMode === "viewer" ? (
+                    <button type="button" onClick={() => setPreviewMode("editor")} className={primaryButtonClass}>
+                      編集
+                    </button>
+                  ) : (
+                    <>
+                      <button type="button" onClick={() => updateDraft({ pinned: !draft.pinned })} className={secondaryButtonClass}>
+                        {draft.pinned ? "ピン解除" : "ピン留め"}
+                      </button>
+                      <button type="button" disabled={saving} onClick={handleSave} className={primaryButtonClass}>
+                        {saving ? "保存中..." : "保存"}
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
-
-              <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
-                <label className="block">
-                  <span className="text-sm font-semibold text-[var(--text)]">Title</span>
-                  <input value={draft.title} onChange={(event) => updateDraft({ title: event.target.value })} className={fieldClass} />
-                </label>
-                <label className="block">
-                  <span className="text-sm font-semibold text-[var(--text)]">Status</span>
-                  <select
-                    value={draft.status}
-                    onChange={(event) => updateDraft({ status: event.target.value as CGMPIssueNoteStatus })}
-                    className={`${fieldClass} min-w-[140px]`}
-                  >
-                    {STATUS_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-
-              <label className="block">
-                <span className="text-sm font-semibold text-[var(--text)]">Purpose</span>
-                <textarea
-                  value={draft.purpose}
-                  onChange={(event) => updateDraft({ purpose: event.target.value })}
-                  className={`${textareaClass} min-h-[84px]`}
-                  placeholder="このIssue Noteで何を育てたいか"
-                />
-              </label>
 
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex gap-2">
                   <button
                     type="button"
-                    onClick={() => setPreviewMode("edit")}
-                    className={previewMode === "edit" ? primaryButtonClass : secondaryButtonClass}
+                    onClick={() => setPreviewMode("viewer")}
+                    className={previewMode === "viewer" ? primaryButtonClass : secondaryButtonClass}
                   >
-                    編集
+                    Viewer
                   </button>
                   <button
                     type="button"
-                    onClick={() => setPreviewMode("preview")}
-                    className={previewMode === "preview" ? primaryButtonClass : secondaryButtonClass}
+                    onClick={() => setPreviewMode("editor")}
+                    className={previewMode === "editor" ? primaryButtonClass : secondaryButtonClass}
                   >
-                    Preview
+                    Editor
                   </button>
                 </div>
                 <Badge compact tone={statusMeta.tone}>{statusMeta.label}</Badge>
               </div>
 
-              {previewMode === "edit" ? (
-                <div className="grid gap-3">
-                  <label className="block">
-                    <span className="text-sm font-semibold text-[var(--text)]">Context markdown</span>
-                    <textarea
-                      value={draft.context_markdown}
-                      onChange={(event) => updateDraft({ context_markdown: event.target.value })}
-                      className={`${textareaClass} min-h-[110px] font-mono`}
-                      placeholder="背景、前提、関連する論点"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="text-sm font-semibold text-[var(--text)]">Body markdown</span>
-                    <textarea
-                      value={draft.body_markdown}
-                      onChange={(event) => updateDraft({ body_markdown: event.target.value })}
-                      className={`${textareaClass} min-h-[220px] font-mono`}
-                      placeholder="# 見出し&#10;- 箇条書き&#10;- [ ] チェック"
-                    />
-                  </label>
-                </div>
-              ) : (
-                <div className={`${softPanelClass} min-h-[220px]`}>{renderedPreview}</div>
-              )}
-
-              <div className={`${softPanelClass} space-y-3`}>
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h3 className="text-base font-semibold text-[var(--text)]">画像</h3>
-                  <div>
-                    <input
-                      ref={imageInputRef}
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      className="hidden"
-                      onChange={(event) => {
-                        const files = Array.from(event.target.files || []);
-                        event.currentTarget.value = "";
-                        void handleAddImages(files);
-                      }}
-                    />
-                    <button type="button" onClick={() => imageInputRef.current?.click()} className={secondaryButtonClass}>
-                      画像追加
-                    </button>
+              {previewMode === "viewer" ? (
+                <div className="space-y-4">
+                  <div className={`${softPanelClass} space-y-3`}>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {draft.pinned ? <Badge compact tone="amber">Pinned</Badge> : null}
+                      <Badge compact tone={statusMeta.tone}>{statusMeta.label}</Badge>
+                      <span className="text-xs text-[var(--muted)]">updated {formatJstDateTime(draft.updated_at)}</span>
+                    </div>
+                    {draft.purpose ? (
+                      <p className="text-sm leading-6 text-[var(--text)]">{draft.purpose}</p>
+                    ) : (
+                      <p className="text-sm text-[var(--muted)]">目的はまだ書かれていません。</p>
+                    )}
                   </div>
-                </div>
-                {draft.image_attachments.length === 0 ? (
-                  <p className="text-sm text-[var(--muted)]">まだ画像はありません。</p>
-                ) : (
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {draft.image_attachments.map((image) => {
-                      const url = imageUrls.get(image.id);
-                      return (
-                        <div key={image.id} className="overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[var(--card)]">
-                          {url ? <img src={url} alt={image.ai_caption || image.filename || "Issue image"} className="h-40 w-full object-cover" /> : null}
-                          <div className="space-y-2 p-3">
-                            <p className="text-sm font-semibold text-[var(--text)]">{image.ai_caption || image.filename || image.id}</p>
-                            <button
-                              type="button"
-                              disabled={captioningId === image.id}
-                              onClick={() => void handleCaption(image.id)}
-                              className={secondaryButtonClass}
-                            >
-                              {captioningId === image.id ? "解析中..." : "AI caption"}
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              <div className={`${softPanelClass} space-y-3`}>
-                <h3 className="text-base font-semibold text-[var(--text)]">Linked records</h3>
-                <input
-                  value={recordQuery}
-                  onChange={(event) => setRecordQuery(event.target.value)}
-                  placeholder="既存recordを検索してリンク"
-                  className={fieldClass}
-                />
-                {candidateRecords.length ? (
-                  <div className="space-y-2">
-                    {candidateRecords.map((record) => (
-                      <button
-                        key={record.id}
-                        type="button"
-                        onClick={() => addLinkedRecord(record.id)}
-                        className="w-full rounded-2xl border border-[color:var(--border)] bg-[var(--card)] p-3 text-left hover:border-[color:var(--accent)]"
-                      >
-                        <div className="text-sm font-semibold text-[var(--text)]">{record.title}</div>
-                        <div className="text-xs text-[var(--muted)]">{record.summary}</div>
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-                {linkedRecords.length === 0 ? (
-                  <p className="text-sm text-[var(--muted)]">リンクされたrecordはありません。</p>
-                ) : (
-                  <div className="space-y-2">
-                    {linkedRecords.map((record) => (
-                      <div key={record.id} className="flex items-start gap-2 rounded-2xl border border-[color:var(--border)] bg-[var(--card)] p-3">
-                        <button type="button" onClick={() => onOpenRecord(record.id)} className="min-w-0 flex-1 text-left">
+                  <div className={`${softPanelClass} min-h-[220px]`}>{renderedPreview}</div>
+                  {linkedRecords.length > 0 ? (
+                    <div className={`${softPanelClass} space-y-2`}>
+                      <h3 className="text-base font-semibold text-[var(--text)]">Linked records</h3>
+                      {linkedRecords.map((record) => (
+                        <button
+                          key={record.id}
+                          type="button"
+                          onClick={() => onOpenRecord(record.id)}
+                          className="w-full rounded-2xl border border-[color:var(--border)] bg-[var(--card)] p-3 text-left hover:border-[color:var(--accent)]"
+                        >
                           <div className="truncate text-sm font-semibold text-[var(--text)]">{record.title}</div>
                           <div className="line-clamp-2 text-xs text-[var(--muted)]">{record.summary}</div>
                         </button>
-                        <button type="button" onClick={() => removeLinkedRecord(record.id)} className="text-sm font-semibold text-[var(--danger)]">
-                          解除
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <>
+                  <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+                    <label className="block">
+                      <span className="text-sm font-semibold text-[var(--text)]">Title</span>
+                      <input value={draft.title} onChange={(event) => updateDraft({ title: event.target.value })} className={fieldClass} />
+                    </label>
+                    <label className="block">
+                      <span className="text-sm font-semibold text-[var(--text)]">Status</span>
+                      <select
+                        value={draft.status}
+                        onChange={(event) => updateDraft({ status: event.target.value as CGMPIssueNoteStatus })}
+                        className={`${fieldClass} min-w-[140px]`}
+                      >
+                        {STATUS_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+
+                  <label className="block">
+                    <span className="text-sm font-semibold text-[var(--text)]">Purpose</span>
+                    <textarea
+                      value={draft.purpose}
+                      onChange={(event) => updateDraft({ purpose: event.target.value })}
+                      className={`${textareaClass} min-h-[84px]`}
+                      placeholder="このIssue Noteで何を育てたいか"
+                    />
+                  </label>
+
+                  <div className="grid gap-3">
+                    <label className="block">
+                      <span className="text-sm font-semibold text-[var(--text)]">Context markdown</span>
+                      <textarea
+                        value={draft.context_markdown}
+                        onChange={(event) => updateDraft({ context_markdown: event.target.value })}
+                        className={`${textareaClass} min-h-[110px] font-mono`}
+                        placeholder="背景、前提、関連する論点"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-sm font-semibold text-[var(--text)]">Body markdown</span>
+                      <textarea
+                        value={draft.body_markdown}
+                        onChange={(event) => updateDraft({ body_markdown: event.target.value })}
+                        className={`${textareaClass} min-h-[220px] font-mono`}
+                        placeholder="# 見出し&#10;- 箇条書き&#10;- [ ] チェック"
+                      />
+                    </label>
+                  </div>
+
+                  <div className={`${softPanelClass} space-y-3`}>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h3 className="text-base font-semibold text-[var(--text)]">画像</h3>
+                      <div>
+                        <input
+                          ref={imageInputRef}
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          className="hidden"
+                          onChange={(event) => {
+                            const files = Array.from(event.target.files || []);
+                            event.currentTarget.value = "";
+                            void handleAddImages(files);
+                          }}
+                        />
+                        <button type="button" onClick={() => imageInputRef.current?.click()} className={secondaryButtonClass}>
+                          画像追加
                         </button>
                       </div>
-                    ))}
+                    </div>
+                    {draft.image_attachments.length === 0 ? (
+                      <p className="text-sm text-[var(--muted)]">まだ画像はありません。</p>
+                    ) : (
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        {draft.image_attachments.map((image) => {
+                          const url = imageUrls.get(image.id);
+                          return (
+                            <div key={image.id} className="overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[var(--card)]">
+                              {url ? <img src={url} alt={image.ai_caption || image.filename || "Issue image"} className="h-40 w-full object-cover" /> : null}
+                              <div className="space-y-2 p-3">
+                                <p className="text-sm font-semibold text-[var(--text)]">{image.ai_caption || image.filename || image.id}</p>
+                                <button
+                                  type="button"
+                                  disabled={captioningId === image.id}
+                                  onClick={() => void handleCaption(image.id)}
+                                  className={secondaryButtonClass}
+                                >
+                                  {captioningId === image.id ? "解析中..." : "AI caption"}
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
+
+                  <div className={`${softPanelClass} space-y-3`}>
+                    <h3 className="text-base font-semibold text-[var(--text)]">Linked records</h3>
+                    <input
+                      value={recordQuery}
+                      onChange={(event) => setRecordQuery(event.target.value)}
+                      placeholder="既存recordを検索してリンク"
+                      className={fieldClass}
+                    />
+                    {candidateRecords.length ? (
+                      <div className="space-y-2">
+                        {candidateRecords.map((record) => (
+                          <button
+                            key={record.id}
+                            type="button"
+                            onClick={() => addLinkedRecord(record.id)}
+                            className="w-full rounded-2xl border border-[color:var(--border)] bg-[var(--card)] p-3 text-left hover:border-[color:var(--accent)]"
+                          >
+                            <div className="text-sm font-semibold text-[var(--text)]">{record.title}</div>
+                            <div className="text-xs text-[var(--muted)]">{record.summary}</div>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                    {linkedRecords.length === 0 ? (
+                      <p className="text-sm text-[var(--muted)]">リンクされたrecordはありません。</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {linkedRecords.map((record) => (
+                          <div key={record.id} className="flex items-start gap-2 rounded-2xl border border-[color:var(--border)] bg-[var(--card)] p-3">
+                            <button type="button" onClick={() => onOpenRecord(record.id)} className="min-w-0 flex-1 text-left">
+                              <div className="truncate text-sm font-semibold text-[var(--text)]">{record.title}</div>
+                              <div className="line-clamp-2 text-xs text-[var(--muted)]">{record.summary}</div>
+                            </button>
+                            <button type="button" onClick={() => removeLinkedRecord(record.id)} className="text-sm font-semibold text-[var(--danger)]">
+                              解除
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
 
               <div className="flex flex-wrap justify-between gap-2 border-t border-[color:var(--border)] pt-4">
                 <button type="button" onClick={() => void onArchiveIssue(draft.id)} className={secondaryButtonClass}>
