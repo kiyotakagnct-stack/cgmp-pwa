@@ -862,6 +862,9 @@ function normalizeIssueNoteImage(value: unknown): CGMPIssueNoteImage | null {
     height: Number.isFinite(Number(source.height)) ? Number(source.height) : undefined,
     blob_key: String(source.blob_key),
     drive_file_id: source.drive_file_id ? String(source.drive_file_id) : "",
+    backup_status: source.backup_status || "local_only",
+    last_backup_at: source.last_backup_at || "",
+    checksum: source.checksum || "",
     ai_caption: source.ai_caption ? String(source.ai_caption) : "",
     ai_captioned_at: source.ai_captioned_at ? String(source.ai_captioned_at) : "",
   };

@@ -1,25 +1,28 @@
 import {
   applyRemoteRecordDeletion,
   enqueueBackup,
+  getIssueNote,
   loadAllRecords,
   loadBackupQueue,
   loadDeletedRecords,
+  loadIssueNotes,
   putRecordWithoutBackup,
   removeBackupQueueItem,
+  upsertIssueNote,
   upsertDeletedRecord,
   updateAttachmentBackupState,
   updateBackupQueueItem,
   updateRecordBackupState,
 } from "./storage";
 import { getImageBlob, putImageBlob } from "@/lib/db/imageBlobStore";
-import type { CGMPBackupSummary, CGMPDeletedRecord, CGMPRecord } from "./types";
+import type { CGMPBackupSummary, CGMPDeletedRecord, CGMPIssueNote, CGMPIssueNoteImage, CGMPRecord } from "./types";
 import type { ImageAttachment } from "@/types/image";
 
 export type BackupProcessItemResult = {
   ok: boolean;
   recordId: string;
   title?: string;
-  itemType?: "record" | "attachment" | "delete";
+  itemType?: "record" | "attachment" | "delete" | "issue" | "issue_image";
   skipped?: boolean;
   attachmentId?: string;
   driveFileId?: string;
@@ -65,6 +68,19 @@ type DriveBackupRecord = {
   unchanged?: boolean;
 };
 
+type DriveBackupIssueNote = {
+  id: string;
+  title: string;
+  purpose?: string;
+  status?: string;
+  backed_up_at: string;
+  checksum: string;
+  file_id: string;
+  issue?: Partial<CGMPIssueNote>;
+  error?: string | boolean;
+  unchanged?: boolean;
+};
+
 type DriveManifest = {
   deleted_records?: Record<string, CGMPDeletedRecord>;
   attachments?: Record<
@@ -78,18 +94,39 @@ type DriveManifest = {
       backed_up_at?: string;
     }
   >;
+  issue_notes?: Record<
+    string,
+    {
+      file_id?: string;
+      checksum?: string;
+      updated_at?: string;
+      backed_up_at?: string;
+    }
+  >;
+  issue_images?: Record<
+    string,
+    {
+      issue_id?: string;
+      image_id?: string;
+      file_id?: string;
+      checksum?: string;
+      updated_at?: string;
+      backed_up_at?: string;
+    }
+  >;
 };
 
 type RestoreResponse = {
   ok?: boolean;
   records?: DriveBackupRecord[];
+  issue_notes?: DriveBackupIssueNote[];
   tombstones?: Array<{ id: string; tombstone?: CGMPDeletedRecord; error?: string }>;
   manifest?: DriveManifest;
   error?: string;
 };
 
 type DriveImportProgress = {
-  stage: "fetching" | "tombstones" | "records" | "attachments" | "done";
+  stage: "fetching" | "tombstones" | "records" | "attachments" | "issue_notes" | "issue_images" | "done";
   message?: string;
   checked?: number;
   total?: number;
@@ -98,6 +135,8 @@ type DriveImportProgress = {
   merged?: number;
   deleted?: number;
   hydratedAttachments?: number;
+  importedIssues?: number;
+  hydratedIssueImages?: number;
 };
 
 type DriveImportOptions = {
@@ -238,9 +277,51 @@ async function getRecordBackupChecksum(record: CGMPRecord) {
   return sha256Text(stableStringify(recordBackupSource(record)));
 }
 
+function issueImageBackupSource(image: CGMPIssueNoteImage) {
+  return {
+    id: image.id,
+    created_at: image.created_at,
+    filename: image.filename || "",
+    mime_type: image.mime_type,
+    width: image.width || 0,
+    height: image.height || 0,
+    blob_key: image.blob_key,
+    drive_file_id: image.drive_file_id || "",
+    ai_caption: image.ai_caption || "",
+    ai_captioned_at: image.ai_captioned_at || "",
+  };
+}
+
+function issueNoteBackupSource(issue: CGMPIssueNote) {
+  return {
+    schema_version: issue.schema_version,
+    id: issue.id,
+    title: issue.title,
+    purpose: issue.purpose,
+    context_markdown: issue.context_markdown,
+    body_markdown: issue.body_markdown,
+    status: issue.status,
+    pinned: issue.pinned,
+    linked_record_ids: issue.linked_record_ids || [],
+    image_attachments: (issue.image_attachments || []).map(issueImageBackupSource),
+    created_at: issue.created_at,
+    updated_at: issue.updated_at,
+  };
+}
+
+async function getIssueNoteBackupChecksum(issue: CGMPIssueNote) {
+  return sha256Text(stableStringify(issueNoteBackupSource(issue)));
+}
+
 function hasBackupAfterLatestUpdate(record: CGMPRecord) {
   const lastBackupAt = new Date(record.last_backup_at || "").getTime();
   const updatedAt = new Date(record.updated_at || record.created_at || "").getTime();
+  return Number.isFinite(lastBackupAt) && Number.isFinite(updatedAt) && lastBackupAt >= updatedAt;
+}
+
+function hasIssueBackupAfterLatestUpdate(issue: CGMPIssueNote) {
+  const lastBackupAt = new Date(issue.last_backup_at || "").getTime();
+  const updatedAt = new Date(issue.updated_at || issue.created_at || "").getTime();
   return Number.isFinite(lastBackupAt) && Number.isFinite(updatedAt) && lastBackupAt >= updatedAt;
 }
 
@@ -272,6 +353,16 @@ async function shouldSkipRecordUpload(record: CGMPRecord, options: BackupRunOpti
     skip: options.force
       ? false
       : Boolean(record.backup_checksum && record.backup_checksum === checksum && hasBackupAfterLatestUpdate(record)),
+  };
+}
+
+async function shouldSkipIssueNoteUpload(issue: CGMPIssueNote, options: BackupRunOptions = {}) {
+  const checksum = await getIssueNoteBackupChecksum(issue);
+  return {
+    checksum,
+    skip: options.force
+      ? false
+      : Boolean(issue.checksum && issue.checksum === checksum && hasIssueBackupAfterLatestUpdate(issue)),
   };
 }
 
@@ -476,8 +567,123 @@ export async function backupAttachment(record: CGMPRecord, attachment: ImageAtta
   };
 }
 
+async function backupIssueImage(issue: CGMPIssueNote, image: CGMPIssueNoteImage): Promise<BackupProcessItemResult> {
+  const startedAt = performance.now();
+  const blobStartedAt = performance.now();
+  const previewBlob = await getImageBlob(image.blob_key);
+  if (!previewBlob) {
+    return {
+      ok: false,
+      recordId: issue.id,
+      title: issue.title || issue.id,
+      itemType: "issue_image",
+      attachmentId: image.id,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      blobElapsedMs: Math.round(performance.now() - blobStartedAt),
+      error: "ISSUE_IMAGE_BLOB_NOT_FOUND",
+    };
+  }
+
+  const blobElapsedMs = Math.round(performance.now() - blobStartedAt);
+  const formData = new FormData();
+  formData.append("issueId", issue.id);
+  formData.append("image", JSON.stringify(image));
+  formData.append("preview", previewBlob, "preview.jpg");
+
+  const uploadStartedAt = performance.now();
+  const response = await fetch("/api/backup/issue-image", {
+    method: "POST",
+    body: formData,
+  });
+  const uploadElapsedMs = Math.round(performance.now() - uploadStartedAt);
+  const payload = (await response.json().catch(() => ({}))) as BackupProcessItemResult & {
+    ok?: boolean;
+    detail?: string;
+    driveFileId?: string;
+  };
+  if (!response.ok || !payload.ok) {
+    return {
+      ok: false,
+      recordId: issue.id,
+      title: issue.title || issue.id,
+      itemType: "issue_image",
+      attachmentId: image.id,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      blobElapsedMs,
+      uploadElapsedMs,
+      previewSizeBytes: previewBlob.size,
+      error: payload.detail || payload.error || "ISSUE_IMAGE_BACKUP_REQUEST_FAILED",
+    };
+  }
+
+  return {
+    ok: true,
+    recordId: issue.id,
+    title: issue.title || issue.id,
+    itemType: "issue_image",
+    attachmentId: image.id,
+    driveFileId: payload.driveFileId,
+    checksum: payload.checksum,
+    backedUpAt: payload.backedUpAt,
+    elapsedMs: Math.round(performance.now() - startedAt),
+    blobElapsedMs,
+    uploadElapsedMs,
+    previewSizeBytes: previewBlob.size,
+  };
+}
+
+async function backupIssueNote(issue: CGMPIssueNote, options: BackupRunOptions = {}): Promise<BackupProcessItemResult> {
+  const startedAt = performance.now();
+  const { skip, checksum } = await shouldSkipIssueNoteUpload(issue, options);
+  if (skip) {
+    return {
+      ok: true,
+      recordId: issue.id,
+      title: issue.title || issue.id,
+      itemType: "issue",
+      skipped: true,
+      driveFileId: issue.drive_file_id,
+      checksum,
+      backedUpAt: issue.last_backup_at,
+      elapsedMs: Math.round(performance.now() - startedAt),
+    };
+  }
+
+  const response = await fetch("/api/backup/issue-note", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ issue }),
+  });
+  const payload = (await response.json().catch(() => ({}))) as BackupProcessResponse & BackupProcessItemResult;
+  if (!response.ok || !payload.ok) {
+    return {
+      ok: false,
+      recordId: issue.id,
+      title: issue.title || issue.id,
+      itemType: "issue",
+      elapsedMs: Math.round(performance.now() - startedAt),
+      error: payload.detail || payload.error || "DRIVE_ISSUE_NOTE_SAVE_FAILED",
+    };
+  }
+  return {
+    ok: true,
+    recordId: issue.id,
+    title: issue.title || issue.id,
+    itemType: "issue",
+    driveFileId: payload.driveFileId,
+    checksum,
+    backedUpAt: payload.backedUpAt,
+    elapsedMs: Math.round(performance.now() - startedAt),
+  };
+}
+
 export async function processBackupQueue(options: BackupRunOptions = {}) {
-  const [records, queue, tombstones] = await Promise.all([loadAllRecords(), loadBackupQueue(), loadDeletedRecords()]);
+  const [records, queue, tombstones, issueNotes] = await Promise.all([
+    loadAllRecords(),
+    loadBackupQueue(),
+    loadDeletedRecords(),
+    loadIssueNotes(true),
+  ]);
   const backupableRecords = records.filter((record) => record.ai_status !== "pending_ai");
   const recordIds = new Set(backupableRecords.map((record) => record.id));
   const queuedIds = new Set(queue.map((item) => item.id));
@@ -542,8 +748,12 @@ export async function processBackupQueue(options: BackupRunOptions = {}) {
   const recordPlans = Array.from(plannedRecordIds.entries())
     .sort(([, leftCreatedAt], [, rightCreatedAt]) => leftCreatedAt.localeCompare(rightCreatedAt))
     .map(([recordId]) => recordId);
+  const issuePlans = issueNotes
+    .filter((issue) => options.force || issue.backup_status !== "backed_up" || (issue.image_attachments || []).some((image) => image.backup_status !== "backed_up" || !image.drive_file_id))
+    .sort((left, right) => (left.updated_at || left.created_at).localeCompare(right.updated_at || right.created_at))
+    .map((issue) => issue.id);
 
-  const totalUnits = dueTombstones.length + recordPlans.length;
+  const totalUnits = dueTombstones.length + recordPlans.length + issuePlans.length;
   const recordResults = await mapWithConcurrency(recordPlans, BACKUP_CONCURRENCY, async (recordId) => {
     const result = await processSingleRecordBackup(recordId, {
       respectRetry: true,
@@ -569,6 +779,31 @@ export async function processBackupQueue(options: BackupRunOptions = {}) {
     return result;
   });
   results.push(...recordResults.flat());
+
+  const issueResults = await mapWithConcurrency(issuePlans, BACKUP_CONCURRENCY, async (issueId) => {
+    const result = await processSingleIssueNoteBackup(issueId, {
+      force: options.force,
+      onStep: (step) => {
+        options.onProgress?.({
+          completed: completedUnits,
+          total: totalUnits,
+          currentTitle: step.currentTitle,
+          stage: step.stage,
+          results: step.results || [],
+        });
+      },
+    });
+    completedUnits += 1;
+    options.onProgress?.({
+      completed: completedUnits,
+      total: totalUnits,
+      currentTitle: result[0]?.title || issueId,
+      stage: "issue_group_done",
+      results: [],
+    });
+    return result;
+  });
+  results.push(...issueResults.flat());
 
   return results;
 }
@@ -786,6 +1021,99 @@ export async function processSingleRecordBackup(
   return results;
 }
 
+export async function processSingleIssueNoteBackup(
+  issueId: string,
+  options: SingleRecordBackupOptions = {}
+) {
+  const results: BackupProcessItemResult[] = [];
+  const loaded = await getIssueNote(issueId);
+  if (!loaded) {
+    const result: BackupProcessItemResult = {
+      ok: false,
+      recordId: issueId,
+      title: issueId,
+      itemType: "issue",
+      elapsedMs: 0,
+      error: "ISSUE_NOTE_NOT_FOUND",
+    };
+    options.onStep?.({ currentTitle: issueId, stage: "issue_not_found", results: [result] });
+    return [result];
+  }
+
+  let issue = loaded;
+  const title = issue.title || issue.id;
+  options.onStep?.({ currentTitle: title, stage: "issue_loaded" });
+
+  for (const image of issue.image_attachments || []) {
+    if (!options.force && image.backup_status === "backed_up" && image.drive_file_id) continue;
+
+    options.onStep?.({ currentTitle: title, stage: "issue_image_uploading" });
+    issue = {
+      ...issue,
+      image_attachments: issue.image_attachments.map((item) =>
+        item.id === image.id
+          ? {
+              ...item,
+              backup_status: "backing_up",
+            }
+          : item
+      ),
+    };
+    await upsertIssueNote(issue);
+
+    const latestImage = issue.image_attachments.find((item) => item.id === image.id) || image;
+    const imageResult = await backupIssueImage(issue, latestImage);
+    results.push(imageResult);
+    options.onStep?.({
+      currentTitle: title,
+      stage: imageResult.ok ? "issue_image_done" : "issue_image_failed",
+      results: [imageResult],
+    });
+
+    issue = {
+      ...issue,
+      image_attachments: issue.image_attachments.map((item) =>
+        item.id === image.id
+          ? {
+              ...item,
+              drive_file_id: imageResult.ok ? imageResult.driveFileId || item.drive_file_id || "" : item.drive_file_id || "",
+              backup_status: imageResult.ok ? "backed_up" : "backup_failed",
+              last_backup_at: imageResult.ok ? imageResult.backedUpAt || new Date().toISOString() : item.last_backup_at || "",
+              checksum: imageResult.ok ? imageResult.checksum || item.checksum || "" : item.checksum || "",
+            }
+          : item
+      ),
+      backup_status: imageResult.ok ? issue.backup_status : "backup_failed",
+    };
+    await upsertIssueNote(issue);
+  }
+
+  options.onStep?.({ currentTitle: title, stage: "issue_uploading" });
+  issue = {
+    ...((await getIssueNote(issue.id)) || issue),
+    backup_status: "backing_up",
+  };
+  await upsertIssueNote(issue);
+  const issueResult = await backupIssueNote(issue, { force: options.force });
+  results.push(issueResult);
+  options.onStep?.({
+    currentTitle: title,
+    stage: issueResult.ok ? "issue_done" : "issue_failed",
+    results: [issueResult],
+  });
+
+  const latestIssue = (await getIssueNote(issue.id)) || issue;
+  await upsertIssueNote({
+    ...latestIssue,
+    backup_status: issueResult.ok ? "backed_up" : "backup_failed",
+    drive_file_id: issueResult.ok ? issueResult.driveFileId || latestIssue.drive_file_id || "" : latestIssue.drive_file_id || "",
+    last_backup_at: issueResult.ok ? issueResult.backedUpAt || new Date().toISOString() : latestIssue.last_backup_at || "",
+    checksum: issueResult.ok ? issueResult.checksum || latestIssue.checksum || "" : latestIssue.checksum || "",
+  });
+
+  return results;
+}
+
 export async function enqueueAllRecordsForBackup() {
   const records = await loadAllRecords();
   const backupableRecords = records.filter((record) => record.ai_status !== "pending_ai");
@@ -794,7 +1122,7 @@ export async function enqueueAllRecordsForBackup() {
 }
 
 export async function getBackupStatus(): Promise<CGMPBackupSummary> {
-  const [allRecords, queue] = await Promise.all([loadAllRecords(), loadBackupQueue()]);
+  const [allRecords, issueNotes, queue] = await Promise.all([loadAllRecords(), loadIssueNotes(true), loadBackupQueue()]);
   const records = allRecords.filter((record) => record.ai_status !== "pending_ai");
   const summary: CGMPBackupSummary = {
     localOnly: 0,
@@ -817,6 +1145,27 @@ export async function getBackupStatus(): Promise<CGMPBackupSummary> {
 
     if (record.last_backup_at && (!summary.lastBackupAt || record.last_backup_at > summary.lastBackupAt)) {
       summary.lastBackupAt = record.last_backup_at;
+    }
+  }
+
+  for (const issue of issueNotes) {
+    const statuses = [issue.backup_status, ...issue.image_attachments.map((image) => image.backup_status)];
+    for (const status of statuses) {
+      if (status === "pending_backup") summary.pending += 1;
+      else if (status === "backing_up") summary.backingUp += 1;
+      else if (status === "backed_up") summary.backedUp += 1;
+      else if (status === "backup_failed") summary.failed += 1;
+      else if (status === "conflicted") summary.conflicted += 1;
+      else summary.localOnly += 1;
+    }
+
+    if (issue.last_backup_at && (!summary.lastBackupAt || issue.last_backup_at > summary.lastBackupAt)) {
+      summary.lastBackupAt = issue.last_backup_at;
+    }
+    for (const image of issue.image_attachments) {
+      if (image.last_backup_at && (!summary.lastBackupAt || image.last_backup_at > summary.lastBackupAt)) {
+        summary.lastBackupAt = image.last_backup_at;
+      }
     }
   }
 
@@ -866,6 +1215,32 @@ function isRestorableRecord(value: Partial<CGMPRecord> | undefined): value is CG
   return Boolean(value?.id && value?.created_at && value?.updated_at);
 }
 
+function isRestorableIssueNote(value: Partial<CGMPIssueNote> | undefined): value is CGMPIssueNote {
+  return Boolean(value?.id && value?.created_at && value?.updated_at);
+}
+
+function enrichRemoteIssueNote(issue: CGMPIssueNote, item: DriveBackupIssueNote, manifest?: DriveManifest): CGMPIssueNote {
+  const issueImages = manifest?.issue_images || {};
+  return {
+    ...issue,
+    backup_status: "backed_up",
+    drive_file_id: item.file_id,
+    last_backup_at: item.backed_up_at,
+    checksum: item.checksum,
+    image_attachments: (issue.image_attachments || []).map((image) => {
+      const manifestImage = issueImages[`${issue.id}:${image.id}`];
+      const driveFileId = image.drive_file_id || manifestImage?.file_id || "";
+      return {
+        ...image,
+        drive_file_id: driveFileId,
+        backup_status: driveFileId ? "backed_up" : image.backup_status || "local_only",
+        last_backup_at: image.last_backup_at || manifestImage?.backed_up_at || "",
+        checksum: image.checksum || manifestImage?.checksum || "",
+      };
+    }),
+  };
+}
+
 function enrichRemoteRecordAttachments(record: CGMPRecord, manifest?: DriveManifest): CGMPRecord {
   const manifestAttachments = manifest?.attachments || {};
   return {
@@ -890,6 +1265,28 @@ function enrichRemoteRecordAttachments(record: CGMPRecord, manifest?: DriveManif
       };
     }),
   };
+}
+
+async function hydrateIssueImageBlobsForNote(issue: CGMPIssueNote) {
+  let hydrated = 0;
+  const failed: { imageId: string; error: string }[] = [];
+
+  for (const image of issue.image_attachments || []) {
+    try {
+      const hasImage = await getImageBlob(image.blob_key);
+      if (hasImage || !image.drive_file_id) continue;
+      const blob = await downloadDriveImageBlob(image.drive_file_id);
+      await putImageBlob(image.blob_key, blob);
+      hydrated += 1;
+    } catch (error) {
+      failed.push({
+        imageId: image.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return { hydrated, failed };
 }
 
 async function downloadDriveImageBlob(fileId: string) {
@@ -1046,9 +1443,10 @@ export async function importMissingRecordsFromDrive(options: DriveImportOptions 
     stage: "fetching",
     message: "Google Driveの復元データを取得しています。",
   });
-  const [localRecords, localTombstones] = await Promise.all([
+  const [localRecords, localTombstones, localIssues] = await Promise.all([
     loadAllRecords(),
     loadDeletedRecords(),
+    loadIssueNotes(true),
   ]);
   const knownRecordChecksums = Object.fromEntries(
     localRecords
@@ -1058,7 +1456,14 @@ export async function importMissingRecordsFromDrive(options: DriveImportOptions 
   const response = await fetch("/api/backup/restore", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ knownRecordChecksums }),
+    body: JSON.stringify({
+      knownRecordChecksums,
+      knownIssueChecksums: Object.fromEntries(
+        localIssues
+          .filter((issue) => issue.checksum)
+          .map((issue) => [issue.id, issue.checksum])
+      ),
+    }),
   });
   const payload = (await response.json().catch(() => ({}))) as RestoreResponse;
   if (!response.ok || !payload.ok) {
@@ -1078,6 +1483,11 @@ export async function importMissingRecordsFromDrive(options: DriveImportOptions 
   const merged: CGMPRecord[] = [];
   const deleted: CGMPDeletedRecord[] = [];
   const skipped: DriveBackupRecord[] = [];
+  const localIssueIds = new Set(localIssues.map((issue) => issue.id));
+  const localIssueById = new Map(localIssues.map((issue) => [issue.id, issue]));
+  const importedIssues: CGMPIssueNote[] = [];
+  const updatedIssues: CGMPIssueNote[] = [];
+  const skippedIssues: DriveBackupIssueNote[] = [];
 
   const remoteTombstones = Object.values(deletedRecords);
   options.onProgress?.({
@@ -1213,6 +1623,106 @@ export async function importMissingRecordsFromDrive(options: DriveImportOptions 
       }),
   });
 
+  const remoteIssues = payload.issue_notes || [];
+  options.onProgress?.({
+    stage: "issue_notes",
+    message: "Drive上のIssue Noteをローカルと照合しています。",
+    checked: 0,
+    total: remoteIssues.length,
+    imported: imported.length,
+    merged: merged.length,
+    deleted: deleted.length,
+    hydratedAttachments: hydration.hydrated,
+    importedIssues: 0,
+    hydratedIssueImages: 0,
+  });
+  for (let index = 0; index < remoteIssues.length; index += 1) {
+    const item = remoteIssues[index];
+    const currentTitle = item.title || item.issue?.title || item.id;
+    options.onProgress?.({
+      stage: "issue_notes",
+      checked: index,
+      total: remoteIssues.length,
+      currentTitle,
+      imported: imported.length,
+      merged: merged.length,
+      deleted: deleted.length,
+      hydratedAttachments: hydration.hydrated,
+      importedIssues: importedIssues.length + updatedIssues.length,
+      hydratedIssueImages: 0,
+    });
+    if (item.unchanged) {
+      skippedIssues.push(item);
+      continue;
+    }
+    if (item.error || !isRestorableIssueNote(item.issue)) {
+      skippedIssues.push(item);
+      continue;
+    }
+    const remoteIssue = enrichRemoteIssueNote(item.issue, item, payload.manifest);
+    const localIssue = localIssueById.get(item.id);
+    const remoteUpdatedAt = new Date(remoteIssue.updated_at || remoteIssue.created_at).getTime();
+    const localUpdatedAt = new Date(localIssue?.updated_at || localIssue?.created_at || "").getTime();
+    if (!localIssueIds.has(item.id)) {
+      await upsertIssueNote(remoteIssue);
+      importedIssues.push(remoteIssue);
+      localIssueIds.add(remoteIssue.id);
+      localIssueById.set(remoteIssue.id, remoteIssue);
+    } else if (!Number.isFinite(localUpdatedAt) || remoteUpdatedAt >= localUpdatedAt) {
+      await upsertIssueNote(remoteIssue);
+      updatedIssues.push(remoteIssue);
+      localIssueById.set(remoteIssue.id, remoteIssue);
+    } else {
+      skippedIssues.push(item);
+    }
+    options.onProgress?.({
+      stage: "issue_notes",
+      checked: index + 1,
+      total: remoteIssues.length,
+      currentTitle,
+      imported: imported.length,
+      merged: merged.length,
+      deleted: deleted.length,
+      hydratedAttachments: hydration.hydrated,
+      importedIssues: importedIssues.length + updatedIssues.length,
+      hydratedIssueImages: 0,
+    });
+  }
+
+  let hydratedIssueImages = 0;
+  const failedIssueImages: { issueId: string; imageId: string; error: string }[] = [];
+  const issuesAfterImport = await loadIssueNotes(true);
+  for (let index = 0; index < issuesAfterImport.length; index += 1) {
+    const issue = issuesAfterImport[index];
+    options.onProgress?.({
+      stage: "issue_images",
+      checked: index,
+      total: issuesAfterImport.length,
+      currentTitle: issue.title || issue.id,
+      imported: imported.length,
+      merged: merged.length,
+      deleted: deleted.length,
+      hydratedAttachments: hydration.hydrated,
+      importedIssues: importedIssues.length + updatedIssues.length,
+      hydratedIssueImages,
+    });
+    const result = await hydrateIssueImageBlobsForNote(issue);
+    hydratedIssueImages += result.hydrated;
+    failedIssueImages.push(...result.failed.map((item) => ({ issueId: issue.id, ...item })));
+    options.onProgress?.({
+      stage: "issue_images",
+      checked: index + 1,
+      total: issuesAfterImport.length,
+      currentTitle: issue.title || issue.id,
+      imported: imported.length,
+      merged: merged.length,
+      deleted: deleted.length,
+      hydratedAttachments: hydration.hydrated,
+      importedIssues: importedIssues.length + updatedIssues.length,
+      hydratedIssueImages,
+    });
+  }
+
   options.onProgress?.({
     stage: "done",
     message: "Google Driveからの取り込みが完了しました。",
@@ -1222,6 +1732,8 @@ export async function importMissingRecordsFromDrive(options: DriveImportOptions 
     merged: merged.length,
     deleted: deleted.length,
     hydratedAttachments: hydration.hydrated,
+    importedIssues: importedIssues.length + updatedIssues.length,
+    hydratedIssueImages,
   });
 
   return {
@@ -1231,6 +1743,11 @@ export async function importMissingRecordsFromDrive(options: DriveImportOptions 
     skipped,
     hydratedAttachments: hydration.hydrated,
     failedAttachments: hydration.failed,
+    importedIssues,
+    updatedIssues,
+    skippedIssues,
+    hydratedIssueImages,
+    failedIssueImages,
     totalRemote: payload.records?.length || 0,
   };
 }

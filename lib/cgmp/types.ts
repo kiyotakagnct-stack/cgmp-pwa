@@ -47,6 +47,9 @@ export type CGMPIssueNoteImage = {
   height?: number;
   blob_key: string;
   drive_file_id?: string;
+  backup_status?: CGMPBackupStatus;
+  last_backup_at?: string;
+  checksum?: string;
   ai_caption?: string;
   ai_captioned_at?: string;
 };

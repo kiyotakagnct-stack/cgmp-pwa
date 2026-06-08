@@ -35,7 +35,6 @@ import {
   clearSemanticIconIndex,
   createBlankIssueNote,
   deleteRecord,
-  deleteIssueNote,
   getIssueNote,
   loadIssueNotes,
   loadAllRecords,
@@ -446,6 +445,8 @@ export default function Page() {
   function getBackupActivityLabel(stage?: string) {
     if (stage === "skip") return "Checking";
     if (stage === "delete") return "Deleting";
+    if (stage?.startsWith("issue_image")) return "Uploading image";
+    if (stage?.startsWith("issue")) return "Uploading issue";
     return "Uploading";
   }
 
@@ -581,7 +582,7 @@ export default function Page() {
       });
       const processElapsedMs = Math.round(performance.now() - processStartedAt);
       const reloadStartedAt = performance.now();
-      await Promise.all([reloadRecords(), reloadBackupSummary()]);
+      await Promise.all([reloadRecords(), reloadIssueNotes(), reloadBackupSummary()]);
       const reloadElapsedMs = Math.round(performance.now() - reloadStartedAt);
       const failed = results.filter((result) => !result.ok).length;
       const reportItems = backupResultsToReportItems(results);
@@ -722,6 +723,24 @@ export default function Page() {
         return "下書きのためスキップ";
       case "record_not_found":
         return "recordが見つかりません";
+      case "issue_loaded":
+        return "Issue Note確認中";
+      case "issue_image_uploading":
+        return "Issue画像アップロード中";
+      case "issue_image_done":
+        return "Issue画像アップロード完了";
+      case "issue_image_failed":
+        return "Issue画像アップロード失敗";
+      case "issue_uploading":
+        return "Issue Note保存中";
+      case "issue_done":
+        return "Issue Note保存完了";
+      case "issue_failed":
+        return "Issue Note保存失敗";
+      case "issue_group_done":
+        return "Issue Note一式完了";
+      case "issue_not_found":
+        return "Issue Noteが見つかりません";
       default:
         return "同期中";
     }
@@ -766,7 +785,7 @@ export default function Page() {
       updateSyncActivity(activityId, { label: "Uploading", title, detail: "Google Driveへ保存中" });
       const processElapsedMs = Math.round(performance.now() - processStartedAt);
       const reloadStartedAt = performance.now();
-      await Promise.all([reloadRecords(), reloadBackupSummary()]);
+      await Promise.all([reloadRecords(), reloadIssueNotes(), reloadBackupSummary()]);
       const reloadElapsedMs = Math.round(performance.now() - reloadStartedAt);
       const failed = results.filter((result) => !result.ok).length;
       const reportItems = backupResultsToReportItems(results);
@@ -1279,7 +1298,7 @@ export default function Page() {
       }
       const applyingElapsedMs = Math.round(performance.now() - applyingStartedAt);
       const reloadStartedAt = performance.now();
-      await Promise.all([reloadRecords(), reloadBackupSummary()]);
+      await Promise.all([reloadRecords(), reloadIssueNotes(), reloadBackupSummary()]);
       const reloadElapsedMs = Math.round(performance.now() - reloadStartedAt);
       const finishedAt = performance.now();
       if (showNotice) {
@@ -1782,25 +1801,54 @@ export default function Page() {
             });
             return;
           }
+          if (progress.stage === "issue_notes") {
+            updateSyncActivity(activityId, {
+              label: "Downloading issues",
+              title: currentTitle,
+              detail: countText
+                ? `Issue Note照合 ${countText} / 追加更新${progress.importedIssues || 0}`
+                : "Issue Note照合中",
+            });
+            return;
+          }
+          if (progress.stage === "issue_images") {
+            updateSyncActivity(activityId, {
+              label: "Downloading issue images",
+              title: currentTitle,
+              detail: countText
+                ? `Issue画像復元 ${countText} / 復元${progress.hydratedIssueImages || 0}`
+                : "Issue画像復元中",
+            });
+            return;
+          }
           updateSyncActivity(activityId, {
             label: "Download complete",
             title: "Google Drive",
-            detail: `追加${progress.imported || 0} / 削除${progress.deleted || 0} / 画像${progress.hydratedAttachments || 0}`,
+            detail: `追加${progress.imported || 0} / Issue${progress.importedIssues || 0} / 画像${
+              (progress.hydratedAttachments || 0) + (progress.hydratedIssueImages || 0)
+            }`,
           });
         },
       });
+      const issueChanged = result.importedIssues.length + result.updatedIssues.length;
+      const totalHydratedImages = result.hydratedAttachments + result.hydratedIssueImages;
       updateSyncActivity(activityId, {
         label: "Downloading",
         title: "Google Drive",
-        detail: `追加${result.imported.length} / 画像${result.hydratedAttachments}`,
+        detail: `追加${result.imported.length} / Issue${issueChanged} / 画像${totalHydratedImages}`,
       });
-      await Promise.all([reloadRecords(), reloadBackupSummary(), reloadDeletedRecordsSummary()]);
-      if (showNotice || result.imported.length > 0 || result.deleted.length > 0) {
+      await Promise.all([reloadRecords(), reloadIssueNotes(), reloadBackupSummary(), reloadDeletedRecordsSummary()]);
+      if (showNotice || result.imported.length > 0 || result.deleted.length > 0 || issueChanged > 0 || totalHydratedImages > 0) {
         setNotice({
           kind: "info",
           text:
-            result.imported.length > 0 || result.merged.length > 0 || result.deleted.length > 0 || result.hydratedAttachments > 0
-              ? `Drive同期: メモ追加${result.imported.length}件 / 削除反映${result.deleted.length}件 / 写真メタ更新${result.merged.length}件 / 画像復元${result.hydratedAttachments}件`
+            result.imported.length > 0 ||
+            result.merged.length > 0 ||
+            result.deleted.length > 0 ||
+            result.hydratedAttachments > 0 ||
+            issueChanged > 0 ||
+            result.hydratedIssueImages > 0
+              ? `Drive同期: メモ追加${result.imported.length}件 / Issue更新${issueChanged}件 / 削除反映${result.deleted.length}件 / 画像復元${totalHydratedImages}件`
               : "Driveから追加する未取り込みメモはありません。",
         });
       }
@@ -1808,7 +1856,7 @@ export default function Page() {
         activityId,
         "done",
         "Download complete",
-        `追加${result.imported.length} / 削除${result.deleted.length} / 画像${result.hydratedAttachments}`
+        `追加${result.imported.length} / Issue${issueChanged} / 画像${totalHydratedImages}`
       );
     } catch (error) {
       if (showNotice) {
@@ -2762,33 +2810,46 @@ export default function Page() {
     return `issueImageBlobs/${issueId}/${imageId}/preview.jpg`;
   }
 
+  function markIssueNotePending(issue: CGMPIssueNote): CGMPIssueNote {
+    return {
+      ...issue,
+      backup_status: "pending_backup",
+      checksum: "",
+    };
+  }
+
   async function createIssueNoteFromUi() {
     const issue = createBlankIssueNote({ title: "新しいIssue Note" });
-    const saved = await upsertIssueNote(issue);
+    const saved = await upsertIssueNote(markIssueNotePending(issue));
     await reloadIssueNotes();
+    void runBackupQueue(false);
     return saved;
   }
 
   async function saveIssueNoteFromUi(issue: CGMPIssueNote) {
     const saved = await upsertIssueNote({
-      ...issue,
+      ...markIssueNotePending(issue),
       updated_at: new Date().toISOString(),
     });
     await reloadIssueNotes();
+    void runBackupQueue(false);
     setNotice({ kind: "info", text: "Issue Noteを保存しました。" });
     return saved;
   }
 
   async function archiveIssueNoteFromUi(issueId: string) {
-    await archiveIssueNote(issueId);
+    const archived = await archiveIssueNote(issueId);
+    if (archived) {
+      await upsertIssueNote(markIssueNotePending(archived));
+    }
     await reloadIssueNotes();
+    void runBackupQueue(false);
     setNotice({ kind: "info", text: "Issue Noteをアーカイブしました。" });
   }
 
   async function deleteIssueNoteFromUi(issueId: string) {
-    await deleteIssueNote(issueId);
-    await reloadIssueNotes();
-    setNotice({ kind: "info", text: "Issue Noteを削除しました。" });
+    await archiveIssueNoteFromUi(issueId);
+    setNotice({ kind: "info", text: "Issue Noteをアーカイブしました。Drive同期後も復元対象から外れます。" });
   }
 
   async function addImagesToIssueNote(issueId: string, files: File[]) {
@@ -2809,11 +2870,14 @@ export default function Page() {
         width: preview.width,
         height: preview.height,
         blob_key: blobKey,
+        backup_status: "pending_backup",
+        last_backup_at: "",
+        checksum: "",
       });
     }
 
     const saved = await upsertIssueNote({
-      ...current,
+      ...markIssueNotePending(current),
       image_attachments: [...current.image_attachments, ...nextImages],
       body_markdown: `${current.body_markdown}${current.body_markdown.trim() ? "\n\n" : ""}${nextImages
         .map((image) => `![${image.filename || "image"}](cgmp-issue-image://${image.id})`)
@@ -2821,6 +2885,7 @@ export default function Page() {
       updated_at: new Date().toISOString(),
     });
     await reloadIssueNotes();
+    void runBackupQueue(false);
     setNotice({ kind: "info", text: `${nextImages.length}枚の画像をIssue Noteに追加しました。` });
     return saved;
   }
@@ -2847,36 +2912,42 @@ export default function Page() {
         .filter(Boolean)
         .join("\n");
       const saved = await upsertIssueNote({
-        ...current,
+        ...markIssueNotePending(current),
         image_attachments: current.image_attachments.map((item) =>
           item.id === imageId
             ? {
                 ...item,
                 ai_caption: caption || "画像を確認しました。",
                 ai_captioned_at: new Date().toISOString(),
+                backup_status: "pending_backup",
+                checksum: "",
               }
             : item
         ),
         updated_at: new Date().toISOString(),
       });
       await reloadIssueNotes();
+      void runBackupQueue(false);
       return saved;
     } catch (error) {
       const fallback = fallbackImageAnalysis(error);
       const saved = await upsertIssueNote({
-        ...current,
+        ...markIssueNotePending(current),
         image_attachments: current.image_attachments.map((item) =>
           item.id === imageId
             ? {
                 ...item,
                 ai_caption: fallback.summary_80,
                 ai_captioned_at: new Date().toISOString(),
+                backup_status: "pending_backup",
+                checksum: "",
               }
             : item
         ),
         updated_at: new Date().toISOString(),
       });
       await reloadIssueNotes();
+      void runBackupQueue(false);
       setNotice({ kind: "error", text: "画像caption生成に失敗しました。fallbackを保存しました。" });
       return saved;
     } finally {

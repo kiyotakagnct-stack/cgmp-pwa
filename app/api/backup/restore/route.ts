@@ -21,6 +21,7 @@ export async function POST(request: Request) {
   try {
     const body = (await request.json().catch(() => ({}))) as {
       knownRecordChecksums?: Record<string, string>;
+      knownIssueChecksums?: Record<string, string>;
     };
     return NextResponse.json({
       ok: true,
@@ -28,6 +29,10 @@ export async function POST(request: Request) {
         knownRecordChecksums:
           body.knownRecordChecksums && typeof body.knownRecordChecksums === "object"
             ? body.knownRecordChecksums
+            : {},
+        knownIssueChecksums:
+          body.knownIssueChecksums && typeof body.knownIssueChecksums === "object"
+            ? body.knownIssueChecksums
             : {},
       })),
     });

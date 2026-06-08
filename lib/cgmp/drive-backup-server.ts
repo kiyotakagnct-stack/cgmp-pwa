@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-import type { CGMPDeletedRecord, CGMPRecord } from "./types";
+import type { CGMPDeletedRecord, CGMPIssueNote, CGMPIssueNoteImage, CGMPRecord } from "./types";
 import type { ImageAttachment } from "@/types/image";
 import {
   createDefaultPromptConfig,
@@ -33,6 +33,8 @@ type DriveBackupTarget = {
   manifestParentId: string;
   recordsParentId: string;
   attachmentsParentId: string;
+  issueNotesParentId: string;
+  issueAttachmentsParentId: string;
   tombstonesParentId: string;
   snapshotsParentId: string;
   rootFolderId?: string;
@@ -57,6 +59,26 @@ type DriveManifest = {
       attachment_id: string;
       preview_file_id: string;
       thumbnail_file_id: string;
+      checksum: string;
+      updated_at: string;
+      backed_up_at: string;
+    }
+  >;
+  issue_notes?: Record<
+    string,
+    {
+      file_id: string;
+      checksum: string;
+      updated_at: string;
+      backed_up_at: string;
+    }
+  >;
+  issue_images?: Record<
+    string,
+    {
+      issue_id: string;
+      image_id: string;
+      file_id: string;
       checksum: string;
       updated_at: string;
       backed_up_at: string;
@@ -313,6 +335,8 @@ async function resolveDriveBackupTarget(): Promise<DriveBackupTarget> {
       manifestParentId: APP_DATA_SPACE,
       recordsParentId: APP_DATA_SPACE,
       attachmentsParentId: APP_DATA_SPACE,
+      issueNotesParentId: APP_DATA_SPACE,
+      issueAttachmentsParentId: APP_DATA_SPACE,
       tombstonesParentId: APP_DATA_SPACE,
       snapshotsParentId: APP_DATA_SPACE,
     };
@@ -322,9 +346,12 @@ async function resolveDriveBackupTarget(): Promise<DriveBackupTarget> {
   const rootFolder = configuredRootId
     ? { id: configuredRootId, name: process.env.GOOGLE_DRIVE_BACKUP_FOLDER_NAME || DEFAULT_BACKUP_FOLDER_NAME }
     : await ensureFolder(process.env.GOOGLE_DRIVE_BACKUP_FOLDER_NAME || DEFAULT_BACKUP_FOLDER_NAME);
-  const [recordsFolder, attachmentsFolder, tombstonesFolder, snapshotsFolder] = await Promise.all([
+  const [recordsFolder, attachmentsFolder, issueNotesFolder, issueAttachmentsFolder, tombstonesFolder, snapshotsFolder] =
+    await Promise.all([
     ensureFolder("records", rootFolder.id),
     ensureFolder("attachments", rootFolder.id),
+    ensureFolder("issue_notes", rootFolder.id),
+    ensureFolder("issue_attachments", rootFolder.id),
     ensureFolder("tombstones", rootFolder.id),
     ensureFolder("snapshots", rootFolder.id),
   ]);
@@ -335,6 +362,8 @@ async function resolveDriveBackupTarget(): Promise<DriveBackupTarget> {
     manifestParentId: rootFolder.id,
     recordsParentId: recordsFolder.id,
     attachmentsParentId: attachmentsFolder.id,
+    issueNotesParentId: issueNotesFolder.id,
+    issueAttachmentsParentId: issueAttachmentsFolder.id,
     tombstonesParentId: tombstonesFolder.id,
     snapshotsParentId: snapshotsFolder.id,
   };
@@ -393,6 +422,38 @@ function stableRecordPayload(record: CGMPRecord) {
       kind: "cgmp_record",
       backed_up_format: "record_json",
       record: recordContent,
+    },
+    null,
+    2
+  );
+}
+
+function stableIssueNotePayload(issue: CGMPIssueNote) {
+  const {
+    backup_status: _backupStatus,
+    last_backup_at: _lastBackupAt,
+    drive_file_id: _driveFileId,
+    checksum: _checksum,
+    ...issueContent
+  } = issue;
+
+  return JSON.stringify(
+    {
+      schema_version: 1,
+      kind: "cgmp_issue_note",
+      backed_up_format: "issue_note_json",
+      issue: {
+        ...issueContent,
+        image_attachments: (issueContent.image_attachments || []).map((image) => {
+          const {
+            backup_status: _imageBackupStatus,
+            last_backup_at: _imageLastBackupAt,
+            checksum: _imageChecksum,
+            ...imageContent
+          } = image;
+          return imageContent;
+        }),
+      },
     },
     null,
     2
@@ -491,6 +552,8 @@ async function loadManifest(): Promise<{ file: DriveFile | null; manifest: Drive
         updated_at: new Date().toISOString(),
         records: {},
         attachments: {},
+        issue_notes: {},
+        issue_images: {},
         deleted_records: {},
       },
     };
@@ -505,6 +568,8 @@ async function loadManifest(): Promise<{ file: DriveFile | null; manifest: Drive
       updated_at: String(parsed.updated_at || new Date().toISOString()),
       records: parsed.records && typeof parsed.records === "object" ? parsed.records : {},
       attachments: parsed.attachments && typeof parsed.attachments === "object" ? parsed.attachments : {},
+      issue_notes: parsed.issue_notes && typeof parsed.issue_notes === "object" ? parsed.issue_notes : {},
+      issue_images: parsed.issue_images && typeof parsed.issue_images === "object" ? parsed.issue_images : {},
       deleted_records:
         parsed.deleted_records && typeof parsed.deleted_records === "object"
           ? (parsed.deleted_records as Record<string, CGMPDeletedRecord>)
@@ -693,6 +758,82 @@ export async function backupAttachmentToDrive({
   };
 }
 
+export async function backupIssueNoteImageToDrive({
+  issueId,
+  image,
+  preview,
+}: {
+  issueId: string;
+  image: CGMPIssueNoteImage;
+  preview: Buffer;
+}) {
+  const target = await getDriveBackupTarget();
+  const safeIssueId = sanitizeFileComponent(issueId);
+  const safeImageId = sanitizeFileComponent(image.id);
+  const imageFileName = `issue_image_${safeIssueId}_${safeImageId}_preview.jpg`;
+  const imageFile = await upsertBinaryFileWithFallback(
+    imageFileName,
+    preview,
+    "image/jpeg",
+    target.issueAttachmentsParentId,
+    knownDriveFile(image.drive_file_id, imageFileName)
+  );
+
+  const imageChecksum = checksumBuffer(preview);
+  const backedUpAt = new Date().toISOString();
+  const { file, manifest } = await loadManifest();
+  manifest.updated_at = backedUpAt;
+  manifest.issue_images = manifest.issue_images || {};
+  manifest.issue_images[`${issueId}:${image.id}`] = {
+    issue_id: issueId,
+    image_id: image.id,
+    file_id: imageFile.id,
+    checksum: imageChecksum,
+    updated_at: backedUpAt,
+    backed_up_at: backedUpAt,
+  };
+
+  await upsertJsonFile("manifest.json", JSON.stringify(manifest, null, 2), target.manifestParentId, file);
+
+  return {
+    driveFileId: imageFile.id,
+    checksum: imageChecksum,
+    backedUpAt,
+  };
+}
+
+export async function backupIssueNoteToDrive(issue: CGMPIssueNote) {
+  const target = await getDriveBackupTarget();
+  const content = stableIssueNotePayload(issue);
+  const issueChecksum = checksum(content);
+  const fileName = `issue_${sanitizeFileComponent(issue.id)}.json`;
+  const issueFile = await upsertJsonFileWithFallback(
+    fileName,
+    content,
+    target.issueNotesParentId,
+    knownDriveFile(issue.drive_file_id, fileName)
+  );
+
+  const backedUpAt = new Date().toISOString();
+  const { file, manifest } = await loadManifest();
+  manifest.updated_at = backedUpAt;
+  manifest.issue_notes = manifest.issue_notes || {};
+  manifest.issue_notes[issue.id] = {
+    file_id: issueFile.id,
+    checksum: issueChecksum,
+    updated_at: issue.updated_at,
+    backed_up_at: backedUpAt,
+  };
+
+  await upsertJsonFile("manifest.json", JSON.stringify(manifest, null, 2), target.manifestParentId, file);
+
+  return {
+    driveFileId: issueFile.id,
+    checksum: issueChecksum,
+    backedUpAt,
+  };
+}
+
 export async function listBackedUpRecords() {
   const { manifest } = await loadManifest();
   return manifest;
@@ -700,6 +841,7 @@ export async function listBackedUpRecords() {
 
 type ListBackedUpRecordDetailsOptions = {
   knownRecordChecksums?: Record<string, string>;
+  knownIssueChecksums?: Record<string, string>;
 };
 
 async function mapWithConcurrency<T, R>(
@@ -775,9 +917,67 @@ export async function listBackedUpRecordDetails(options: ListBackedUpRecordDetai
     }
   });
 
+  const issueEntries = Object.entries(manifest.issue_notes || {});
+  const issueNotes = await mapWithConcurrency(issueEntries, 8, async ([issueId, entry]) => {
+    const knownChecksum = options.knownIssueChecksums?.[issueId];
+    if (knownChecksum && knownChecksum === entry.checksum) {
+      return {
+        id: issueId,
+        title: "同期済み",
+        updated_at: entry.updated_at,
+        backed_up_at: entry.backed_up_at,
+        checksum: entry.checksum,
+        file_id: entry.file_id,
+        unchanged: true,
+      };
+    }
+
+    try {
+      const text = await readTextFile(entry.file_id);
+      const parsed = JSON.parse(text || "{}") as { issue?: Partial<CGMPIssueNote> };
+      const issue = parsed.issue || {};
+      const imageAttachments = Array.isArray(issue.image_attachments) ? issue.image_attachments : [];
+      return {
+        id: issueId,
+        title: String(issue.title || "（無題）"),
+        purpose: String(issue.purpose || ""),
+        status: String(issue.status || "open"),
+        updated_at: String(issue.updated_at || entry.updated_at || ""),
+        backed_up_at: entry.backed_up_at,
+        checksum: entry.checksum,
+        file_id: entry.file_id,
+        issue: {
+          ...issue,
+          image_attachments: imageAttachments.map((image) => {
+            const source = image as Partial<CGMPIssueNoteImage>;
+            const manifestImage = manifest.issue_images?.[`${issueId}:${source.id}`];
+            return {
+              ...source,
+              drive_file_id: source.drive_file_id || manifestImage?.file_id || "",
+              backup_status: source.drive_file_id || manifestImage?.file_id ? "backed_up" : source.backup_status,
+              last_backup_at: source.last_backup_at || manifestImage?.backed_up_at || "",
+              checksum: source.checksum || manifestImage?.checksum || "",
+            };
+          }),
+        },
+      };
+    } catch (error) {
+      return {
+        id: issueId,
+        title: "読み込み失敗",
+        updated_at: entry.updated_at,
+        backed_up_at: entry.backed_up_at,
+        checksum: entry.checksum,
+        file_id: entry.file_id,
+        error: error instanceof Error ? error.message : "GOOGLE_DRIVE_ISSUE_READ_FAILED",
+      };
+    }
+  });
+
   return {
     manifest,
     records: records.sort((a, b) => String(b.backed_up_at).localeCompare(String(a.backed_up_at))),
+    issue_notes: issueNotes.sort((a, b) => String(b.backed_up_at).localeCompare(String(a.backed_up_at))),
   };
 }
 
