@@ -1,5 +1,5 @@
 const DB_NAME = "cgmp-pwa";
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 const RECORDS_STORE = "records";
 const SETTINGS_STORE = "settings";
 const BACKUP_QUEUE_STORE = "backup_queue";
@@ -60,6 +60,13 @@ function openDatabase() {
         const store = db.createObjectStore(EMBEDDING_INDEX_STORE, { keyPath: "record_id" });
         store.createIndex("model", "model", { unique: false });
         store.createIndex("source_updated_at", "source_updated_at", { unique: false });
+      }
+      if (!db.objectStoreNames.contains("issue_notes")) {
+        const store = db.createObjectStore("issue_notes", { keyPath: "id" });
+        store.createIndex("updated_at", "updated_at", { unique: false });
+        store.createIndex("created_at", "created_at", { unique: false });
+        store.createIndex("status", "status", { unique: false });
+        store.createIndex("pinned", "pinned", { unique: false });
       }
     };
     request.onsuccess = () => resolve(request.result);

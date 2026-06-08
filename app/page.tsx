@@ -7,6 +7,7 @@ import { ImageLightbox } from "@/components/ImageLightbox";
 import { ImageUploader } from "@/components/ImageUploader";
 import { ComposeView } from "@/components/cgmp/ComposeView";
 import { HomeView } from "@/components/cgmp/HomeView";
+import { IssueNotesView } from "@/components/cgmp/IssueNotesView";
 import { PostSaveSuggestionsModal, type ExternalConfirmState } from "@/components/cgmp/PostSaveSuggestionsModal";
 import { RecordEditor } from "@/components/cgmp/RecordEditor";
 import { MiniRecordCard, RecordCard } from "@/components/cgmp/RecordCards";
@@ -26,11 +27,17 @@ import { TodayView } from "@/components/cgmp/TodayView";
 import { WeeklyView } from "@/components/cgmp/WeeklyView";
 import { deleteImageBlobs, getImageBlob, putImageBlob } from "@/lib/db/imageBlobStore";
 import { analyzeImageWithVision, fallbackImageAnalysis } from "@/lib/image/analyzeImageWithVision";
-import { createImageAttachmentFromFile } from "@/lib/image/createImageAttachment";
+import { createImageAttachmentFromFile, generateImageAttachmentId } from "@/lib/image/createImageAttachment";
+import { resizeImageToJpegBlob } from "@/lib/image/resizeImage";
 import {
+  archiveIssueNote,
   clearAllRecords,
   clearSemanticIconIndex,
+  createBlankIssueNote,
   deleteRecord,
+  deleteIssueNote,
+  getIssueNote,
+  loadIssueNotes,
   loadAllRecords,
   loadDeletedRecords,
   loadEmbeddingIndex,
@@ -41,6 +48,7 @@ import {
   putRecordWithoutBackup,
   saveSettings,
   saveSemanticIconDictionary,
+  upsertIssueNote,
   upsertRecord,
 } from "@/lib/cgmp/storage";
 import {
@@ -78,6 +86,8 @@ import type {
   CGMPDeletedRecord,
   CGMPDomain,
   CGMPGoogleTaskStatus,
+  CGMPIssueNote,
+  CGMPIssueNoteImage,
   CGMPPara,
   CGMPRecord,
   CGMPSettings,
@@ -136,12 +146,12 @@ import {
   softPanelClass,
 } from "@/components/cgmp/ui";
 
-type AppTab = "home" | "today" | "week" | "compose" | "settings";
+type AppTab = "home" | "today" | "week" | "issue" | "compose" | "settings";
 const APP_TABS: Array<{ key: AppTab; label: string }> = [
   { key: "home", label: "Home" },
   { key: "today", label: "Today" },
   { key: "week", label: "Week" },
-  { key: "compose", label: "Compose" },
+  { key: "issue", label: "Issue" },
   { key: "settings", label: "Settings" },
 ];
 type SortKey = "updated_at" | "created_at" | "datetime";
@@ -280,6 +290,7 @@ export default function Page() {
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [weekStart, setWeekStart] = useState<Date>(() => getMondayOfWeek(new Date()));
   const [records, setRecords] = useState<CGMPRecord[]>([]);
+  const [issueNotes, setIssueNotes] = useState<CGMPIssueNote[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isReady, setIsReady] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
@@ -450,6 +461,11 @@ export default function Page() {
       }
       return null;
     });
+  }
+
+  async function reloadIssueNotes() {
+    const nextIssues = await loadIssueNotes();
+    setIssueNotes(nextIssues);
   }
 
   async function reloadSettings() {
@@ -2168,6 +2184,7 @@ export default function Page() {
       try {
         const [
           nextRecords,
+          nextIssueNotes,
           nextSettings,
           nextBackupSummary,
           nextDeletedRecords,
@@ -2176,6 +2193,7 @@ export default function Page() {
           nextSemanticIconIndex,
         ] = await Promise.all([
           loadAllRecords(),
+          loadIssueNotes(),
           loadSettings(),
           getBackupStatus(),
           loadDeletedRecords(),
@@ -2185,6 +2203,7 @@ export default function Page() {
         ]);
         if (cancelled) return;
         setRecords(nextRecords);
+        setIssueNotes(nextIssueNotes);
         setSettingsDraft(nextSettings);
         setBackupSummary(nextBackupSummary);
         setDeletedRecordsSummary({
@@ -2737,6 +2756,132 @@ export default function Page() {
     const attachments = (record.attachments || []).filter((item) => item.id !== attachmentId);
     await saveRecordWithAttachments(record, attachments);
     setNotice({ kind: "info", text: "写真を削除しました。" });
+  }
+
+  function buildIssueImageBlobKey(issueId: string, imageId: string) {
+    return `issueImageBlobs/${issueId}/${imageId}/preview.jpg`;
+  }
+
+  async function createIssueNoteFromUi() {
+    const issue = createBlankIssueNote({ title: "新しいIssue Note" });
+    const saved = await upsertIssueNote(issue);
+    await reloadIssueNotes();
+    return saved;
+  }
+
+  async function saveIssueNoteFromUi(issue: CGMPIssueNote) {
+    const saved = await upsertIssueNote({
+      ...issue,
+      updated_at: new Date().toISOString(),
+    });
+    await reloadIssueNotes();
+    setNotice({ kind: "info", text: "Issue Noteを保存しました。" });
+    return saved;
+  }
+
+  async function archiveIssueNoteFromUi(issueId: string) {
+    await archiveIssueNote(issueId);
+    await reloadIssueNotes();
+    setNotice({ kind: "info", text: "Issue Noteをアーカイブしました。" });
+  }
+
+  async function deleteIssueNoteFromUi(issueId: string) {
+    await deleteIssueNote(issueId);
+    await reloadIssueNotes();
+    setNotice({ kind: "info", text: "Issue Noteを削除しました。" });
+  }
+
+  async function addImagesToIssueNote(issueId: string, files: File[]) {
+    const current = await getIssueNote(issueId);
+    if (!current || files.length === 0) return null;
+
+    const nextImages: CGMPIssueNoteImage[] = [];
+    for (const file of files) {
+      const imageId = generateImageAttachmentId();
+      const preview = await resizeImageToJpegBlob(file, 960, 0.42);
+      const blobKey = buildIssueImageBlobKey(issueId, imageId);
+      await putImageBlob(blobKey, preview.blob);
+      nextImages.push({
+        id: imageId,
+        created_at: new Date().toISOString(),
+        filename: file.name,
+        mime_type: "image/jpeg",
+        width: preview.width,
+        height: preview.height,
+        blob_key: blobKey,
+      });
+    }
+
+    const saved = await upsertIssueNote({
+      ...current,
+      image_attachments: [...current.image_attachments, ...nextImages],
+      body_markdown: `${current.body_markdown}${current.body_markdown.trim() ? "\n\n" : ""}${nextImages
+        .map((image) => `![${image.filename || "image"}](cgmp-issue-image://${image.id})`)
+        .join("\n")}`,
+      updated_at: new Date().toISOString(),
+    });
+    await reloadIssueNotes();
+    setNotice({ kind: "info", text: `${nextImages.length}枚の画像をIssue Noteに追加しました。` });
+    return saved;
+  }
+
+  async function captionIssueImage(issueId: string, imageId: string) {
+    const current = await getIssueNote(issueId);
+    const image = current?.image_attachments.find((item) => item.id === imageId);
+    if (!current || !image) return null;
+
+    const blob = await getImageBlob(image.blob_key);
+    if (!blob) {
+      setNotice({ kind: "error", text: "Issue Note画像のBlobが見つかりませんでした。" });
+      return current;
+    }
+
+    const processingId = beginAiProcessing("image", "Issue画像caption生成中");
+    try {
+      const result = await analyzeImageWithVision(blob);
+      const caption = [
+        result.summary_80,
+        result.visible_text ? `文字: ${result.visible_text}` : "",
+        result.image_tags.length ? `タグ: ${result.image_tags.map((tag) => `#${tag}`).join(" ")}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+      const saved = await upsertIssueNote({
+        ...current,
+        image_attachments: current.image_attachments.map((item) =>
+          item.id === imageId
+            ? {
+                ...item,
+                ai_caption: caption || "画像を確認しました。",
+                ai_captioned_at: new Date().toISOString(),
+              }
+            : item
+        ),
+        updated_at: new Date().toISOString(),
+      });
+      await reloadIssueNotes();
+      return saved;
+    } catch (error) {
+      const fallback = fallbackImageAnalysis(error);
+      const saved = await upsertIssueNote({
+        ...current,
+        image_attachments: current.image_attachments.map((item) =>
+          item.id === imageId
+            ? {
+                ...item,
+                ai_caption: fallback.summary_80,
+                ai_captioned_at: new Date().toISOString(),
+              }
+            : item
+        ),
+        updated_at: new Date().toISOString(),
+      });
+      await reloadIssueNotes();
+      setNotice({ kind: "error", text: "画像caption生成に失敗しました。fallbackを保存しました。" });
+      return saved;
+    } finally {
+      finishAiProcessing(processingId);
+    }
   }
 
   async function handleUpdateAttachmentMetadata(
@@ -3627,6 +3772,24 @@ export default function Page() {
               onOpenImage={(attachment, imageUrl) => setLightbox({ imageUrl, title: attachment.summary_80 || "添付画像" })}
               onToggleGoogleTaskStatus={toggleGoogleTaskStatus}
               externalProcessingKey={externalProcessingKey}
+            />
+          ) : null}
+
+          {tab === "issue" ? (
+            <IssueNotesView
+              issues={issueNotes}
+              records={records}
+              onCreateIssue={createIssueNoteFromUi}
+              onSaveIssue={saveIssueNoteFromUi}
+              onArchiveIssue={archiveIssueNoteFromUi}
+              onDeleteIssue={deleteIssueNoteFromUi}
+              onAddImages={addImagesToIssueNote}
+              onCaptionImage={captionIssueImage}
+              onOpenRecord={(id) => {
+                setSelectedId(id);
+                setTab("home");
+                setPendingMiniJumpId(id);
+              }}
             />
           ) : null}
 

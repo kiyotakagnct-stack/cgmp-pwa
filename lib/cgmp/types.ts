@@ -36,6 +36,40 @@ export type CGMPBackupStatus =
   | "backup_failed"
   | "conflicted";
 
+export type CGMPIssueNoteStatus = "open" | "paused" | "resolved" | "archived";
+
+export type CGMPIssueNoteImage = {
+  id: string;
+  created_at: string;
+  filename?: string;
+  mime_type: "image/jpeg";
+  width?: number;
+  height?: number;
+  blob_key: string;
+  drive_file_id?: string;
+  ai_caption?: string;
+  ai_captioned_at?: string;
+};
+
+export type CGMPIssueNote = {
+  schema_version: number;
+  id: string;
+  title: string;
+  purpose: string;
+  context_markdown: string;
+  body_markdown: string;
+  status: CGMPIssueNoteStatus;
+  pinned: boolean;
+  linked_record_ids: string[];
+  image_attachments: CGMPIssueNoteImage[];
+  created_at: string;
+  updated_at: string;
+  backup_status?: CGMPBackupStatus;
+  last_backup_at?: string;
+  drive_file_id?: string;
+  checksum?: string;
+};
+
 export type CGMPExternalDeleteStatus = "none" | "done" | "failed";
 
 export type CGMPAnalysis = {

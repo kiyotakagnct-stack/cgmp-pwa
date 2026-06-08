@@ -4,6 +4,9 @@ import type {
   CGMPDeletedRecord,
   CGMPEmbeddingIndex,
   CGMPExternalDeleteStatus,
+  CGMPIssueNote,
+  CGMPIssueNoteImage,
+  CGMPIssueNoteStatus,
   CGMPRecord,
   CGMPSettings,
   CGMPSemanticIcon,
@@ -16,13 +19,14 @@ import type { ImageAttachment } from "@/types/image";
 import { DEFAULT_SEMANTIC_ICON_THRESHOLD, createDefaultSemanticIconDictionary } from "./semantic-icon-defaults";
 
 const DB_NAME = "cgmp-pwa";
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 const RECORDS_STORE = "records";
 const SETTINGS_STORE = "settings";
 const BACKUP_QUEUE_STORE = "backup_queue";
 const IMAGE_BLOBS_STORE = "image_blobs";
 const DELETED_RECORDS_STORE = "deleted_records";
 const EMBEDDING_INDEX_STORE = "embedding_index";
+const ISSUE_NOTES_STORE = "issue_notes";
 const SETTINGS_KEY = "settings";
 const SEMANTIC_ICON_DICTIONARY_KEY = "semantic_icon_dictionary";
 const SEMANTIC_ICON_INDEX_KEY = "semantic_icon_index";
@@ -75,6 +79,13 @@ function openDatabase() {
         const store = db.createObjectStore(EMBEDDING_INDEX_STORE, { keyPath: "record_id" });
         store.createIndex("model", "model", { unique: false });
         store.createIndex("source_updated_at", "source_updated_at", { unique: false });
+      }
+      if (!db.objectStoreNames.contains(ISSUE_NOTES_STORE)) {
+        const store = db.createObjectStore(ISSUE_NOTES_STORE, { keyPath: "id" });
+        store.createIndex("updated_at", "updated_at", { unique: false });
+        store.createIndex("created_at", "created_at", { unique: false });
+        store.createIndex("status", "status", { unique: false });
+        store.createIndex("pinned", "pinned", { unique: false });
       }
     };
 
@@ -833,6 +844,172 @@ export async function clearSemanticIconIndex() {
   await withTransaction(SETTINGS_STORE, "readwrite", async (store) => {
     store.put([], SEMANTIC_ICON_INDEX_KEY);
   });
+}
+
+function normalizeIssueNoteStatus(value: unknown): CGMPIssueNoteStatus {
+  return value === "paused" || value === "resolved" || value === "archived" ? value : "open";
+}
+
+function normalizeIssueNoteImage(value: unknown): CGMPIssueNoteImage | null {
+  const source = value && typeof value === "object" ? (value as Partial<CGMPIssueNoteImage>) : {};
+  if (!source.id || !source.blob_key) return null;
+  return {
+    id: String(source.id),
+    created_at: String(source.created_at || new Date().toISOString()),
+    filename: source.filename ? String(source.filename) : undefined,
+    mime_type: "image/jpeg",
+    width: Number.isFinite(Number(source.width)) ? Number(source.width) : undefined,
+    height: Number.isFinite(Number(source.height)) ? Number(source.height) : undefined,
+    blob_key: String(source.blob_key),
+    drive_file_id: source.drive_file_id ? String(source.drive_file_id) : "",
+    ai_caption: source.ai_caption ? String(source.ai_caption) : "",
+    ai_captioned_at: source.ai_captioned_at ? String(source.ai_captioned_at) : "",
+  };
+}
+
+function normalizeIssueNote(value: unknown): CGMPIssueNote | null {
+  const source = value && typeof value === "object" ? (value as Partial<CGMPIssueNote>) : {};
+  if (!source.id) return null;
+  const now = new Date().toISOString();
+  return {
+    schema_version: Number.isFinite(Number(source.schema_version)) ? Number(source.schema_version) : 1,
+    id: String(source.id),
+    title: String(source.title || "Untitled Issue"),
+    purpose: String(source.purpose || ""),
+    context_markdown: String(source.context_markdown || ""),
+    body_markdown: String(source.body_markdown || ""),
+    status: normalizeIssueNoteStatus(source.status),
+    pinned: Boolean(source.pinned),
+    linked_record_ids: Array.isArray(source.linked_record_ids)
+      ? Array.from(new Set(source.linked_record_ids.map((id) => String(id)).filter(Boolean)))
+      : [],
+    image_attachments: Array.isArray(source.image_attachments)
+      ? source.image_attachments
+          .map(normalizeIssueNoteImage)
+          .filter((image): image is CGMPIssueNoteImage => Boolean(image))
+      : [],
+    created_at: String(source.created_at || now),
+    updated_at: String(source.updated_at || source.created_at || now),
+    backup_status: source.backup_status || "local_only",
+    last_backup_at: source.last_backup_at || "",
+    drive_file_id: source.drive_file_id || "",
+    checksum: source.checksum || "",
+  };
+}
+
+function sortIssueNotes(a: CGMPIssueNote, b: CGMPIssueNote) {
+  if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+  const aKey = new Date(a.updated_at || a.created_at).getTime();
+  const bKey = new Date(b.updated_at || b.created_at).getTime();
+  if (aKey === bKey) return String(b.id).localeCompare(String(a.id));
+  return bKey - aKey;
+}
+
+export function createIssueNoteId(date = new Date()) {
+  const stamp = date
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d+Z$/, "Z")
+    .replace("T", "_")
+    .replace("Z", "");
+  const rand = Math.random().toString(36).slice(2, 6).padEnd(4, "0");
+  return `issue_${stamp}_${rand}`;
+}
+
+export function createBlankIssueNote(patch: Partial<CGMPIssueNote> = {}): CGMPIssueNote {
+  const now = new Date().toISOString();
+  return {
+    schema_version: 1,
+    id: patch.id || createIssueNoteId(),
+    title: patch.title || "新しいIssue Note",
+    purpose: patch.purpose || "",
+    context_markdown: patch.context_markdown || "",
+    body_markdown: patch.body_markdown || "",
+    status: patch.status || "open",
+    pinned: patch.pinned || false,
+    linked_record_ids: patch.linked_record_ids || [],
+    image_attachments: patch.image_attachments || [],
+    created_at: patch.created_at || now,
+    updated_at: patch.updated_at || now,
+    backup_status: patch.backup_status || "local_only",
+    last_backup_at: patch.last_backup_at || "",
+    drive_file_id: patch.drive_file_id || "",
+    checksum: patch.checksum || "",
+  };
+}
+
+export async function loadIssueNotes(includeArchived = false) {
+  if (!hasWindow()) return [];
+
+  const db = await openDatabase();
+  try {
+    const tx = db.transaction(ISSUE_NOTES_STORE, "readonly");
+    const store = tx.objectStore(ISSUE_NOTES_STORE);
+    const result = await requestToPromise<CGMPIssueNote[]>(store.getAll());
+    return (Array.isArray(result) ? result : [])
+      .map(normalizeIssueNote)
+      .filter((issue): issue is CGMPIssueNote => Boolean(issue))
+      .filter((issue) => includeArchived || issue.status !== "archived")
+      .sort(sortIssueNotes);
+  } finally {
+    db.close();
+  }
+}
+
+export async function getIssueNote(id: string) {
+  if (!hasWindow()) return null;
+
+  const db = await openDatabase();
+  try {
+    const tx = db.transaction(ISSUE_NOTES_STORE, "readonly");
+    const store = tx.objectStore(ISSUE_NOTES_STORE);
+    const result = await requestToPromise<CGMPIssueNote | undefined>(store.get(id));
+    return normalizeIssueNote(result);
+  } finally {
+    db.close();
+  }
+}
+
+export async function upsertIssueNote(issue: CGMPIssueNote) {
+  if (!hasWindow()) return issue;
+  const normalized = normalizeIssueNote({
+    ...issue,
+    updated_at: issue.updated_at || new Date().toISOString(),
+  });
+  if (!normalized) return issue;
+
+  await withTransaction(ISSUE_NOTES_STORE, "readwrite", async (store) => {
+    store.put(normalized);
+  });
+  return normalized;
+}
+
+export async function patchIssueNote(id: string, patch: Partial<CGMPIssueNote>) {
+  const current = await getIssueNote(id);
+  const now = new Date().toISOString();
+  const next = normalizeIssueNote({
+    ...(current || createBlankIssueNote({ id })),
+    ...patch,
+    id,
+    updated_at: now,
+  });
+  if (!next) return null;
+  return upsertIssueNote(next);
+}
+
+export async function archiveIssueNote(id: string) {
+  return patchIssueNote(id, { status: "archived", pinned: false });
+}
+
+export async function deleteIssueNote(id: string) {
+  if (!hasWindow()) return;
+  const current = await getIssueNote(id);
+  const blobKeys = current?.image_attachments.map((image) => image.blob_key).filter(Boolean) || [];
+
+  await withTransaction(ISSUE_NOTES_STORE, "readwrite", async (store) => {
+    store.delete(id);
+  });
+  await deleteImageBlobs(blobKeys);
 }
 
 export async function removeBackupQueueItem(id: string) {
