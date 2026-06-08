@@ -332,7 +332,7 @@ export default function Page() {
   const [deletedRecordsSummary, setDeletedRecordsSummary] = useState<DeletedRecordsSummary | null>(null);
   const [checkedRecordIds, setCheckedRecordIds] = useState<string[]>([]);
   const [lightbox, setLightbox] = useState<LightboxState>(null);
-  const [syncActivity, setSyncActivity] = useState<SyncActivity | null>(null);
+  const [syncActivities, setSyncActivities] = useState<SyncActivity[]>([]);
   const deployInfoRequestIdRef = useRef(0);
   const [photoProcessingCount, setPhotoProcessingCount] = useState(0);
   const [externalProcessingKey, setExternalProcessingKey] = useState("");
@@ -360,10 +360,11 @@ export default function Page() {
   const [badgeInfo, setBadgeInfo] = useState<BadgeInfo>(null);
   const initialDriveImportDoneRef = useRef(false);
   const initialExternalSyncDoneRef = useRef(false);
+  const driveImportingRef = useRef(false);
   const aiProcessingIdRef = useRef(0);
   const aiProcessingHideTimerRef = useRef<number | null>(null);
   const syncActivityIdRef = useRef(0);
-  const syncActivityHideTimerRef = useRef<number | null>(null);
+  const syncActivityHideTimersRef = useRef<Map<number, number>>(new Map());
   const scriptableImportInputRef = useRef<HTMLInputElement | null>(null);
   const embeddingProviderRef = useRef(new ApiEmbeddingProvider());
   const embeddingCancelRef = useRef(false);
@@ -391,42 +392,44 @@ export default function Page() {
   }
 
   function startSyncActivity(label: string, title?: string, detail?: string) {
-    if (syncActivityHideTimerRef.current) {
-      window.clearTimeout(syncActivityHideTimerRef.current);
-      syncActivityHideTimerRef.current = null;
-    }
     const id = syncActivityIdRef.current + 1;
     syncActivityIdRef.current = id;
-    setSyncActivity({
+    const activity: SyncActivity = {
       id,
       status: "running",
       label,
       title,
       detail,
       startedAt: performance.now(),
-    });
+    };
+    setSyncActivities((current) => [activity, ...current.filter((item) => item.id !== id)].slice(0, 5));
     return id;
   }
 
   function updateSyncActivity(id: number, patch: Partial<Omit<SyncActivity, "id" | "startedAt">>) {
-    setSyncActivity((current) => (current?.id === id ? { ...current, ...patch } : current));
+    setSyncActivities((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)));
   }
 
   function finishSyncActivity(id: number, status: "done" | "error" = "done", label?: string, detail?: string) {
-    setSyncActivity((current) => {
-      if (!current || current.id !== id) return current;
-      return {
-        ...current,
-        status,
-        label: label || current.label,
-        detail: detail || current.detail,
-      };
-    });
-    if (syncActivityHideTimerRef.current) window.clearTimeout(syncActivityHideTimerRef.current);
-    syncActivityHideTimerRef.current = window.setTimeout(() => {
-      setSyncActivity((current) => (current?.id === id ? null : current));
-      syncActivityHideTimerRef.current = null;
+    setSyncActivities((current) =>
+      current.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              status,
+              label: label || item.label,
+              detail: detail || item.detail,
+            }
+          : item
+      )
+    );
+    const currentTimer = syncActivityHideTimersRef.current.get(id);
+    if (currentTimer) window.clearTimeout(currentTimer);
+    const nextTimer = window.setTimeout(() => {
+      setSyncActivities((current) => current.filter((item) => item.id !== id));
+      syncActivityHideTimersRef.current.delete(id);
     }, status === "error" ? 3200 : 1800);
+    syncActivityHideTimersRef.current.set(id, nextTimer);
   }
 
   function getBackupActivityLabel(stage?: string) {
@@ -1716,11 +1719,60 @@ export default function Page() {
   }
 
   async function importMissingFromDrive(showNotice = false) {
-    if (driveImporting) return;
+    if (driveImportingRef.current) return;
+    driveImportingRef.current = true;
     setDriveImporting(true);
-    const activityId = startSyncActivity("Downloading", "Google Drive", "差分を確認中");
+    const activityId = startSyncActivity("Downloading", "Google Drive", "復元データを取得中");
     try {
-      const result = await importMissingRecordsFromDrive();
+      const result = await importMissingRecordsFromDrive({
+        onProgress: (progress) => {
+          const checked = typeof progress.checked === "number" ? progress.checked : 0;
+          const total = typeof progress.total === "number" ? progress.total : 0;
+          const countText = total > 0 ? `${checked}/${total}` : "";
+          const currentTitle = progress.currentTitle || "Google Drive";
+          if (progress.stage === "fetching") {
+            updateSyncActivity(activityId, {
+              label: "Downloading",
+              title: "Google Drive",
+              detail: "復元データ取得中",
+            });
+            return;
+          }
+          if (progress.stage === "tombstones") {
+            updateSyncActivity(activityId, {
+              label: "Checking deletes",
+              title: currentTitle,
+              detail: countText || "削除照合中",
+            });
+            return;
+          }
+          if (progress.stage === "records") {
+            updateSyncActivity(activityId, {
+              label: "Downloading",
+              title: currentTitle,
+              detail: countText
+                ? `record照合 ${countText} / 追加${progress.imported || 0}`
+                : "record照合中",
+            });
+            return;
+          }
+          if (progress.stage === "attachments") {
+            updateSyncActivity(activityId, {
+              label: "Downloading images",
+              title: currentTitle,
+              detail: countText
+                ? `画像復元 ${countText} / 復元${progress.hydratedAttachments || 0}`
+                : "画像復元中",
+            });
+            return;
+          }
+          updateSyncActivity(activityId, {
+            label: "Download complete",
+            title: "Google Drive",
+            detail: `追加${progress.imported || 0} / 削除${progress.deleted || 0} / 画像${progress.hydratedAttachments || 0}`,
+          });
+        },
+      });
       updateSyncActivity(activityId, {
         label: "Downloading",
         title: "Google Drive",
@@ -1756,6 +1808,7 @@ export default function Page() {
         error instanceof Error ? error.message : "Driveからの取り込みに失敗しました"
       );
     } finally {
+      driveImportingRef.current = false;
       setDriveImporting(false);
     }
   }
@@ -2311,9 +2364,8 @@ export default function Page() {
       if (aiProcessingHideTimerRef.current !== null) {
         window.clearTimeout(aiProcessingHideTimerRef.current);
       }
-      if (syncActivityHideTimerRef.current !== null) {
-        window.clearTimeout(syncActivityHideTimerRef.current);
-      }
+      syncActivityHideTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+      syncActivityHideTimersRef.current.clear();
     };
   }, []);
 
@@ -2336,6 +2388,7 @@ export default function Page() {
 
   useEffect(() => {
     if (!isReady) return;
+    if (!initialDriveImportDoneRef.current) return;
     if (initialExternalSyncDoneRef.current) return;
     if (!records.some((record) => shouldSyncExternalRecord(record, settingsDraft))) return;
     initialExternalSyncDoneRef.current = true;
@@ -2344,22 +2397,33 @@ export default function Page() {
 
   useEffect(() => {
     if (!isReady) return;
-    if (!initialDriveImportDoneRef.current) {
-      initialDriveImportDoneRef.current = true;
-      void importMissingFromDrive(false);
-    }
-    void runBackupQueue(false);
-    void hydrateMissingAttachmentBlobs().then((result) => {
-      if (result.hydrated > 0) {
-        void reloadRecords();
+    void (async () => {
+      if (!initialDriveImportDoneRef.current) {
+        await importMissingFromDrive(false);
+        initialDriveImportDoneRef.current = true;
       }
-    });
+      void runBackupQueue(false);
+      void hydrateMissingAttachmentBlobs().then((result) => {
+        if (result.hydrated > 0) {
+          void reloadRecords();
+        }
+      });
+      if (
+        !initialExternalSyncDoneRef.current &&
+        records.some((record) => shouldSyncExternalRecord(record, settingsDraft))
+      ) {
+        initialExternalSyncDoneRef.current = true;
+        void syncExternalStatuses(false);
+      }
+    })();
 
     const handleVisible = () => {
       if (document.visibilityState === "visible") {
-        void runBackupQueue(false);
-        void importMissingFromDrive(false);
-        void syncExternalStatuses(false);
+        void (async () => {
+          await importMissingFromDrive(false);
+          void runBackupQueue(false);
+          void syncExternalStatuses(false);
+        })();
       }
     };
 
@@ -3353,34 +3417,39 @@ export default function Page() {
           </div>
         ) : null}
 
-        {syncActivity ? (
+        {syncActivities.length > 0 ? (
           <div className="pointer-events-none fixed inset-x-0 bottom-[calc(5.65rem+env(safe-area-inset-bottom))] z-[70] flex justify-start px-3 sm:bottom-[calc(5.9rem+env(safe-area-inset-bottom))] sm:px-5">
-            <div
-              className={`flex max-w-[min(30rem,calc(100vw-7rem))] items-center gap-2 rounded-full border px-3 py-2 text-xs shadow-[0_16px_42px_var(--shadow-soft)] backdrop-blur-xl transition ${
-                syncActivity.status === "error"
-                  ? "border-[color:var(--danger)] bg-[color-mix(in_srgb,var(--card)_82%,var(--danger-soft))] text-[var(--text)]"
-                  : syncActivity.status === "done"
-                    ? "border-[color:var(--success)] bg-[color-mix(in_srgb,var(--card)_82%,var(--success-soft))] text-[var(--text)]"
-                    : "border-[color:var(--accent)] bg-[color-mix(in_srgb,var(--card)_72%,transparent)] text-[var(--text)]"
-              }`}
-              role={syncActivity.status === "error" ? "alert" : "status"}
-              aria-live="polite"
-            >
-              <span
-                className={`h-2.5 w-2.5 shrink-0 rounded-full ${
-                  syncActivity.status === "error"
-                    ? "bg-[var(--danger)]"
-                    : syncActivity.status === "done"
-                      ? "bg-[var(--success)]"
-                      : "animate-pulse bg-[var(--accent)]"
-                }`}
-                aria-hidden="true"
-              />
-              <span className="shrink-0 font-semibold">{syncActivity.label}</span>
-              {syncActivity.title ? (
-                <span className="min-w-0 truncate text-[var(--muted)]">“{syncActivity.title}”</span>
-              ) : null}
-              {syncActivity.detail ? <span className="shrink-0 text-[var(--subtle)]">{syncActivity.detail}</span> : null}
+            <div className="flex max-h-[32vh] w-[min(34rem,calc(100vw-6rem))] flex-col gap-2 overflow-hidden">
+              {syncActivities.map((activity) => (
+                <div
+                  key={activity.id}
+                  className={`flex min-w-0 items-center gap-2 rounded-full border px-3 py-2 text-xs shadow-[0_16px_42px_var(--shadow-soft)] backdrop-blur-xl transition ${
+                    activity.status === "error"
+                      ? "border-[color:var(--danger)] bg-[color-mix(in_srgb,var(--card)_82%,var(--danger-soft))] text-[var(--text)]"
+                      : activity.status === "done"
+                        ? "border-[color:var(--success)] bg-[color-mix(in_srgb,var(--card)_82%,var(--success-soft))] text-[var(--text)]"
+                        : "border-[color:var(--accent)] bg-[color-mix(in_srgb,var(--card)_72%,transparent)] text-[var(--text)]"
+                  }`}
+                  role={activity.status === "error" ? "alert" : "status"}
+                  aria-live="polite"
+                >
+                  <span
+                    className={`h-2.5 w-2.5 shrink-0 rounded-full ${
+                      activity.status === "error"
+                        ? "bg-[var(--danger)]"
+                        : activity.status === "done"
+                          ? "bg-[var(--success)]"
+                          : "animate-pulse bg-[var(--accent)]"
+                    }`}
+                    aria-hidden="true"
+                  />
+                  <span className="shrink-0 font-semibold">{activity.label}</span>
+                  {activity.title ? (
+                    <span className="min-w-0 truncate text-[var(--muted)]">“{activity.title}”</span>
+                  ) : null}
+                  {activity.detail ? <span className="shrink-0 text-[var(--subtle)]">{activity.detail}</span> : null}
+                </div>
+              ))}
             </div>
           </div>
         ) : null}

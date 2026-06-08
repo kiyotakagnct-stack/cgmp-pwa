@@ -87,6 +87,22 @@ type RestoreResponse = {
   error?: string;
 };
 
+type DriveImportProgress = {
+  stage: "fetching" | "tombstones" | "records" | "attachments" | "done";
+  message?: string;
+  checked?: number;
+  total?: number;
+  currentTitle?: string;
+  imported?: number;
+  merged?: number;
+  deleted?: number;
+  hydratedAttachments?: number;
+};
+
+type DriveImportOptions = {
+  onProgress?: (progress: DriveImportProgress) => void;
+};
+
 type TombstoneBackupResponse = {
   ok?: boolean;
   backedUpAt?: string;
@@ -995,21 +1011,40 @@ function mergeRemoteAttachments(localRecord: CGMPRecord, remoteRecord: CGMPRecor
   return changed ? { ...localRecord, attachments: merged } : localRecord;
 }
 
-export async function hydrateMissingAttachmentBlobs() {
+export async function hydrateMissingAttachmentBlobs(options: DriveImportOptions = {}) {
   const records = await loadAllRecords();
   let hydrated = 0;
   const failed: { recordId: string; attachmentId: string; error: string }[] = [];
 
-  for (const record of records) {
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    options.onProgress?.({
+      stage: "attachments",
+      checked: index,
+      total: records.length,
+      currentTitle: record.title || record.summary || record.raw_input || record.id,
+      hydratedAttachments: hydrated,
+    });
     const result = await hydrateAttachmentBlobsForRecord(record);
     hydrated += result.hydrated;
     failed.push(...result.failed.map((item) => ({ recordId: record.id, ...item })));
+    options.onProgress?.({
+      stage: "attachments",
+      checked: index + 1,
+      total: records.length,
+      currentTitle: record.title || record.summary || record.raw_input || record.id,
+      hydratedAttachments: hydrated,
+    });
   }
 
   return { hydrated, failed };
 }
 
-export async function importMissingRecordsFromDrive() {
+export async function importMissingRecordsFromDrive(options: DriveImportOptions = {}) {
+  options.onProgress?.({
+    stage: "fetching",
+    message: "Google Driveの復元データを取得しています。",
+  });
   const [localRecords, localTombstones, response] = await Promise.all([
     loadAllRecords(),
     loadDeletedRecords(),
@@ -1034,16 +1069,66 @@ export async function importMissingRecordsFromDrive() {
   const deleted: CGMPDeletedRecord[] = [];
   const skipped: DriveBackupRecord[] = [];
 
-  for (const tombstone of Object.values(deletedRecords)) {
+  const remoteTombstones = Object.values(deletedRecords);
+  options.onProgress?.({
+    stage: "tombstones",
+    message: "削除済みrecordを照合しています。",
+    checked: 0,
+    total: remoteTombstones.length,
+    imported: 0,
+    merged: 0,
+    deleted: 0,
+  });
+  for (let index = 0; index < remoteTombstones.length; index += 1) {
+    const tombstone = remoteTombstones[index];
     if (!tombstone?.record_id || !tombstone.deleted_at) continue;
     const localTombstone = localDeletedById.get(tombstone.record_id);
     if (localTombstone && localTombstone.deleted_at >= tombstone.deleted_at) continue;
+    options.onProgress?.({
+      stage: "tombstones",
+      checked: index,
+      total: remoteTombstones.length,
+      currentTitle: tombstone.title || tombstone.record_id,
+      imported: imported.length,
+      merged: merged.length,
+      deleted: deleted.length,
+    });
     await applyRemoteRecordDeletion(tombstone);
     deleted.push(tombstone);
     localIds.delete(tombstone.record_id);
+    options.onProgress?.({
+      stage: "tombstones",
+      checked: index + 1,
+      total: remoteTombstones.length,
+      currentTitle: tombstone.title || tombstone.record_id,
+      imported: imported.length,
+      merged: merged.length,
+      deleted: deleted.length,
+    });
   }
 
-  for (const item of payload.records || []) {
+  const remoteRecords = payload.records || [];
+  options.onProgress?.({
+    stage: "records",
+    message: "Drive上のrecordをローカルと照合しています。",
+    checked: 0,
+    total: remoteRecords.length,
+    imported: imported.length,
+    merged: merged.length,
+    deleted: deleted.length,
+  });
+  for (let index = 0; index < remoteRecords.length; index += 1) {
+    const item = remoteRecords[index];
+    const currentTitle = item.title || item.record?.title || item.record?.summary || item.id;
+    options.onProgress?.({
+      stage: "records",
+      checked: index,
+      total: remoteRecords.length,
+      currentTitle,
+      imported: imported.length,
+      merged: merged.length,
+      deleted: deleted.length,
+    });
     const tombstone = deletedRecords[item.id] || localDeletedById.get(item.id);
     if (tombstone) {
       skipped.push(item);
@@ -1084,9 +1169,37 @@ export async function importMissingRecordsFromDrive() {
     await putRecordWithoutBackup(remoteRecord);
     imported.push(remoteRecord);
     localIds.add(remoteRecord.id);
+    options.onProgress?.({
+      stage: "records",
+      checked: index + 1,
+      total: remoteRecords.length,
+      currentTitle,
+      imported: imported.length,
+      merged: merged.length,
+      deleted: deleted.length,
+    });
   }
 
-  const hydration = await hydrateMissingAttachmentBlobs();
+  const hydration = await hydrateMissingAttachmentBlobs({
+    onProgress: (progress) =>
+      options.onProgress?.({
+        ...progress,
+        imported: imported.length,
+        merged: merged.length,
+        deleted: deleted.length,
+      }),
+  });
+
+  options.onProgress?.({
+    stage: "done",
+    message: "Google Driveからの取り込みが完了しました。",
+    checked: remoteRecords.length,
+    total: remoteRecords.length,
+    imported: imported.length,
+    merged: merged.length,
+    deleted: deleted.length,
+    hydratedAttachments: hydration.hydrated,
+  });
 
   return {
     imported,
