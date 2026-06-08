@@ -16,3 +16,24 @@ export async function GET() {
     return NextResponse.json({ ok: false, error: message }, { status });
   }
 }
+
+export async function POST(request: Request) {
+  try {
+    const body = (await request.json().catch(() => ({}))) as {
+      knownRecordChecksums?: Record<string, string>;
+    };
+    return NextResponse.json({
+      ok: true,
+      ...(await listBackedUpRecordDetails({
+        knownRecordChecksums:
+          body.knownRecordChecksums && typeof body.knownRecordChecksums === "object"
+            ? body.knownRecordChecksums
+            : {},
+      })),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "RESTORE_FAILED";
+    const status = message.includes("NOT_CONFIGURED") ? 401 : 500;
+    return NextResponse.json({ ok: false, error: message }, { status });
+  }
+}

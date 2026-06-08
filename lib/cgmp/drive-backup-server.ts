@@ -698,16 +698,54 @@ export async function listBackedUpRecords() {
   return manifest;
 }
 
-export async function listBackedUpRecordDetails() {
-  const { manifest } = await loadManifest();
-  const records = [];
+type ListBackedUpRecordDetailsOptions = {
+  knownRecordChecksums?: Record<string, string>;
+};
 
-  for (const [recordId, entry] of Object.entries(manifest.records)) {
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>
+) {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+export async function listBackedUpRecordDetails(options: ListBackedUpRecordDetailsOptions = {}) {
+  const { manifest } = await loadManifest();
+  const entries = Object.entries(manifest.records);
+  const records = await mapWithConcurrency(entries, 8, async ([recordId, entry]) => {
+    const knownChecksum = options.knownRecordChecksums?.[recordId];
+    if (knownChecksum && knownChecksum === entry.checksum) {
+      return {
+        id: recordId,
+        title: "同期済み",
+        summary: "",
+        action: "",
+        domain: "",
+        para: "",
+        updated_at: entry.updated_at,
+        backed_up_at: entry.backed_up_at,
+        checksum: entry.checksum,
+        file_id: entry.file_id,
+        unchanged: true,
+      };
+    }
+
     try {
       const text = await readTextFile(entry.file_id);
       const parsed = JSON.parse(text || "{}") as { record?: Partial<CGMPRecord> };
       const record = parsed.record || {};
-      records.push({
+      return {
         id: recordId,
         title: String(record.title || "（無題）"),
         summary: String(record.summary || record.body || record.raw_input || ""),
@@ -719,9 +757,9 @@ export async function listBackedUpRecordDetails() {
         checksum: entry.checksum,
         file_id: entry.file_id,
         record,
-      });
+      };
     } catch (error) {
-      records.push({
+      return {
         id: recordId,
         title: "読み込み失敗",
         summary: error instanceof Error ? error.message : "GOOGLE_DRIVE_RECORD_READ_FAILED",
@@ -733,9 +771,9 @@ export async function listBackedUpRecordDetails() {
         checksum: entry.checksum,
         file_id: entry.file_id,
         error: true,
-      });
+      };
     }
-  }
+  });
 
   return {
     manifest,

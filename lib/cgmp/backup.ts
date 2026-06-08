@@ -62,6 +62,7 @@ type DriveBackupRecord = {
   uploaded_at?: string;
   record?: Partial<CGMPRecord>;
   error?: boolean;
+  unchanged?: boolean;
 };
 
 type DriveManifest = {
@@ -1045,11 +1046,20 @@ export async function importMissingRecordsFromDrive(options: DriveImportOptions 
     stage: "fetching",
     message: "Google Driveの復元データを取得しています。",
   });
-  const [localRecords, localTombstones, response] = await Promise.all([
+  const [localRecords, localTombstones] = await Promise.all([
     loadAllRecords(),
     loadDeletedRecords(),
-    fetch("/api/backup/restore"),
   ]);
+  const knownRecordChecksums = Object.fromEntries(
+    localRecords
+      .filter((record) => record.backup_checksum)
+      .map((record) => [record.id, record.backup_checksum])
+  );
+  const response = await fetch("/api/backup/restore", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ knownRecordChecksums }),
+  });
   const payload = (await response.json().catch(() => ({}))) as RestoreResponse;
   if (!response.ok || !payload.ok) {
     throw new Error(payload.error || "RESTORE_FAILED");
@@ -1132,6 +1142,19 @@ export async function importMissingRecordsFromDrive(options: DriveImportOptions 
     const tombstone = deletedRecords[item.id] || localDeletedById.get(item.id);
     if (tombstone) {
       skipped.push(item);
+      continue;
+    }
+    if (item.unchanged) {
+      skipped.push(item);
+      options.onProgress?.({
+        stage: "records",
+        checked: index + 1,
+        total: remoteRecords.length,
+        currentTitle,
+        imported: imported.length,
+        merged: merged.length,
+        deleted: deleted.length,
+      });
       continue;
     }
     if (item.error || !isRestorableRecord(item.record)) {
