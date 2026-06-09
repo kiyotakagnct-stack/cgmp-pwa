@@ -2995,6 +2995,19 @@ export default function Page() {
       if (!response.ok || !payload.ok || !payload.result) {
         throw new Error(payload.error || payload.detail || "AI解析に失敗しました");
       }
+      if (payload.prompt_config) {
+        const logPayload = {
+          source: payload.prompt_config.source,
+          updatedAt: payload.prompt_config.updatedAt,
+          modifiedTime: payload.prompt_config.modifiedTime,
+          error: payload.prompt_config.error,
+        };
+        if (payload.prompt_config.source === "drive" && !payload.prompt_config.error) {
+          console.debug("[cgmp:analyze] prompt config used", logPayload);
+        } else {
+          console.warn("[cgmp:analyze] default prompt config used", logPayload);
+        }
+      }
 
       return payload as CGMPAnalysisResponse;
     } catch (error) {

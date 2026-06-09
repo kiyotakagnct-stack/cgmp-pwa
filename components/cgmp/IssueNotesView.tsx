@@ -35,8 +35,60 @@ const STATUS_OPTIONS: Array<{ value: CGMPIssueNoteStatus; label: string; tone: "
   { value: "archived", label: "Archive", tone: "slate" },
 ];
 
+const ISSUE_DRAFT_STORAGE_PREFIX = "cgmp_issue_draft:";
+const ISSUE_SELECTED_STORAGE_KEY = "cgmp_issue_selected_id";
+
+type CachedIssueDraft = {
+  draft: CGMPIssueNote;
+  savedAt: string;
+};
+
 function getStatusMeta(status: CGMPIssueNoteStatus) {
   return STATUS_OPTIONS.find((option) => option.value === status) || STATUS_OPTIONS[0];
+}
+
+function issueDraftStorageKey(issueId: string) {
+  return `${ISSUE_DRAFT_STORAGE_PREFIX}${issueId}`;
+}
+
+function readCachedIssueDraft(issueId: string): CachedIssueDraft | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(issueDraftStorageKey(issueId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<CachedIssueDraft>;
+    if (!parsed.draft?.id || parsed.draft.id !== issueId) return null;
+    return {
+      draft: parsed.draft as CGMPIssueNote,
+      savedAt: typeof parsed.savedAt === "string" ? parsed.savedAt : new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedIssueDraft(issue: CGMPIssueNote) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      issueDraftStorageKey(issue.id),
+      JSON.stringify({
+        draft: issue,
+        savedAt: new Date().toISOString(),
+      } satisfies CachedIssueDraft)
+    );
+  } catch {
+    // iOS may reject localStorage writes in low-storage/private contexts.
+  }
+}
+
+function clearCachedIssueDraft(issueId: string) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(issueDraftStorageKey(issueId));
+  } catch {
+    // ignore
+  }
 }
 
 function issueSearchText(issue: CGMPIssueNote) {
@@ -140,14 +192,24 @@ export function IssueNotesView({
   onCaptionImage,
   onOpenRecord,
 }: IssueNotesViewProps) {
-  const [selectedId, setSelectedId] = useState("");
+  const [selectedId, setSelectedId] = useState(() => {
+    if (typeof window === "undefined") return "";
+    try {
+      return window.localStorage.getItem(ISSUE_SELECTED_STORAGE_KEY) || "";
+    } catch {
+      return "";
+    }
+  });
   const [draft, setDraft] = useState<CGMPIssueNote | null>(null);
+  const [draftDirty, setDraftDirty] = useState(false);
   const [query, setQuery] = useState("");
   const [recordQuery, setRecordQuery] = useState("");
   const [previewMode, setPreviewMode] = useState<"viewer" | "editor">("viewer");
   const [saving, setSaving] = useState(false);
   const [captioningId, setCaptioningId] = useState("");
   const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const draftRef = useRef<CGMPIssueNote | null>(null);
+  const draftDirtyRef = useRef(false);
   const [imageUrls, setImageUrls] = useState<Map<string, string>>(new Map());
 
   const filteredIssues = useMemo(() => {
@@ -162,15 +224,47 @@ export function IssueNotesView({
   );
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      if (selectedId) {
+        window.localStorage.setItem(ISSUE_SELECTED_STORAGE_KEY, selectedId);
+      } else {
+        window.localStorage.removeItem(ISSUE_SELECTED_STORAGE_KEY);
+      }
+    } catch {
+      // ignore
+    }
+  }, [selectedId]);
+
+  useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
+
+  useEffect(() => {
+    draftDirtyRef.current = draftDirty;
+  }, [draftDirty]);
+
+  useEffect(() => {
     if (!selectedIssue) {
       setSelectedId("");
       setDraft(null);
+      setDraftDirty(false);
       return;
     }
     if (!selectedId || !issues.some((issue) => issue.id === selectedId)) {
       setSelectedId(selectedIssue.id);
     }
+    if (draftDirtyRef.current && draftRef.current?.id === selectedIssue.id) {
+      return;
+    }
+    const cached = readCachedIssueDraft(selectedIssue.id);
+    if (cached) {
+      setDraft(cached.draft);
+      setDraftDirty(true);
+      return;
+    }
     setDraft(selectedIssue);
+    setDraftDirty(false);
   }, [issues, selectedId, selectedIssue]);
 
   useEffect(() => {
@@ -212,8 +306,10 @@ export function IssueNotesView({
   async function handleCreate() {
     const issue = await onCreateIssue();
     if (!issue) return;
+    clearCachedIssueDraft(issue.id);
     setSelectedId(issue.id);
     setDraft(issue);
+    setDraftDirty(false);
     setPreviewMode("editor");
   }
 
@@ -223,8 +319,10 @@ export function IssueNotesView({
     try {
       const saved = await onSaveIssue(draft);
       if (saved) {
+        clearCachedIssueDraft(saved.id);
         setDraft(saved);
         setSelectedId(saved.id);
+        setDraftDirty(false);
       }
     } finally {
       setSaving(false);
@@ -232,7 +330,13 @@ export function IssueNotesView({
   }
 
   function updateDraft(patch: Partial<CGMPIssueNote>) {
-    setDraft((current) => (current ? { ...current, ...patch } : current));
+    setDraft((current) => {
+      if (!current) return current;
+      const next = { ...current, ...patch };
+      writeCachedIssueDraft(next);
+      return next;
+    });
+    setDraftDirty(true);
   }
 
   function addLinkedRecord(recordId: string) {
@@ -259,7 +363,9 @@ export function IssueNotesView({
     const body = markdown ? `${draft.body_markdown.trimEnd()}\n\n${markdown}`.trimStart() : draft.body_markdown;
     const next = { ...updated, body_markdown: body };
     const saved = await onSaveIssue(next);
+    clearCachedIssueDraft((saved || next).id);
     setDraft(saved || next);
+    setDraftDirty(false);
   }
 
   async function handleCaption(imageId: string) {
@@ -267,7 +373,11 @@ export function IssueNotesView({
     setCaptioningId(imageId);
     try {
       const updated = await onCaptionImage(draft.id, imageId);
-      if (updated) setDraft(updated);
+      if (updated) {
+        clearCachedIssueDraft(updated.id);
+        setDraft(updated);
+        setDraftDirty(false);
+      }
     } finally {
       setCaptioningId("");
     }
@@ -394,7 +504,10 @@ export function IssueNotesView({
                     Editor
                   </button>
                 </div>
-                <Badge compact tone={statusMeta.tone}>{statusMeta.label}</Badge>
+                <div className="flex flex-wrap items-center gap-2">
+                  {draftDirty ? <Badge compact tone="amber">未保存</Badge> : null}
+                  <Badge compact tone={statusMeta.tone}>{statusMeta.label}</Badge>
+                </div>
               </div>
 
               {previewMode === "viewer" ? (
@@ -574,13 +687,21 @@ export function IssueNotesView({
               )}
 
               <div className="flex flex-wrap justify-between gap-2 border-t border-[color:var(--border)] pt-4">
-                <button type="button" onClick={() => void onArchiveIssue(draft.id)} className={secondaryButtonClass}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearCachedIssueDraft(draft.id);
+                    void onArchiveIssue(draft.id);
+                  }}
+                  className={secondaryButtonClass}
+                >
                   Archive
                 </button>
                 <button
                   type="button"
                   onClick={() => {
                     if (window.confirm("このIssue Noteを完全に削除しますか？")) {
+                      clearCachedIssueDraft(draft.id);
                       void onDeleteIssue(draft.id);
                     }
                   }}

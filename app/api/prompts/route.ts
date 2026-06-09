@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 
-import { loadPromptConfigFromDrive, savePromptConfigToDrive } from "@/lib/cgmp/drive-backup-server";
+import { loadPromptConfigFromDriveWithMeta, savePromptConfigToDrive } from "@/lib/cgmp/drive-backup-server";
 import { createDefaultPromptConfig, getPromptDefinitions, normalizePromptConfig } from "@/lib/cgmp/prompt-config";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 function getClientPromptDefinitions() {
   return getPromptDefinitions().map(({ hiddenContract: _hiddenContract, ...definition }) => definition);
@@ -11,12 +13,14 @@ function getClientPromptDefinitions() {
 
 export async function GET() {
   try {
-    const config = await loadPromptConfigFromDrive();
+    const promptConfig = await loadPromptConfigFromDriveWithMeta();
     return NextResponse.json({
       ok: true,
-      source: "drive",
+      source: promptConfig.source,
+      fileId: promptConfig.fileId,
+      modifiedTime: promptConfig.modifiedTime,
       definitions: getClientPromptDefinitions(),
-      config,
+      config: promptConfig.config,
     });
   } catch (error) {
     return NextResponse.json({

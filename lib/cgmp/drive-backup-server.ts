@@ -173,6 +173,7 @@ export async function getGoogleAccessToken() {
 async function driveFetch<T>(path: string, init: RequestInit = {}) {
   const accessToken = await getGoogleAccessToken();
   const response = await fetch(`${DRIVE_API_BASE}${path}`, {
+    cache: "no-store",
     ...init,
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -191,6 +192,7 @@ async function driveFetch<T>(path: string, init: RequestInit = {}) {
 async function driveJson<T>(path: string, init: RequestInit = {}) {
   const accessToken = await getGoogleAccessToken();
   const response = await fetch(`${DRIVE_API_BASE}${path}`, {
+    cache: "no-store",
     ...init,
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -377,6 +379,7 @@ async function getDriveBackupTarget() {
 async function readTextFile(fileId: string) {
   const accessToken = await getGoogleAccessToken();
   const response = await fetch(`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?alt=media`, {
+    cache: "no-store",
     headers: { Authorization: `Bearer ${accessToken}` },
   });
 
@@ -982,13 +985,34 @@ export async function listBackedUpRecordDetails(options: ListBackedUpRecordDetai
 }
 
 export async function loadPromptConfigFromDrive(): Promise<CGMPPromptConfigFile> {
+  return (await loadPromptConfigFromDriveWithMeta()).config;
+}
+
+export async function loadPromptConfigFromDriveWithMeta(): Promise<{
+  config: CGMPPromptConfigFile;
+  source: "drive" | "default";
+  fileId: string;
+  modifiedTime: string;
+}> {
   const target = await getDriveBackupTarget();
   const file = await findFileInParent("prompts.json", target.manifestParentId, {
     spaces: target.mode === "appdata" ? APP_DATA_SPACE : undefined,
   });
-  if (!file) return createDefaultPromptConfig();
+  if (!file) {
+    return {
+      config: createDefaultPromptConfig(),
+      source: "default",
+      fileId: "",
+      modifiedTime: "",
+    };
+  }
   const text = await readTextFile(file.id);
-  return normalizePromptConfig(JSON.parse(text || "{}"));
+  return {
+    config: normalizePromptConfig(JSON.parse(text || "{}")),
+    source: "drive",
+    fileId: file.id,
+    modifiedTime: file.modifiedTime || "",
+  };
 }
 
 export async function savePromptConfigToDrive(config: CGMPPromptConfigFile) {

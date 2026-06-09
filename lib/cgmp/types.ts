@@ -98,6 +98,13 @@ export type CGMPAnalysisResponse = {
   ok: boolean;
   model: string;
   generated_at: string;
+  prompt_config?: {
+    source: "drive" | "default";
+    fileId?: string;
+    modifiedTime?: string;
+    updatedAt?: string;
+    error?: string;
+  };
   result: CGMPAnalysis;
   error?: string;
   raw_response_text?: string;

@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
 
-import { loadPromptConfigFromDrive } from "@/lib/cgmp/drive-backup-server";
+import { loadPromptConfigFromDriveWithMeta } from "@/lib/cgmp/drive-backup-server";
 import { buildAnalyzePrompt, createDefaultPromptConfig } from "@/lib/cgmp/prompt-config";
 import { sanitizeVisionResult } from "@/lib/image/sanitizeVisionResult";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 function pickContent(payload: any) {
   return (
@@ -31,13 +33,35 @@ export async function POST(request: Request) {
     const arrayBuffer = await image.arrayBuffer();
     const base64 = Buffer.from(arrayBuffer).toString("base64");
     const model = "gpt-4.1-nano";
-    let systemPrompt = buildAnalyzePrompt("image_analysis", createDefaultPromptConfig());
+    const defaultPromptConfig = createDefaultPromptConfig();
+    let systemPrompt = buildAnalyzePrompt("image_analysis", defaultPromptConfig);
+    let promptConfigMeta: {
+      source: "drive" | "default";
+      fileId: string;
+      modifiedTime: string;
+      updatedAt: string;
+      error?: string;
+    } = {
+      source: "default",
+      fileId: "",
+      modifiedTime: "",
+      updatedAt: defaultPromptConfig.updated_at,
+    };
     try {
-      systemPrompt = buildAnalyzePrompt("image_analysis", await loadPromptConfigFromDrive());
+      const loadedPromptConfig = await loadPromptConfigFromDriveWithMeta();
+      systemPrompt = buildAnalyzePrompt("image_analysis", loadedPromptConfig.config);
+      promptConfigMeta = {
+        source: loadedPromptConfig.source,
+        fileId: loadedPromptConfig.fileId,
+        modifiedTime: loadedPromptConfig.modifiedTime,
+        updatedAt: loadedPromptConfig.config.updated_at,
+      };
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       console.debug("[cgmp:image] prompt config fallback to default", {
-        error: error instanceof Error ? error.message : String(error),
+        error: message,
       });
+      promptConfigMeta.error = message;
     }
 
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -86,6 +110,7 @@ export async function POST(request: Request) {
       ok: true,
       model,
       generated_at: new Date().toISOString(),
+      prompt_config: promptConfigMeta,
       result,
     });
   } catch (error) {

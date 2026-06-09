@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
-import { loadPromptConfigFromDrive } from "@/lib/cgmp/drive-backup-server";
+import { loadPromptConfigFromDriveWithMeta } from "@/lib/cgmp/drive-backup-server";
 import { buildAnalyzePrompt, createDefaultPromptConfig, type CGMPPromptConfigFile } from "@/lib/cgmp/prompt-config";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 type AnalyzeRequest = {
   text?: string;
@@ -586,12 +588,33 @@ export async function POST(request: Request) {
     const originalInputTime = normalizeInputTimeToJstStamp(body.input_at);
     const userContent = buildUserContent(originalInputTime, text);
     let promptConfig = createDefaultPromptConfig();
+    let promptConfigMeta: {
+      source: "drive" | "default";
+      fileId: string;
+      modifiedTime: string;
+      updatedAt: string;
+      error?: string;
+    } = {
+      source: "default",
+      fileId: "",
+      modifiedTime: "",
+      updatedAt: promptConfig.updated_at,
+    };
     try {
-      promptConfig = await loadPromptConfigFromDrive();
+      const loadedPromptConfig = await loadPromptConfigFromDriveWithMeta();
+      promptConfig = loadedPromptConfig.config;
+      promptConfigMeta = {
+        source: loadedPromptConfig.source,
+        fileId: loadedPromptConfig.fileId,
+        modifiedTime: loadedPromptConfig.modifiedTime,
+        updatedAt: loadedPromptConfig.config.updated_at,
+      };
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       console.debug("[cgmp:analyze] prompt config fallback to default", {
-        error: error instanceof Error ? error.message : String(error),
+        error: message,
       });
+      promptConfigMeta.error = message;
     }
 
     let split: SplitAnalysis;
@@ -610,12 +633,13 @@ export async function POST(request: Request) {
 
     const merged = mergeSplitResults(split);
     const result = normalizeFinalResult(merged, text);
-    const rawResponseText = JSON.stringify({ split, merged, result });
+    const rawResponseText = JSON.stringify({ split, merged, result, prompt_config: promptConfigMeta });
 
     return NextResponse.json({
       ok: true,
       model,
       generated_at: new Date().toISOString(),
+      prompt_config: promptConfigMeta,
       result,
       raw_response_text: rawResponseText,
     });
