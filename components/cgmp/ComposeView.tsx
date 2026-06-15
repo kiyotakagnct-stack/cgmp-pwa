@@ -37,6 +37,8 @@ type ComposeViewProps = {
   onGoHome: () => void;
 };
 
+const QUICK_INPUT_TOKENS = ["今日", "明日", "明後日", "メモ", "タスク", "予定"] as const;
+
 export function ComposeView({
   draft,
   loading,
@@ -53,6 +55,27 @@ export function ComposeView({
   onClear,
   onGoHome,
 }: ComposeViewProps) {
+  function insertQuickInputToken(token: (typeof QUICK_INPUT_TOKENS)[number]) {
+    const textarea = rawInputRef.current;
+    const currentValue = draft.raw_input ?? "";
+    const start = textarea?.selectionStart ?? currentValue.length;
+    const end = textarea?.selectionEnd ?? start;
+    const before = currentValue.slice(0, start);
+    const after = currentValue.slice(end);
+    const prefix = before && !/[\s　]$/.test(before) ? " " : "";
+    const suffix = after && !/^[\s　]/.test(after) ? " " : "";
+    const insertedText = `${prefix}${token}${suffix}`;
+    const nextValue = `${before}${insertedText}${after}`;
+    const nextCursorPosition = before.length + insertedText.length;
+
+    onDraftChange({ raw_input: nextValue, body: draft.body || nextValue });
+
+    window.requestAnimationFrame(() => {
+      rawInputRef.current?.focus();
+      rawInputRef.current?.setSelectionRange(nextCursorPosition, nextCursorPosition);
+    });
+  }
+
   return (
     <div className="grid gap-5 xl:grid-cols-[1fr_1fr]">
       <section className={panelClass}>
@@ -70,6 +93,20 @@ export function ComposeView({
             rows={10}
             inputRef={rawInputRef}
           />
+
+          <div className="-mt-1 flex flex-wrap gap-2" aria-label="Raw input quick insert">
+            {QUICK_INPUT_TOKENS.map((token) => (
+              <button
+                key={token}
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => insertQuickInputToken(token)}
+                className="rounded-full border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-sm font-semibold text-[var(--text)] shadow-sm transition hover:border-[var(--accent)] hover:text-[var(--accent)] active:scale-[0.98]"
+              >
+                {token}
+              </button>
+            ))}
+          </div>
 
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={onAnalyze} disabled={loading} className={primaryButtonClass}>
