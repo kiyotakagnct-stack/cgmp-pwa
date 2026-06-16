@@ -10,6 +10,20 @@ import {
 import type { RecordFormState } from "@/lib/cgmp/client-utils";
 import { normalizeAction, normalizeDomain, normalizePara } from "@/lib/cgmp/utils";
 
+const FIELD_SUMMARY_ITEMS = [
+  { id: "record-action", label: "Action", value: (draft: RecordFormState) => draft.action || "未設定" },
+  { id: "record-date", label: "Date", value: (draft: RecordFormState) => draft.date || "未設定" },
+  { id: "record-time", label: "Time", value: (draft: RecordFormState) => draft.time || "未設定" },
+  {
+    id: "record-duration",
+    label: "Duration",
+    value: (draft: RecordFormState) =>
+      Number.isFinite(draft.duration_minutes) ? `${draft.duration_minutes}m` : "未設定",
+  },
+  { id: "record-para", label: "PARA", value: (draft: RecordFormState) => draft.para || "未設定" },
+  { id: "record-domain", label: "Domain", value: (draft: RecordFormState) => draft.domain || "未設定" },
+] as const;
+
 export function RecordEditor({
   draft,
   onChange,
@@ -19,6 +33,15 @@ export function RecordEditor({
   onChange: (patch: Partial<RecordFormState>) => void;
   showRawInput?: boolean;
 }) {
+  function jumpToField(fieldId: string) {
+    const target = document.getElementById(fieldId);
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+
+    const focusable = target.querySelector<HTMLElement>("input, textarea, select, button");
+    focusable?.focus();
+  }
+
   return (
     <div className="grid gap-4 xl:grid-cols-2">
       <div className="space-y-4">
@@ -49,8 +72,25 @@ export function RecordEditor({
       </div>
 
       <div className="space-y-4">
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="sticky top-0 z-10 rounded-2xl border border-[color:var(--border)] bg-[var(--card)]/95 p-2 shadow-[0_10px_26px_var(--shadow-soft)] backdrop-blur">
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 xl:grid-cols-6">
+            {FIELD_SUMMARY_ITEMS.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => jumpToField(item.id)}
+                className="min-w-0 rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] px-2.5 py-2 text-left transition hover:border-[color:var(--accent)] hover:bg-[var(--accent-soft)]"
+              >
+                <span className="block text-[9px] uppercase tracking-[0.22em] text-[var(--muted)]">{item.label}</span>
+                <span className="mt-1 block truncate text-[11px] font-semibold text-[var(--text)]">{item.value(draft)}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
           <LabeledSelect
+            id="record-action"
             label="Action"
             value={draft.action}
             onChange={(value) => onChange({ action: normalizeAction(value) })}
@@ -62,6 +102,7 @@ export function RecordEditor({
             ]}
           />
           <LabeledSelect
+            id="record-para"
             label="PARA"
             value={draft.para}
             onChange={(value) => onChange({ para: normalizePara(value) })}
@@ -73,6 +114,7 @@ export function RecordEditor({
             ]}
           />
           <LabeledSelect
+            id="record-domain"
             label="Domain"
             value={draft.domain}
             onChange={(value) => onChange({ domain: normalizeDomain(value) })}
@@ -89,15 +131,28 @@ export function RecordEditor({
             ]}
           />
           <LabeledNumber
+            id="record-duration"
             label="Duration (min)"
             value={draft.duration_minutes}
             onChange={(value) => onChange({ duration_minutes: value })}
           />
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          <LabeledInput label="Date" value={draft.date} onChange={(value) => onChange({ date: value })} placeholder="YYYY-MM-DD" />
-          <LabeledInput label="Time" value={draft.time} onChange={(value) => onChange({ time: value })} placeholder="HH:mm" />
+        <div className="grid gap-3 sm:grid-cols-2">
+          <LabeledInput
+            id="record-date"
+            label="Date"
+            value={draft.date}
+            onChange={(value) => onChange({ date: value })}
+            placeholder="YYYY-MM-DD"
+          />
+          <LabeledInput
+            id="record-time"
+            label="Time"
+            value={draft.time}
+            onChange={(value) => onChange({ time: value })}
+            placeholder="HH:mm"
+          />
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
@@ -136,4 +191,3 @@ export function RecordEditor({
     </div>
   );
 }
-

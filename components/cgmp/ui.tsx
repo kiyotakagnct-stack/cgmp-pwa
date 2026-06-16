@@ -269,17 +269,20 @@ export function LabeledInput({
   onChange,
   placeholder,
   type = "text",
+  id,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
   type?: string;
+  id?: string;
 }) {
   return (
-    <label className="block min-w-0 text-sm font-medium text-[var(--text)]">
+    <label htmlFor={id} className="block min-w-0 text-sm font-medium text-[var(--text)]">
       {label}
       <input
+        id={id}
         type={type}
         value={value}
         onChange={(event) => onChange(event.target.value)}
@@ -294,15 +297,18 @@ export function LabeledNumber({
   label,
   value,
   onChange,
+  id,
 }: {
   label: string;
   value: number;
   onChange: (value: number) => void;
+  id?: string;
 }) {
   return (
-    <label className="block min-w-0 text-sm font-medium text-[var(--text)]">
+    <label htmlFor={id} className="block min-w-0 text-sm font-medium text-[var(--text)]">
       {label}
       <input
+        id={id}
         type="number"
         min={1}
         value={Number.isFinite(value) ? value : 60}
@@ -320,6 +326,7 @@ export function LabeledTextarea({
   placeholder,
   rows = 5,
   inputRef,
+  id,
 }: {
   label: string;
   value: string;
@@ -327,11 +334,13 @@ export function LabeledTextarea({
   placeholder?: string;
   rows?: number;
   inputRef?: RefObject<HTMLTextAreaElement | null>;
+  id?: string;
 }) {
   return (
-    <label className="block min-w-0 text-sm font-medium text-[var(--text)]">
+    <label htmlFor={id} className="block min-w-0 text-sm font-medium text-[var(--text)]">
       {label}
       <textarea
+        id={id}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
@@ -348,16 +357,18 @@ export function LabeledSelect({
   value,
   onChange,
   options,
+  id,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   options: { value: string; label: string }[];
+  id?: string;
 }) {
   return (
-    <label className="block min-w-0 text-sm font-medium text-[var(--text)]">
+    <label htmlFor={id} className="block min-w-0 text-sm font-medium text-[var(--text)]">
       {label}
-      <select value={value} onChange={(event) => onChange(event.target.value)} className={fieldClass}>
+      <select id={id} value={value} onChange={(event) => onChange(event.target.value)} className={fieldClass}>
         {options.map((option) => (
           <option key={option.value} value={option.value}>
             {option.label}
@@ -372,16 +383,19 @@ export function LabeledToggle({
   label,
   value,
   onChange,
+  id,
 }: {
   label: string;
   value: boolean;
   onChange: (value: boolean) => void;
+  id?: string;
 }) {
   return (
-    <label className="flex items-center justify-between gap-3 rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-4 py-3 text-sm text-[var(--text)]">
+    <label htmlFor={id} className="flex items-center justify-between gap-3 rounded-2xl border border-[color:var(--border)] bg-[var(--card)] px-4 py-3 text-sm text-[var(--text)]">
       <span>{label}</span>
       <button
         type="button"
+        id={id}
         onClick={() => onChange(!value)}
         className={`relative h-6 w-11 rounded-full border transition ${
           value ? "border-[color:var(--accent)] bg-[var(--accent)]" : "border-[color:var(--border)] bg-[var(--card-soft)]"
@@ -396,4 +410,3 @@ export function LabeledToggle({
     </label>
   );
 }
-
