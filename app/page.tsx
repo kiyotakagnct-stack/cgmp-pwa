@@ -3122,6 +3122,56 @@ export default function Page() {
     }
   }
 
+  async function handleAnalyzeAndSave() {
+    const rawInput = composeDraft.raw_input.trim();
+    if (!rawInput) {
+      setNotice({ kind: "error", text: "入力テキストを入れてください。" });
+      return;
+    }
+
+    setComposeLoading(true);
+    setComposeAiError("");
+    const processingId = beginAiProcessing("text", "テキストAI解析中");
+    try {
+      const payload = await requestTextAnalysis(rawInput);
+      const analysis = payload.result;
+      const analyzedDraft = applyAnalysisToDraft(composeDraft, rawInput, analysis);
+      const aiMeta = {
+        model: payload.model || settingsDraft?.openai_model || "gpt-4.1-nano",
+        generated_at: payload.generated_at,
+      };
+
+      setComposeDraft(analyzedDraft);
+      setComposeAiStatus("done");
+      setComposeAiMeta(aiMeta);
+      await saveCompose(false, {
+        draft: analyzedDraft,
+        aiStatus: "done",
+        aiError: "",
+        aiMeta,
+        autoRegisterExternal: true,
+      });
+    } catch (error) {
+      setComposeAiStatus("error");
+      const message = error instanceof Error ? error.message : "AI解析に失敗しました";
+      setComposeAiError(message);
+      setNotice({ kind: "error", text: message });
+      try {
+        await saveComposeDraft(message);
+      } catch (draftError) {
+        setNotice({
+          kind: "error",
+          text: `AI解析に失敗し、下書き保存にも失敗しました: ${
+            draftError instanceof Error ? draftError.message : String(draftError)
+          }`,
+        });
+      }
+    } finally {
+      finishAiProcessing(processingId);
+      setComposeLoading(false);
+    }
+  }
+
   async function analyzeRecordWithAI(recordId: string) {
     if (externalProcessingKey) return;
     const latestRecords = await loadAllRecords();
@@ -3227,22 +3277,48 @@ export default function Page() {
     }
   }
 
-  async function saveCompose(forceManual = false) {
-    const nextRecord = formToRecord(composeDraft, {
-      aiStatus: forceManual ? "none" : composeAiStatus,
-      aiError: forceManual ? "" : composeAiError,
-      aiMeta: forceManual ? null : composeAiMeta,
+  async function saveCompose(
+    forceManual = false,
+    options: {
+      draft?: RecordFormState;
+      aiStatus?: CGMPRecord["ai_status"];
+      aiError?: string;
+      aiMeta?: typeof composeAiMeta;
+      autoRegisterExternal?: boolean;
+    } = {}
+  ) {
+    const sourceDraft = options.draft ?? composeDraft;
+    const nextRecord = formToRecord(sourceDraft, {
+      aiStatus: forceManual ? "none" : (options.aiStatus ?? composeAiStatus),
+      aiError: forceManual ? "" : (options.aiError ?? composeAiError),
+      aiMeta: forceManual ? null : (options.aiMeta ?? composeAiMeta),
     });
 
     try {
       const savedRecord = await upsertRecord(nextRecord);
       void suggestRelatedRecords(savedRecord);
-      await reloadRecords(savedRecord.id);
+      let finalRecord = savedRecord;
+      if (options.autoRegisterExternal && savedRecord.action === "reminder") {
+        finalRecord = await registerGoogleTaskRecord(savedRecord, { showNotice: false });
+      } else if (options.autoRegisterExternal && savedRecord.action === "calendar") {
+        finalRecord = await registerGoogleCalendarRecord(savedRecord, { showNotice: false });
+      }
+      await reloadRecords(finalRecord.id);
       await reloadBackupSummary();
-      setNotice({ kind: "info", text: "保存しました。" });
-      if (savedRecord.action === "reminder") {
+      const externalFailed = finalRecord.external_action_status === "failed";
+      setNotice({
+        kind: externalFailed ? "error" : "info",
+        text: options.autoRegisterExternal
+          ? externalFailed
+            ? "保存しましたが、Google側の登録に失敗しました。"
+            : finalRecord.action === "reminder" || finalRecord.action === "calendar"
+              ? "AI解析して保存し、Googleにも登録しました。"
+              : "AI解析して保存しました。"
+          : "保存しました。",
+      });
+      if (!options.autoRegisterExternal && savedRecord.action === "reminder") {
         setExternalConfirm({ recordId: savedRecord.id, action: "reminder", title: savedRecord.title || "（無題）" });
-      } else if (savedRecord.action === "calendar") {
+      } else if (!options.autoRegisterExternal && savedRecord.action === "calendar") {
         setExternalConfirm({ recordId: savedRecord.id, action: "calendar", title: savedRecord.title || "（無題）" });
       }
       window.setTimeout(() => {
@@ -3888,6 +3964,7 @@ export default function Page() {
               confirmSectionRef={confirmSectionRef}
               onDraftChange={(patch) => setComposeDraft((prev) => ({ ...prev, ...patch }))}
               onAnalyze={handleAnalyze}
+              onAnalyzeAndSave={handleAnalyzeAndSave}
               onSave={() => saveCompose()}
               onSaveWithoutAi={() => saveCompose(true)}
               onSaveDraft={() => void saveComposeDraft()}

@@ -30,6 +30,7 @@ type ComposeViewProps = {
   confirmSectionRef: RefObject<HTMLElement | null>;
   onDraftChange: (patch: Partial<RecordFormState>) => void;
   onAnalyze: () => void;
+  onAnalyzeAndSave: () => void;
   onSave: () => void;
   onSaveWithoutAi: () => void;
   onSaveDraft: () => void;
@@ -49,6 +50,7 @@ export function ComposeView({
   confirmSectionRef,
   onDraftChange,
   onAnalyze,
+  onAnalyzeAndSave,
   onSave,
   onSaveWithoutAi,
   onSaveDraft,
@@ -111,6 +113,9 @@ export function ComposeView({
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={onAnalyze} disabled={loading} className={primaryButtonClass}>
               {loading ? "解析中..." : "AI解析"}
+            </button>
+            <button type="button" onClick={onAnalyzeAndSave} disabled={loading} className={primaryButtonClass}>
+              {loading ? "解析中..." : "AI解析して保存"}
             </button>
             <button type="button" onClick={onSaveWithoutAi} className={secondaryButtonClass}>
               AIなしで保存
