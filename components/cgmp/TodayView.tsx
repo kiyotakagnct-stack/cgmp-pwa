@@ -562,18 +562,18 @@ function CarryOverPanel({
             return (
               <div
                 key={record.id}
-                className="grid w-full grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-2 py-2 text-left"
+                className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 py-2 text-left"
               >
                 <button
                   type="button"
                   onClick={() => onOpenRecord(record.id)}
-                  className="contents text-left"
+                  className="flex min-w-0 items-center gap-2 text-left"
                 >
                   <span className="text-lg leading-none">{inferSemanticIcon(record)}</span>
                   <span className="min-w-0">
                     <span className="block truncate text-sm font-semibold text-[var(--text)]">{record.title || "（無題）"}</span>
                     <span className="mt-0.5 block truncate text-[11px] text-[var(--muted)]">
-                    {record.date || "日付未設定"} {timeline.timeLabel}
+                      {record.date || "日付未設定"} {timeline.timeLabel}
                     </span>
                   </span>
                 </button>
