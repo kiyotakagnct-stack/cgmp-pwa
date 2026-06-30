@@ -529,6 +529,85 @@ function CompactLoopList({
   );
 }
 
+function CarryOverPanel({
+  records,
+  onOpenRecord,
+  onToggleGoogleTaskStatus,
+  externalProcessingKey,
+}: {
+  records: CGMPRecord[];
+  onOpenRecord: (id: string) => void;
+  onToggleGoogleTaskStatus: (id: string) => void;
+  externalProcessingKey: string;
+}) {
+  const visibleRecords = records.slice(0, 6);
+
+  return (
+    <section className={panelClass}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--orange)]">Carry-over</div>
+          <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
+            Google Tasks連携済みで、昨日以前から残っている未完了タスクです。
+          </p>
+        </div>
+        <Badge compact tone={records.length > 0 ? "amber" : "slate"}>{records.length}件</Badge>
+      </div>
+
+      {visibleRecords.length > 0 ? (
+        <div className="mt-3 divide-y divide-[color:var(--border)]">
+          {visibleRecords.map((record) => {
+            const taskProcessing = externalProcessingKey === `task-status:${record.id}`;
+            const timeline = getRecordTimeline(record);
+            return (
+              <div
+                key={record.id}
+                className="grid w-full grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-2 py-2 text-left"
+              >
+                <button
+                  type="button"
+                  onClick={() => onOpenRecord(record.id)}
+                  className="contents text-left"
+                >
+                  <span className="text-lg leading-none">{inferSemanticIcon(record)}</span>
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-semibold text-[var(--text)]">{record.title || "（無題）"}</span>
+                    <span className="mt-0.5 block truncate text-[11px] text-[var(--muted)]">
+                    {record.date || "日付未設定"} {timeline.timeLabel}
+                    </span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onToggleGoogleTaskStatus(record.id);
+                  }}
+                  disabled={taskProcessing}
+                  className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold transition ${
+                    taskProcessing
+                      ? "cursor-not-allowed opacity-50"
+                      : "border-[color:var(--orange)] bg-[var(--orange-soft)] text-[var(--orange)]"
+                  }`}
+                >
+                  {taskProcessing ? "同期中" : "未完了"}
+                </button>
+              </div>
+            );
+          })}
+          {records.length > visibleRecords.length ? (
+            <div className="pt-2 text-right text-xs text-[var(--muted)]">ほか {records.length - visibleRecords.length}件</div>
+          ) : null}
+        </div>
+      ) : (
+        <div className="mt-3 rounded-2xl border border-dashed border-[color:var(--border)] px-4 py-3 text-sm text-[var(--subtle)]">
+          持ち越しタスクはありません。
+        </div>
+      )}
+    </section>
+  );
+}
+
 function TodaysInbox({
   records,
   onOpenRecord,
@@ -749,6 +828,13 @@ export function TodayView({
         items={cockpit.flowItems}
         onOpenRecord={onOpenRecord}
         onOpenImage={onOpenImage}
+        onToggleGoogleTaskStatus={onToggleGoogleTaskStatus}
+        externalProcessingKey={externalProcessingKey}
+      />
+
+      <CarryOverPanel
+        records={cockpit.carryOver}
+        onOpenRecord={onOpenRecord}
         onToggleGoogleTaskStatus={onToggleGoogleTaskStatus}
         externalProcessingKey={externalProcessingKey}
       />
