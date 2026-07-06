@@ -2134,6 +2134,16 @@ export default function Page() {
   }
 
   async function suggestRelatedRecords(record: CGMPRecord) {
+    if (settingsDraft?.post_save_related_suggestions_enabled === false) {
+      void createOrRefreshEmbedding(record, false).catch((error) => {
+        console.debug("[cgmp:embedding] background embedding refresh skipped suggestion", {
+          record_id: record.id,
+          error,
+        });
+      });
+      void assignSemanticIcon(record, false);
+      return;
+    }
     try {
       const { index } = await createOrRefreshEmbedding(record, true);
       void assignSemanticIcon(record, false);

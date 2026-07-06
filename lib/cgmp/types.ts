@@ -269,6 +269,7 @@ export type CGMPSettings = {
   timezone: string;
   semantic_search_threshold: number;
   semantic_search_result_mode: CGMPSemanticSearchResultMode;
+  post_save_related_suggestions_enabled: boolean;
   semantic_icon_threshold: number;
   external_sync_past_days: number;
   external_sync_future_days: number;

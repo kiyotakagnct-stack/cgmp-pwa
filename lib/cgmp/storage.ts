@@ -266,6 +266,7 @@ export function createDefaultSettings(): CGMPSettings {
     timezone: "Asia/Tokyo",
     semantic_search_threshold: DEFAULT_SEMANTIC_SEARCH_THRESHOLD,
     semantic_search_result_mode: "threshold",
+    post_save_related_suggestions_enabled: true,
     semantic_icon_threshold: DEFAULT_SEMANTIC_ICON_THRESHOLD,
     external_sync_past_days: 7,
     external_sync_future_days: 60,
@@ -311,6 +312,7 @@ export async function loadSettings(): Promise<CGMPSettings> {
       ...merged,
       semantic_search_threshold: normalizeSemanticSearchThreshold(merged.semantic_search_threshold),
       semantic_search_result_mode: normalizeSemanticSearchResultMode(merged.semantic_search_result_mode),
+      post_save_related_suggestions_enabled: merged.post_save_related_suggestions_enabled !== false,
       semantic_icon_threshold: normalizeSemanticIconThreshold(merged.semantic_icon_threshold),
       external_sync_past_days: normalizeExternalSyncDays(merged.external_sync_past_days, 7),
       external_sync_future_days: normalizeExternalSyncDays(merged.external_sync_future_days, 60),
@@ -334,6 +336,8 @@ export async function saveSettings(settings: Partial<CGMPSettings>) {
     semantic_search_result_mode: normalizeSemanticSearchResultMode(
       settings.semantic_search_result_mode ?? current.semantic_search_result_mode
     ),
+    post_save_related_suggestions_enabled:
+      settings.post_save_related_suggestions_enabled ?? current.post_save_related_suggestions_enabled,
     semantic_icon_threshold: normalizeSemanticIconThreshold(settings.semantic_icon_threshold ?? current.semantic_icon_threshold),
     external_sync_past_days: normalizeExternalSyncDays(settings.external_sync_past_days ?? current.external_sync_past_days, 7),
     external_sync_future_days: normalizeExternalSyncDays(settings.external_sync_future_days ?? current.external_sync_future_days, 60),

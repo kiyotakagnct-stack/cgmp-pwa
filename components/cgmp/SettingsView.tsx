@@ -367,6 +367,20 @@ export function SettingsView({
                         ]}
                       />
                     </div>
+                    <div className="mt-3">
+                      <LabeledToggle
+                        label="保存後に関連メモを提案する"
+                        value={settingsDraft?.post_save_related_suggestions_enabled ?? true}
+                        onChange={(value) =>
+                          setSettingsDraft((prev) =>
+                            prev ? { ...prev, post_save_related_suggestions_enabled: value } : prev
+                          )
+                        }
+                      />
+                      <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
+                        OFFにすると、保存後の「こんなの関連しませんか？」モーダルだけを止めます。意味検索とembedding作成は維持します。
+                      </p>
+                    </div>
                     <div className="mt-4 flex flex-wrap gap-2">
                       <button
                         type="button"
