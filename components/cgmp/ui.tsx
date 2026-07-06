@@ -10,6 +10,9 @@ import { getDomainLabel } from "@/lib/cgmp/client-utils";
 type AiProcessingOverlayState = {
   kind: "text" | "image";
   label: string;
+  detail?: string;
+  completed?: number;
+  total?: number;
   startedAt: number;
   finishedAt?: number;
   elapsedMs?: number;
@@ -173,6 +176,10 @@ export function AiProcessingOverlay({
   const description = isDone
     ? `所要時間 ${elapsedMs.toLocaleString("ja-JP")} ms`
     : `${elapsedMs.toLocaleString("ja-JP")} ms`;
+  const hasProgress = typeof state.total === "number" && state.total > 0;
+  const progressPercent = hasProgress
+    ? Math.min(100, Math.max(3, Math.round(((state.completed || 0) / state.total!) * 100)))
+    : 0;
 
   return (
     <div
@@ -193,6 +200,20 @@ export function AiProcessingOverlay({
           {state.kind === "text" ? "Text AI" : "Image AI"}
         </div>
         <div className="mt-2 text-lg font-semibold text-[var(--text)]">{title}</div>
+        {state.detail ? <div className="mt-1 text-sm leading-6 text-[var(--muted)]">{state.detail}</div> : null}
+        {hasProgress ? (
+          <div className="mt-4 overflow-hidden rounded-full border border-[color:var(--border)] bg-[var(--card-soft)]">
+            <div
+              className="h-2 rounded-full bg-[var(--accent)] transition-[width] duration-300"
+              style={{ width: `${progressPercent}%` }}
+            />
+          </div>
+        ) : null}
+        {hasProgress ? (
+          <div className="mt-2 text-xs font-semibold text-[var(--muted)]">
+            {(state.completed || 0).toLocaleString("ja-JP")} / {state.total?.toLocaleString("ja-JP")} 件
+          </div>
+        ) : null}
         <div className="mt-2 font-mono text-sm text-[var(--muted)]">{description}</div>
       </div>
     </div>

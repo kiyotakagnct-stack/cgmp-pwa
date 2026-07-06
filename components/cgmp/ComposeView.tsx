@@ -26,9 +26,11 @@ type ComposeViewProps = {
   aiStatus: CGMPRecord["ai_status"];
   aiError: string;
   aiMeta: ComposeAiMeta;
+  multiMemoMode: boolean;
   rawInputRef: RefObject<HTMLTextAreaElement | null>;
   confirmSectionRef: RefObject<HTMLElement | null>;
   onDraftChange: (patch: Partial<RecordFormState>) => void;
+  onMultiMemoModeChange: (enabled: boolean) => void;
   onAnalyze: () => void;
   onAnalyzeAndSave: () => void;
   onSave: () => void;
@@ -46,9 +48,11 @@ export function ComposeView({
   aiStatus,
   aiError,
   aiMeta,
+  multiMemoMode,
   rawInputRef,
   confirmSectionRef,
   onDraftChange,
+  onMultiMemoModeChange,
   onAnalyze,
   onAnalyzeAndSave,
   onSave,
@@ -78,6 +82,14 @@ export function ComposeView({
     });
   }
 
+  const multiMemoCount = draft.raw_input
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean).length;
+  const rawInputPlaceholder = multiMemoMode
+    ? "1行ごとに1メモとして処理します"
+    : "雑に入れたメモをそのまま貼る";
+
   return (
     <div className="grid gap-5 xl:grid-cols-[1fr_1fr]">
       <section className={panelClass}>
@@ -91,7 +103,7 @@ export function ComposeView({
             label="Raw input"
             value={draft.raw_input}
             onChange={(value) => onDraftChange({ raw_input: value, body: draft.body || value })}
-            placeholder="雑に入れたメモをそのまま貼る"
+            placeholder={rawInputPlaceholder}
             rows={10}
             inputRef={rawInputRef}
           />
@@ -110,18 +122,42 @@ export function ComposeView({
             ))}
           </div>
 
+          <div className="flex flex-wrap items-center gap-2 rounded-[22px] border border-[color:var(--border)] bg-[var(--card-soft)] px-3 py-2">
+            <button
+              type="button"
+              aria-pressed={multiMemoMode}
+              onClick={() => onMultiMemoModeChange(!multiMemoMode)}
+              className={`rounded-full border px-3 py-1.5 text-sm font-semibold transition active:scale-[0.98] ${
+                multiMemoMode
+                  ? "border-[color:var(--accent)] bg-[var(--accent)] text-[var(--accent-contrast)]"
+                  : "border-[color:var(--border)] bg-[var(--card)] text-[var(--text)] hover:border-[color:var(--accent)]"
+              }`}
+            >
+              複数メモ {multiMemoMode ? "ON" : "OFF"}
+            </button>
+            <span className="text-xs font-semibold text-[var(--muted)]">
+              {multiMemoMode ? `1行=1メモ / ${multiMemoCount}件` : "入力全体を1メモとして処理"}
+            </span>
+          </div>
+
           <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={onAnalyze} disabled={loading} className={primaryButtonClass}>
+            <button
+              type="button"
+              onClick={onAnalyze}
+              disabled={loading || multiMemoMode}
+              className={`${primaryButtonClass} disabled:cursor-not-allowed disabled:opacity-50`}
+              title={multiMemoMode ? "複数メモでは「AI解析して保存」を使ってください。" : undefined}
+            >
               {loading ? "解析中..." : "AI解析"}
             </button>
             <button type="button" onClick={onAnalyzeAndSave} disabled={loading} className={primaryButtonClass}>
-              {loading ? "解析中..." : "AI解析して保存"}
+              {loading ? "解析中..." : multiMemoMode ? "一括AI解析して保存" : "AI解析して保存"}
             </button>
             <button type="button" onClick={onSaveWithoutAi} className={secondaryButtonClass}>
-              AIなしで保存
+              {multiMemoMode ? "行ごとAIなし保存" : "AIなしで保存"}
             </button>
             <button type="button" onClick={onSaveDraft} className={secondaryButtonClass}>
-              下書きとして保存
+              {multiMemoMode ? "行ごと下書き保存" : "下書きとして保存"}
             </button>
             <button type="button" onClick={onClear} className={secondaryButtonClass}>
               クリア

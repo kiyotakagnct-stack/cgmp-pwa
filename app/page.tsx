@@ -183,6 +183,9 @@ type AiProcessingOverlayState = {
   id: number;
   kind: "text" | "image";
   label: string;
+  detail?: string;
+  completed?: number;
+  total?: number;
   startedAt: number;
   finishedAt?: number;
 };
@@ -311,6 +314,7 @@ export default function Page() {
   const [composeAiError, setComposeAiError] = useState("");
   const [composeAiMeta, setComposeAiMeta] = useState<{ model: string; generated_at: string } | null>(null);
   const [composeLoading, setComposeLoading] = useState(false);
+  const [multiMemoMode, setMultiMemoMode] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState<CGMPSettings | null>(null);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [deployInfo, setDeployInfo] = useState<DeployInfo | null>(null);
@@ -490,7 +494,11 @@ export default function Page() {
     });
   }
 
-  function beginAiProcessing(kind: "text" | "image", label: string) {
+  function beginAiProcessing(
+    kind: "text" | "image",
+    label: string,
+    options: { detail?: string; completed?: number; total?: number } = {}
+  ) {
     if (aiProcessingHideTimerRef.current !== null) {
       window.clearTimeout(aiProcessingHideTimerRef.current);
       aiProcessingHideTimerRef.current = null;
@@ -502,9 +510,19 @@ export default function Page() {
       id,
       kind,
       label,
+      detail: options.detail,
+      completed: options.completed,
+      total: options.total,
       startedAt: performance.now(),
     });
     return id;
+  }
+
+  function updateAiProcessing(
+    id: number,
+    patch: Partial<Pick<AiProcessingOverlayState, "label" | "detail" | "completed" | "total">>
+  ) {
+    setAiProcessingOverlay((current) => (current?.id === id ? { ...current, ...patch } : current));
   }
 
   function finishAiProcessing(id: number) {
@@ -1220,7 +1238,7 @@ export default function Page() {
 
       const resultById = new Map(results.map((result) => [result.recordId, result]));
       let changed = 0;
-      let failed = results.filter((result) => !result.ok).length;
+      const failed = results.filter((result) => !result.ok).length;
       const reportItems: ExternalSyncReportItem[] = [];
       const applyingStartedAt = performance.now();
       for (let index = 0; index < targets.length; index += 1) {
@@ -3045,13 +3063,14 @@ export default function Page() {
     }
   }
 
-  async function saveComposeDraft(reason = "") {
-    const rawInput = composeDraft.raw_input.trim();
-    if (!rawInput) {
-      setNotice({ kind: "error", text: "下書きにする入力テキストがありません。" });
-      return null;
-    }
+  function getMultiMemoLines(rawInput: string) {
+    return rawInput
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+  }
 
+  async function createDraftRecordFromRaw(rawInput: string, reason = "") {
     const stamp = new Date().toISOString();
     const draftForm = {
       ...blankForm(rawInput),
@@ -3092,7 +3111,17 @@ export default function Page() {
       attachments: [],
     };
 
-    const saved = await putRecordWithoutBackup(draftRecord);
+    return putRecordWithoutBackup(draftRecord);
+  }
+
+  async function saveComposeDraft(reason = "") {
+    const rawInput = composeDraft.raw_input.trim();
+    if (!rawInput) {
+      setNotice({ kind: "error", text: "下書きにする入力テキストがありません。" });
+      return null;
+    }
+
+    const saved = await createDraftRecordFromRaw(rawInput, reason);
     await Promise.all([reloadRecords(saved.id), reloadBackupSummary()]);
     setComposeDraft(blankForm(""));
     setComposeAiStatus("none");
@@ -3107,6 +3136,11 @@ export default function Page() {
   }
 
   async function handleAnalyze() {
+    if (multiMemoMode) {
+      setNotice({ kind: "error", text: "複数メモモードでは「AI解析して保存」を使ってください。" });
+      return;
+    }
+
     const rawInput = composeDraft.raw_input.trim();
     if (!rawInput) {
       setNotice({ kind: "error", text: "入力テキストを入れてください。" });
@@ -3148,6 +3182,11 @@ export default function Page() {
   }
 
   async function handleAnalyzeAndSave() {
+    if (multiMemoMode) {
+      await handleMultiAnalyzeAndSave();
+      return;
+    }
+
     const rawInput = composeDraft.raw_input.trim();
     if (!rawInput) {
       setNotice({ kind: "error", text: "入力テキストを入れてください。" });
@@ -3191,6 +3230,210 @@ export default function Page() {
           }`,
         });
       }
+    } finally {
+      finishAiProcessing(processingId);
+      setComposeLoading(false);
+    }
+  }
+
+  async function handleMultiAnalyzeAndSave() {
+    const lines = getMultiMemoLines(composeDraft.raw_input);
+    if (lines.length === 0) {
+      setNotice({ kind: "error", text: "処理する行がありません。" });
+      return;
+    }
+
+    setComposeLoading(true);
+    setComposeAiError("");
+    const processingId = beginAiProcessing("text", "複数メモAI解析中", {
+      detail: `0 / ${lines.length} 件`,
+      completed: 0,
+      total: lines.length,
+    });
+    let succeeded = 0;
+    let failed = 0;
+    let drafted = 0;
+    let lastRecordId = "";
+
+    try {
+      for (let index = 0; index < lines.length; index += 1) {
+        const rawInput = lines[index];
+        updateAiProcessing(processingId, {
+          label: "複数メモAI解析中",
+          detail: `${index + 1}/${lines.length}: ${rawInput.slice(0, 42)}`,
+          completed: index,
+          total: lines.length,
+        });
+
+        try {
+          const payload = await requestTextAnalysis(rawInput);
+          const aiMeta = {
+            model: payload.model || settingsDraft?.openai_model || "gpt-4.1-nano",
+            generated_at: payload.generated_at,
+          };
+          const analyzedDraft = applyAnalysisToDraft(blankForm(rawInput), rawInput, payload.result);
+          const { finalRecord, externalFailed } = await persistComposeRecord(false, {
+            draft: analyzedDraft,
+            aiStatus: "done",
+            aiError: "",
+            aiMeta,
+            autoRegisterExternal: true,
+          });
+          lastRecordId = finalRecord.id;
+          if (externalFailed) {
+            failed += 1;
+          } else {
+            succeeded += 1;
+          }
+        } catch (error) {
+          failed += 1;
+          const message = error instanceof Error ? error.message : "AI解析に失敗しました";
+          try {
+            const draftRecord = await createDraftRecordFromRaw(rawInput, message);
+            lastRecordId = draftRecord.id;
+            drafted += 1;
+          } catch (draftError) {
+            console.error("[cgmp:multi-compose] draft fallback failed", { rawInput, error: draftError });
+          }
+        } finally {
+          updateAiProcessing(processingId, {
+            detail: `${index + 1} / ${lines.length} 件完了`,
+            completed: index + 1,
+            total: lines.length,
+          });
+        }
+      }
+
+      await Promise.all([reloadRecords(lastRecordId || undefined), reloadBackupSummary()]);
+      setComposeDraft(blankForm(""));
+      setComposeAiStatus(failed > 0 ? "error" : "done");
+      setComposeAiError(failed > 0 ? `${failed}件の処理に失敗しました。${drafted}件を下書きにしました。` : "");
+      setComposeAiMeta(null);
+      setTab("home");
+      setNotice({
+        kind: failed > 0 ? "error" : "info",
+        text:
+          failed > 0
+            ? `複数メモ処理が完了しました。成功${succeeded}件 / 失敗${failed}件 / 下書き${drafted}件。`
+            : `複数メモを${succeeded}件保存しました。`,
+      });
+    } finally {
+      finishAiProcessing(processingId);
+      setComposeLoading(false);
+    }
+  }
+
+  async function handleMultiSaveWithoutAi() {
+    const lines = getMultiMemoLines(composeDraft.raw_input);
+    if (lines.length === 0) {
+      setNotice({ kind: "error", text: "保存する行がありません。" });
+      return;
+    }
+
+    setComposeLoading(true);
+    const processingId = beginAiProcessing("text", "複数メモ保存中", {
+      detail: `0 / ${lines.length} 件`,
+      completed: 0,
+      total: lines.length,
+    });
+    let succeeded = 0;
+    let failed = 0;
+    let lastRecordId = "";
+
+    try {
+      for (let index = 0; index < lines.length; index += 1) {
+        const rawInput = lines[index];
+        updateAiProcessing(processingId, {
+          detail: `${index + 1}/${lines.length}: ${rawInput.slice(0, 42)}`,
+          completed: index,
+          total: lines.length,
+        });
+        try {
+          const { finalRecord } = await persistComposeRecord(true, {
+            draft: blankForm(rawInput),
+            autoRegisterExternal: false,
+          });
+          lastRecordId = finalRecord.id;
+          succeeded += 1;
+        } catch (error) {
+          failed += 1;
+          console.error("[cgmp:multi-compose] manual save failed", { rawInput, error });
+        } finally {
+          updateAiProcessing(processingId, {
+            detail: `${index + 1} / ${lines.length} 件完了`,
+            completed: index + 1,
+            total: lines.length,
+          });
+        }
+      }
+
+      await Promise.all([reloadRecords(lastRecordId || undefined), reloadBackupSummary()]);
+      setComposeDraft(blankForm(""));
+      setComposeAiStatus("none");
+      setComposeAiError("");
+      setComposeAiMeta(null);
+      setTab("home");
+      setNotice({
+        kind: failed > 0 ? "error" : "info",
+        text: failed > 0 ? `AIなし保存: 成功${succeeded}件 / 失敗${failed}件。` : `${succeeded}件をAIなしで保存しました。`,
+      });
+    } finally {
+      finishAiProcessing(processingId);
+      setComposeLoading(false);
+    }
+  }
+
+  async function handleMultiSaveDraft() {
+    const lines = getMultiMemoLines(composeDraft.raw_input);
+    if (lines.length === 0) {
+      setNotice({ kind: "error", text: "下書きにする行がありません。" });
+      return;
+    }
+
+    setComposeLoading(true);
+    const processingId = beginAiProcessing("text", "複数メモ下書き保存中", {
+      detail: `0 / ${lines.length} 件`,
+      completed: 0,
+      total: lines.length,
+    });
+    let succeeded = 0;
+    let failed = 0;
+    let lastRecordId = "";
+
+    try {
+      for (let index = 0; index < lines.length; index += 1) {
+        const rawInput = lines[index];
+        updateAiProcessing(processingId, {
+          detail: `${index + 1}/${lines.length}: ${rawInput.slice(0, 42)}`,
+          completed: index,
+          total: lines.length,
+        });
+        try {
+          const draftRecord = await createDraftRecordFromRaw(rawInput);
+          lastRecordId = draftRecord.id;
+          succeeded += 1;
+        } catch (error) {
+          failed += 1;
+          console.error("[cgmp:multi-compose] draft save failed", { rawInput, error });
+        } finally {
+          updateAiProcessing(processingId, {
+            detail: `${index + 1} / ${lines.length} 件完了`,
+            completed: index + 1,
+            total: lines.length,
+          });
+        }
+      }
+
+      await Promise.all([reloadRecords(lastRecordId || undefined), reloadBackupSummary()]);
+      setComposeDraft(blankForm(""));
+      setComposeAiStatus("none");
+      setComposeAiError("");
+      setComposeAiMeta(null);
+      setTab("home");
+      setNotice({
+        kind: failed > 0 ? "error" : "info",
+        text: failed > 0 ? `下書き保存: 成功${succeeded}件 / 失敗${failed}件。` : `${succeeded}件を下書き保存しました。`,
+      });
     } finally {
       finishAiProcessing(processingId);
       setComposeLoading(false);
@@ -3302,7 +3545,7 @@ export default function Page() {
     }
   }
 
-  async function saveCompose(
+  async function persistComposeRecord(
     forceManual = false,
     options: {
       draft?: RecordFormState;
@@ -3319,18 +3562,38 @@ export default function Page() {
       aiMeta: forceManual ? null : (options.aiMeta ?? composeAiMeta),
     });
 
+    const savedRecord = await upsertRecord(nextRecord);
+    void suggestRelatedRecords(savedRecord);
+    let finalRecord = savedRecord;
+    if (options.autoRegisterExternal && savedRecord.action === "reminder") {
+      finalRecord = await registerGoogleTaskRecord(savedRecord, { showNotice: false });
+    } else if (options.autoRegisterExternal && savedRecord.action === "calendar") {
+      finalRecord = await registerGoogleCalendarRecord(savedRecord, { showNotice: false });
+    }
+    window.setTimeout(() => {
+      void runBackupQueue(false);
+    }, 0);
+    return {
+      savedRecord,
+      finalRecord,
+      externalFailed: finalRecord.external_action_status === "failed",
+    };
+  }
+
+  async function saveCompose(
+    forceManual = false,
+    options: {
+      draft?: RecordFormState;
+      aiStatus?: CGMPRecord["ai_status"];
+      aiError?: string;
+      aiMeta?: typeof composeAiMeta;
+      autoRegisterExternal?: boolean;
+    } = {}
+  ) {
     try {
-      const savedRecord = await upsertRecord(nextRecord);
-      void suggestRelatedRecords(savedRecord);
-      let finalRecord = savedRecord;
-      if (options.autoRegisterExternal && savedRecord.action === "reminder") {
-        finalRecord = await registerGoogleTaskRecord(savedRecord, { showNotice: false });
-      } else if (options.autoRegisterExternal && savedRecord.action === "calendar") {
-        finalRecord = await registerGoogleCalendarRecord(savedRecord, { showNotice: false });
-      }
+      const { savedRecord, finalRecord, externalFailed } = await persistComposeRecord(forceManual, options);
       await reloadRecords(finalRecord.id);
       await reloadBackupSummary();
-      const externalFailed = finalRecord.external_action_status === "failed";
       setNotice({
         kind: externalFailed ? "error" : "info",
         text: options.autoRegisterExternal
@@ -3346,9 +3609,6 @@ export default function Page() {
       } else if (!options.autoRegisterExternal && savedRecord.action === "calendar") {
         setExternalConfirm({ recordId: savedRecord.id, action: "calendar", title: savedRecord.title || "（無題）" });
       }
-      window.setTimeout(() => {
-        void runBackupQueue(false);
-      }, 0);
       setComposeDraft(blankForm(""));
       setComposeAiStatus("none");
       setComposeAiError("");
@@ -4018,14 +4278,28 @@ export default function Page() {
               aiStatus={composeAiStatus}
               aiError={composeAiError}
               aiMeta={composeAiMeta}
+              multiMemoMode={multiMemoMode}
               rawInputRef={composeRawInputRef}
               confirmSectionRef={confirmSectionRef}
               onDraftChange={(patch) => setComposeDraft((prev) => ({ ...prev, ...patch }))}
+              onMultiMemoModeChange={setMultiMemoMode}
               onAnalyze={handleAnalyze}
               onAnalyzeAndSave={handleAnalyzeAndSave}
               onSave={() => saveCompose()}
-              onSaveWithoutAi={() => saveCompose(true)}
-              onSaveDraft={() => void saveComposeDraft()}
+              onSaveWithoutAi={() => {
+                if (multiMemoMode) {
+                  void handleMultiSaveWithoutAi();
+                } else {
+                  void saveCompose(true);
+                }
+              }}
+              onSaveDraft={() => {
+                if (multiMemoMode) {
+                  void handleMultiSaveDraft();
+                } else {
+                  void saveComposeDraft();
+                }
+              }}
               onClear={() => {
                 setComposeDraft(blankForm(""));
                 setComposeAiStatus("none");
