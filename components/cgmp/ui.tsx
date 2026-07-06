@@ -1,6 +1,6 @@
 "use client";
 
-import type { CSSProperties, ReactNode, RefObject } from "react";
+import type { ClipboardEvent, CSSProperties, ReactNode, RefObject } from "react";
 import { useState } from "react";
 
 import type { CGMPDomain } from "@/lib/cgmp/types";
@@ -344,6 +344,7 @@ export function LabeledTextarea({
   label,
   value,
   onChange,
+  onPaste,
   placeholder,
   rows = 5,
   inputRef,
@@ -352,6 +353,7 @@ export function LabeledTextarea({
   label: string;
   value: string;
   onChange: (value: string) => void;
+  onPaste?: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
   placeholder?: string;
   rows?: number;
   inputRef?: RefObject<HTMLTextAreaElement | null>;
@@ -364,6 +366,7 @@ export function LabeledTextarea({
         id={id}
         value={value}
         onChange={(event) => onChange(event.target.value)}
+        onPaste={onPaste}
         placeholder={placeholder}
         rows={rows}
         ref={inputRef}

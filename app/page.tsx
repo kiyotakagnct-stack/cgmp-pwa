@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ImageAttachmentGrid } from "@/components/ImageAttachmentGrid";
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { ImageUploader } from "@/components/ImageUploader";
-import { ComposeView } from "@/components/cgmp/ComposeView";
+import { ComposeView, type ComposePendingImage } from "@/components/cgmp/ComposeView";
 import { HomeView } from "@/components/cgmp/HomeView";
 import { IssueNotesView } from "@/components/cgmp/IssueNotesView";
 import { PostSaveSuggestionsModal, type ExternalConfirmState } from "@/components/cgmp/PostSaveSuggestionsModal";
@@ -289,6 +289,9 @@ type ReanalysisExternalConfirmState = {
   externalLabel: string;
   resolve: (choice: ReanalysisExternalChoice) => void;
 } | null;
+type ComposePendingImageState = ComposePendingImage & {
+  file: File;
+};
 export default function Page() {
   const [tab, setTab] = useState<AppTab>("home");
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
@@ -315,6 +318,7 @@ export default function Page() {
   const [composeAiMeta, setComposeAiMeta] = useState<{ model: string; generated_at: string } | null>(null);
   const [composeLoading, setComposeLoading] = useState(false);
   const [multiMemoMode, setMultiMemoMode] = useState(false);
+  const [composePendingImages, setComposePendingImages] = useState<ComposePendingImageState[]>([]);
   const [settingsDraft, setSettingsDraft] = useState<CGMPSettings | null>(null);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [deployInfo, setDeployInfo] = useState<DeployInfo | null>(null);
@@ -2770,16 +2774,14 @@ export default function Page() {
     }
   }
 
-  async function handleAddPhotos(recordId: string, files: File[]) {
-    const targetRecord = records.find((record) => record.id === recordId);
-    if (!targetRecord || files.length === 0) return;
-
+  async function addPhotosToRecord(targetRecord: CGMPRecord, files: File[]) {
+    if (files.length === 0) return;
     const processingId = beginAiProcessing("image", files.length > 1 ? `画像AI解析中（${files.length}枚）` : "画像AI解析中");
     setPhotoProcessingCount((count) => count + files.length);
     try {
       for (const file of files) {
         try {
-          const prepared = await createImageAttachmentFromFile(recordId, file, { createThumbnail: true });
+          const prepared = await createImageAttachmentFromFile(targetRecord.id, file, { createThumbnail: true });
           await putImageBlob(prepared.attachment.previewBlobKey, prepared.previewBlob);
           if (prepared.thumbnailBlob && prepared.attachment.thumbnailBlobKey) {
             await putImageBlob(prepared.attachment.thumbnailBlobKey, prepared.thumbnailBlob);
@@ -2791,19 +2793,19 @@ export default function Page() {
             analysis_status: shouldAnalyze ? "analyzing" : "pending",
           };
           const latestRecords = await loadAllRecords();
-          const latestRecord = latestRecords.find((record) => record.id === recordId) || targetRecord;
+          const latestRecord = latestRecords.find((record) => record.id === targetRecord.id) || targetRecord;
           await saveRecordWithAttachments(latestRecord, [...(latestRecord.attachments || []), initialAttachment]);
           console.debug("[cgmp:image] attachment saved", {
-            recordId,
+            recordId: targetRecord.id,
             attachmentId: initialAttachment.id,
             status: initialAttachment.analysis_status,
           });
 
           if (shouldAnalyze) {
-            await analyzeAndUpdateAttachment(recordId, initialAttachment.id, prepared.previewBlob);
+            await analyzeAndUpdateAttachment(targetRecord.id, initialAttachment.id, prepared.previewBlob);
           }
         } catch (error) {
-          console.debug("[cgmp:image] photo add failed", { recordId, fileName: file.name, error });
+          console.debug("[cgmp:image] photo add failed", { recordId: targetRecord.id, fileName: file.name, error });
           setNotice({
             kind: "error",
             text: error instanceof Error ? `写真追加に失敗しました: ${error.message}` : "写真追加に失敗しました",
@@ -2815,6 +2817,12 @@ export default function Page() {
     } finally {
       finishAiProcessing(processingId);
     }
+  }
+
+  async function handleAddPhotos(recordId: string, files: File[]) {
+    const targetRecord = records.find((record) => record.id === recordId);
+    if (!targetRecord || files.length === 0) return;
+    await addPhotosToRecord(targetRecord, files);
   }
 
   async function handleReanalyzeAttachment(recordId: string, attachmentId: string) {
@@ -3080,6 +3088,70 @@ export default function Page() {
       .filter(Boolean);
   }
 
+  function getMultiMemoTargetIndex(rawInput: string, selectionStart: number) {
+    const beforeCursor = rawInput.slice(0, Math.max(0, selectionStart));
+    const lineIndex = beforeCursor.split(/\r?\n/).length - 1;
+    const lines = rawInput.split(/\r?\n/);
+    let memoIndex = 0;
+    for (let index = 0; index < lineIndex; index += 1) {
+      if ((lines[index] || "").trim()) memoIndex += 1;
+    }
+    return memoIndex;
+  }
+
+  function clearComposePendingImages() {
+    setComposePendingImages((current) => {
+      current.forEach((image) => URL.revokeObjectURL(image.previewUrl));
+      return [];
+    });
+  }
+
+  function removeComposePendingImage(id: string) {
+    setComposePendingImages((current) => {
+      const target = current.find((image) => image.id === id);
+      if (target) URL.revokeObjectURL(target.previewUrl);
+      return current.filter((image) => image.id !== id);
+    });
+  }
+
+  function handleComposePasteImages(files: File[], selectionStart: number) {
+    if (files.length === 0) return;
+    const targetLineIndex = multiMemoMode
+      ? getMultiMemoTargetIndex(composeDraft.raw_input, selectionStart)
+      : null;
+    const lineLabel = targetLineIndex === null ? "このメモに添付" : `${targetLineIndex + 1}件目に添付`;
+    const nextImages: ComposePendingImageState[] = files.map((file) => ({
+      id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      file,
+      previewUrl: URL.createObjectURL(file),
+      name: file.name || "pasted-image",
+      lineIndex: targetLineIndex,
+      lineLabel,
+    }));
+    setComposePendingImages((current) => [...current, ...nextImages]);
+    setNotice({
+      kind: "info",
+      text: targetLineIndex === null
+        ? `画像${files.length}枚を添付予定にしました。保存時にAI解析します。`
+        : `画像${files.length}枚を${targetLineIndex + 1}件目のメモ添付予定にしました。`,
+    });
+  }
+
+  function getPendingImagesForMemoIndex(index: number) {
+    return composePendingImages
+      .filter((image) => image.lineIndex === index)
+      .map((image) => image.file);
+  }
+
+  function getSingleMemoPendingImages() {
+    return composePendingImages.map((image) => image.file);
+  }
+
+  async function attachComposeImagesToRecord(record: CGMPRecord, files: File[]) {
+    if (files.length === 0) return;
+    await addPhotosToRecord(record, files);
+  }
+
   async function createDraftRecordFromRaw(rawInput: string, reason = "") {
     const stamp = new Date().toISOString();
     const draftForm = {
@@ -3132,11 +3204,13 @@ export default function Page() {
     }
 
     const saved = await createDraftRecordFromRaw(rawInput, reason);
+    await attachComposeImagesToRecord(saved, getSingleMemoPendingImages());
     await Promise.all([reloadRecords(saved.id), reloadBackupSummary()]);
     setComposeDraft(blankForm(""));
     setComposeAiStatus("none");
     setComposeAiError("");
     setComposeAiMeta(null);
+    clearComposePendingImages();
     setTab("home");
     setNotice({
       kind: "info",
@@ -3289,6 +3363,7 @@ export default function Page() {
             aiMeta,
             autoRegisterExternal: true,
           });
+          await attachComposeImagesToRecord(finalRecord, getPendingImagesForMemoIndex(index));
           lastRecordId = finalRecord.id;
           if (externalFailed) {
             failed += 1;
@@ -3300,6 +3375,7 @@ export default function Page() {
           const message = error instanceof Error ? error.message : "AI解析に失敗しました";
           try {
             const draftRecord = await createDraftRecordFromRaw(rawInput, message);
+            await attachComposeImagesToRecord(draftRecord, getPendingImagesForMemoIndex(index));
             lastRecordId = draftRecord.id;
             drafted += 1;
           } catch (draftError) {
@@ -3319,6 +3395,7 @@ export default function Page() {
       setComposeAiStatus(failed > 0 ? "error" : "done");
       setComposeAiError(failed > 0 ? `${failed}件の処理に失敗しました。${drafted}件を下書きにしました。` : "");
       setComposeAiMeta(null);
+      clearComposePendingImages();
       setTab("home");
       setNotice({
         kind: failed > 0 ? "error" : "info",
@@ -3363,6 +3440,7 @@ export default function Page() {
             draft: blankForm(rawInput),
             autoRegisterExternal: false,
           });
+          await attachComposeImagesToRecord(finalRecord, getPendingImagesForMemoIndex(index));
           lastRecordId = finalRecord.id;
           succeeded += 1;
         } catch (error) {
@@ -3382,6 +3460,7 @@ export default function Page() {
       setComposeAiStatus("none");
       setComposeAiError("");
       setComposeAiMeta(null);
+      clearComposePendingImages();
       setTab("home");
       setNotice({
         kind: failed > 0 ? "error" : "info",
@@ -3420,6 +3499,7 @@ export default function Page() {
         });
         try {
           const draftRecord = await createDraftRecordFromRaw(rawInput);
+          await attachComposeImagesToRecord(draftRecord, getPendingImagesForMemoIndex(index));
           lastRecordId = draftRecord.id;
           succeeded += 1;
         } catch (error) {
@@ -3439,6 +3519,7 @@ export default function Page() {
       setComposeAiStatus("none");
       setComposeAiError("");
       setComposeAiMeta(null);
+      clearComposePendingImages();
       setTab("home");
       setNotice({
         kind: failed > 0 ? "error" : "info",
@@ -3602,6 +3683,7 @@ export default function Page() {
   ) {
     try {
       const { savedRecord, finalRecord, externalFailed } = await persistComposeRecord(forceManual, options);
+      await attachComposeImagesToRecord(finalRecord, getSingleMemoPendingImages());
       await reloadRecords(finalRecord.id);
       await reloadBackupSummary();
       setNotice({
@@ -3623,6 +3705,7 @@ export default function Page() {
       setComposeAiStatus("none");
       setComposeAiError("");
       setComposeAiMeta(null);
+      clearComposePendingImages();
       setTab("home");
     } catch (error) {
       setNotice({
@@ -4289,10 +4372,19 @@ export default function Page() {
               aiError={composeAiError}
               aiMeta={composeAiMeta}
               multiMemoMode={multiMemoMode}
+              pendingImages={composePendingImages.map((image) => ({
+                id: image.id,
+                previewUrl: image.previewUrl,
+                name: image.name,
+                lineIndex: image.lineIndex,
+                lineLabel: image.lineLabel,
+              }))}
               rawInputRef={composeRawInputRef}
               confirmSectionRef={confirmSectionRef}
               onDraftChange={(patch) => setComposeDraft((prev) => ({ ...prev, ...patch }))}
               onMultiMemoModeChange={setMultiMemoMode}
+              onPasteImages={handleComposePasteImages}
+              onRemovePendingImage={removeComposePendingImage}
               onAnalyze={handleAnalyze}
               onAnalyzeAndSave={handleAnalyzeAndSave}
               onSave={() => saveCompose()}
@@ -4315,6 +4407,7 @@ export default function Page() {
                 setComposeAiStatus("none");
                 setComposeAiError("");
                 setComposeAiMeta(null);
+                clearComposePendingImages();
               }}
               onGoHome={() => setTab("home")}
             />

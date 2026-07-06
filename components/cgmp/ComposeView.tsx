@@ -1,6 +1,6 @@
 "use client";
 
-import type { RefObject } from "react";
+import type { ClipboardEvent, RefObject } from "react";
 
 import { RecordEditor } from "@/components/cgmp/RecordEditor";
 import {
@@ -20,6 +20,14 @@ type ComposeAiMeta = {
   generated_at: string;
 } | null;
 
+export type ComposePendingImage = {
+  id: string;
+  previewUrl: string;
+  name: string;
+  lineIndex: number | null;
+  lineLabel: string;
+};
+
 type ComposeViewProps = {
   draft: RecordFormState;
   loading: boolean;
@@ -27,10 +35,13 @@ type ComposeViewProps = {
   aiError: string;
   aiMeta: ComposeAiMeta;
   multiMemoMode: boolean;
+  pendingImages: ComposePendingImage[];
   rawInputRef: RefObject<HTMLTextAreaElement | null>;
   confirmSectionRef: RefObject<HTMLElement | null>;
   onDraftChange: (patch: Partial<RecordFormState>) => void;
   onMultiMemoModeChange: (enabled: boolean) => void;
+  onPasteImages: (files: File[], selectionStart: number) => void;
+  onRemovePendingImage: (id: string) => void;
   onAnalyze: () => void;
   onAnalyzeAndSave: () => void;
   onSave: () => void;
@@ -49,10 +60,13 @@ export function ComposeView({
   aiError,
   aiMeta,
   multiMemoMode,
+  pendingImages,
   rawInputRef,
   confirmSectionRef,
   onDraftChange,
   onMultiMemoModeChange,
+  onPasteImages,
+  onRemovePendingImage,
   onAnalyze,
   onAnalyzeAndSave,
   onSave,
@@ -90,6 +104,16 @@ export function ComposeView({
     ? "1行ごとに1メモとして処理します"
     : "雑に入れたメモをそのまま貼る";
 
+  function handleRawInputPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(event.clipboardData?.items || [])
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => Boolean(file));
+    if (files.length === 0) return;
+
+    onPasteImages(files, event.currentTarget.selectionStart ?? draft.raw_input.length);
+  }
+
   return (
     <div className="grid gap-5 xl:grid-cols-[1fr_1fr]">
       <section className={panelClass}>
@@ -106,7 +130,44 @@ export function ComposeView({
             placeholder={rawInputPlaceholder}
             rows={10}
             inputRef={rawInputRef}
+            onPaste={handleRawInputPaste}
           />
+
+          {pendingImages.length > 0 ? (
+            <div className="rounded-[22px] border border-[color:var(--border)] bg-[var(--card-soft)] p-3">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--accent)]">Pasted images</div>
+                <span className="text-xs font-semibold text-[var(--muted)]">
+                  保存時に添付して画像AI解析します
+                </span>
+              </div>
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {pendingImages.map((image) => (
+                  <div
+                    key={image.id}
+                    className="relative min-w-[96px] rounded-2xl border border-[color:var(--border)] bg-[var(--card)] p-2 shadow-sm"
+                  >
+                    <img
+                      src={image.previewUrl}
+                      alt={image.name}
+                      className="h-20 w-20 rounded-xl object-cover"
+                    />
+                    <button
+                      type="button"
+                      aria-label="貼り付け画像を削除"
+                      onClick={() => onRemovePendingImage(image.id)}
+                      className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-full border border-[color:var(--border)] bg-[var(--card)] text-xs font-bold text-[var(--text)] shadow-sm"
+                    >
+                      ×
+                    </button>
+                    <div className="mt-1 max-w-[84px] truncate text-[10px] font-semibold text-[var(--muted)]">
+                      {image.lineLabel}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           <div className="-mt-1 flex flex-wrap gap-2" aria-label="Raw input quick insert">
             {QUICK_INPUT_TOKENS.map((token) => (
