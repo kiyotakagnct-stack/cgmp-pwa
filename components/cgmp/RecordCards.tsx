@@ -193,6 +193,22 @@ export function RecordCard({
               </button>
             ) : (
               <>
+                {record.action === "reminder" && isTaskRegistered ? (
+                  <button
+                    type="button"
+                    disabled={taskProcessing}
+                    title={record.google_task_status === "completed" ? "Google Tasksを未完了に戻す" : "Google Tasksを完了にする"}
+                    aria-label={record.google_task_status === "completed" ? "Google Tasksを未完了に戻す" : "Google Tasksを完了にする"}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onToggleGoogleTaskStatus(record.id);
+                    }}
+                    onKeyDown={(event) => event.stopPropagation()}
+                    className="whitespace-nowrap rounded-full border border-teal-200 bg-teal-50 px-2.5 py-1 text-[11px] font-semibold text-teal-700 shadow-[0_6px_16px_var(--shadow-soft)] transition hover:border-teal-300 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {taskProcessing ? "同期中" : record.google_task_status === "completed" ? "未完了へ" : "完了"}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   disabled={aiProcessing}
