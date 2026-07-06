@@ -162,6 +162,8 @@ type SyncActivity = {
   label: string;
   title?: string;
   detail?: string;
+  completed?: number;
+  total?: number;
   startedAt: number;
 };
 type LightboxState = { imageUrl: string; title: string } | null;
@@ -429,6 +431,7 @@ export default function Page() {
               status,
               label: label || item.label,
               detail: detail || item.detail,
+              completed: status === "done" && item.total ? item.total : item.completed,
             }
           : item
       )
@@ -559,6 +562,8 @@ export default function Page() {
             label: getBackupActivityLabel(progress.stage),
             title: progress.currentTitle || "Google Drive",
             detail: `${getBackupStageLabel(progress.stage)} ${progress.completed}/${progress.total}`,
+            completed: progress.completed,
+            total: progress.total,
           });
           setBackupSyncProgress((current) => {
             if (!current || current.phase !== "processing") return current;
@@ -1576,7 +1581,13 @@ export default function Page() {
     setBackupProcessing(true);
     try {
       const queued = await enqueueAllRecordsForBackup();
-      updateSyncActivity(activityId, { label: "Uploading", title: "Google Drive", detail: `対象${queued}件` });
+      updateSyncActivity(activityId, {
+        label: "Uploading",
+        title: "Google Drive",
+        detail: `対象${queued}件`,
+        completed: 0,
+        total: queued,
+      });
       setBackupSyncProgress((current) =>
         current
           ? {
@@ -1594,6 +1605,8 @@ export default function Page() {
             label: getBackupActivityLabel(progress.stage),
             title: progress.currentTitle || "Google Drive",
             detail: `${getBackupStageLabel(progress.stage)} ${progress.completed}/${progress.total}`,
+            completed: progress.completed,
+            total: progress.total,
           });
           setBackupSyncProgress((current) => {
             if (!current || current.phase !== "processing") return current;
@@ -1770,6 +1783,8 @@ export default function Page() {
               label: "Downloading",
               title: "Google Drive",
               detail: "復元データ取得中",
+              completed: 0,
+              total: 0,
             });
             return;
           }
@@ -1778,6 +1793,8 @@ export default function Page() {
               label: "Checking deletes",
               title: currentTitle,
               detail: countText || "削除照合中",
+              completed: checked,
+              total,
             });
             return;
           }
@@ -1788,6 +1805,8 @@ export default function Page() {
               detail: countText
                 ? `record照合 ${countText} / 追加${progress.imported || 0}`
                 : "record照合中",
+              completed: checked,
+              total,
             });
             return;
           }
@@ -1798,6 +1817,8 @@ export default function Page() {
               detail: countText
                 ? `画像復元 ${countText} / 復元${progress.hydratedAttachments || 0}`
                 : "画像復元中",
+              completed: checked,
+              total,
             });
             return;
           }
@@ -1808,6 +1829,8 @@ export default function Page() {
               detail: countText
                 ? `Issue Note照合 ${countText} / 追加更新${progress.importedIssues || 0}`
                 : "Issue Note照合中",
+              completed: checked,
+              total,
             });
             return;
           }
@@ -1818,6 +1841,8 @@ export default function Page() {
               detail: countText
                 ? `Issue画像復元 ${countText} / 復元${progress.hydratedIssueImages || 0}`
                 : "Issue画像復元中",
+              completed: checked,
+              total,
             });
             return;
           }
@@ -3683,6 +3708,21 @@ export default function Page() {
   }
 
   const tabContentClass = "min-w-0";
+  const primarySyncActivity = syncActivities.find((activity) => activity.status === "running") || syncActivities[0];
+  const syncActivityCount = syncActivities.length;
+  const syncActivityProgress =
+    primarySyncActivity && primarySyncActivity.total && primarySyncActivity.total > 0
+      ? Math.min(100, Math.max(3, Math.round(((primarySyncActivity.completed || 0) / primarySyncActivity.total) * 100)))
+      : null;
+  const syncActivityText = primarySyncActivity
+    ? [
+        primarySyncActivity.label,
+        primarySyncActivity.title ? `“${primarySyncActivity.title}”` : "",
+        primarySyncActivity.detail || "",
+      ]
+        .filter(Boolean)
+        .join("  ")
+    : "";
 
   return (
     <main
@@ -3722,39 +3762,57 @@ export default function Page() {
           </div>
         ) : null}
 
-        {syncActivities.length > 0 ? (
-          <div className="pointer-events-none fixed inset-x-0 bottom-[calc(5.65rem+env(safe-area-inset-bottom))] z-[70] flex justify-start px-3 sm:bottom-[calc(5.9rem+env(safe-area-inset-bottom))] sm:px-5">
-            <div className="flex max-h-[32vh] w-[min(34rem,calc(100vw-6rem))] flex-col gap-2 overflow-hidden">
-              {syncActivities.map((activity) => (
-                <div
-                  key={activity.id}
-                  className={`flex min-w-0 items-center gap-2 rounded-full border px-3 py-2 text-xs shadow-[0_16px_42px_var(--shadow-soft)] backdrop-blur-xl transition ${
-                    activity.status === "error"
-                      ? "border-[color:var(--danger)] bg-[color-mix(in_srgb,var(--card)_82%,var(--danger-soft))] text-[var(--text)]"
-                      : activity.status === "done"
-                        ? "border-[color:var(--success)] bg-[color-mix(in_srgb,var(--card)_82%,var(--success-soft))] text-[var(--text)]"
-                        : "border-[color:var(--accent)] bg-[color-mix(in_srgb,var(--card)_72%,transparent)] text-[var(--text)]"
+        {primarySyncActivity ? (
+          <div className="pointer-events-none fixed inset-x-0 bottom-[calc(5.35rem+env(safe-area-inset-bottom))] z-[70] flex justify-start px-3 sm:bottom-[calc(5.65rem+env(safe-area-inset-bottom))] sm:px-5">
+            <div
+              className={`relative h-9 w-[min(28rem,calc(100vw-5.25rem))] overflow-hidden rounded-full border shadow-[0_14px_36px_var(--shadow-soft)] backdrop-blur-xl ${
+                primarySyncActivity.status === "error"
+                  ? "border-[color:var(--danger)] bg-[color-mix(in_srgb,var(--card)_86%,var(--danger-soft))]"
+                  : primarySyncActivity.status === "done"
+                    ? "border-[color:var(--success)] bg-[color-mix(in_srgb,var(--card)_86%,var(--success-soft))]"
+                    : "border-[color:var(--accent)] bg-[color-mix(in_srgb,var(--card)_76%,transparent)]"
+              }`}
+              role={primarySyncActivity.status === "error" ? "alert" : "status"}
+              aria-live="polite"
+              aria-label={syncActivityText}
+            >
+              <div
+                className={`absolute inset-y-0 left-0 ${
+                  primarySyncActivity.status === "error"
+                    ? "bg-[var(--danger-soft)]"
+                    : primarySyncActivity.status === "done"
+                      ? "bg-[var(--success-soft)]"
+                      : "bg-[var(--accent-soft)]"
+                } ${syncActivityProgress === null && primarySyncActivity.status === "running" ? "animate-pulse" : ""}`}
+                style={{ width: `${syncActivityProgress ?? (primarySyncActivity.status === "running" ? 42 : 100)}%` }}
+                aria-hidden="true"
+              />
+              <div className="absolute inset-0 flex min-w-0 items-center gap-2 px-3 text-xs text-[var(--text)]">
+                <span
+                  className={`h-2.5 w-2.5 shrink-0 rounded-full ${
+                    primarySyncActivity.status === "error"
+                      ? "bg-[var(--danger)]"
+                      : primarySyncActivity.status === "done"
+                        ? "bg-[var(--success)]"
+                        : "animate-pulse bg-[var(--accent)]"
                   }`}
-                  role={activity.status === "error" ? "alert" : "status"}
-                  aria-live="polite"
-                >
-                  <span
-                    className={`h-2.5 w-2.5 shrink-0 rounded-full ${
-                      activity.status === "error"
-                        ? "bg-[var(--danger)]"
-                        : activity.status === "done"
-                          ? "bg-[var(--success)]"
-                          : "animate-pulse bg-[var(--accent)]"
-                    }`}
-                    aria-hidden="true"
-                  />
-                  <span className="shrink-0 font-semibold">{activity.label}</span>
-                  {activity.title ? (
-                    <span className="min-w-0 truncate text-[var(--muted)]">“{activity.title}”</span>
-                  ) : null}
-                  {activity.detail ? <span className="shrink-0 text-[var(--subtle)]">{activity.detail}</span> : null}
-                </div>
-              ))}
+                  aria-hidden="true"
+                />
+                <span className="shrink-0 font-semibold">{primarySyncActivity.label}</span>
+                <span className="min-w-0 flex-1 truncate text-[var(--muted)]">
+                  {primarySyncActivity.title ? `“${primarySyncActivity.title}”` : primarySyncActivity.detail || "処理中"}
+                </span>
+                {primarySyncActivity.detail && primarySyncActivity.title ? (
+                  <span className="hidden max-w-[11rem] shrink-0 truncate text-[var(--subtle)] sm:inline">
+                    {primarySyncActivity.detail}
+                  </span>
+                ) : null}
+                {syncActivityCount > 1 ? (
+                  <span className="shrink-0 rounded-full bg-[var(--card-soft)] px-2 py-0.5 text-[10px] font-semibold text-[var(--muted)]">
+                    +{syncActivityCount - 1}
+                  </span>
+                ) : null}
+              </div>
             </div>
           </div>
         ) : null}
