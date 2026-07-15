@@ -43,6 +43,12 @@ type CachedIssueDraft = {
   savedAt: string;
 };
 
+type IssueMarkdownField = "context_markdown" | "body_markdown";
+
+type MarkdownRenderOptions = {
+  onToggleTask?: (lineIndex: number) => void;
+};
+
 function getStatusMeta(status: CGMPIssueNoteStatus) {
   return STATUS_OPTIONS.find((option) => option.value === status) || STATUS_OPTIONS[0];
 }
@@ -123,7 +129,7 @@ function InlineMarkdown({ text }: { text: string }) {
   );
 }
 
-function renderMarkdown(markdown: string, imageUrls: Map<string, string>, images: CGMPIssueNoteImage[]) {
+function renderMarkdown(markdown: string, imageUrls: Map<string, string>, images: CGMPIssueNoteImage[], options: MarkdownRenderOptions = {}) {
   const imageById = new Map(images.map((image) => [image.id, image]));
   return String(markdown || "")
     .split(/\n/)
@@ -159,12 +165,42 @@ function renderMarkdown(markdown: string, imageUrls: Map<string, string>, images
       }
       if (/^- \[[ xX]\]\s+/.test(line)) {
         const checked = /^- \[[xX]\]/.test(line);
-        return (
-          <div key={index} className="my-1 flex gap-2 text-sm leading-6 text-[var(--text)]">
-            <span className={`mt-1 flex h-4 w-4 shrink-0 items-center justify-center rounded border ${checked ? "border-[color:var(--success)] bg-[var(--success)] text-white" : "border-[color:var(--border)]"}`}>
+        const content = (
+          <>
+            <span
+              aria-hidden="true"
+              className={`mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border text-xs ${
+                checked ? "border-[color:var(--success)] bg-[var(--success)] text-white" : "border-[color:var(--border)] bg-[var(--card)]"
+              }`}
+            >
               {checked ? "✓" : ""}
             </span>
-            <span><InlineMarkdown text={line.replace(/^- \[[ xX]\]\s+/, "")} /></span>
+            <span className="min-w-0 flex-1">
+              <InlineMarkdown text={line.replace(/^- \[[ xX]\]\s+/, "")} />
+            </span>
+          </>
+        );
+        if (options.onToggleTask) {
+          return (
+            <button
+              key={index}
+              type="button"
+              aria-pressed={checked}
+              aria-label={checked ? "チェックを外す" : "チェックする"}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                options.onToggleTask?.(index);
+              }}
+              className="my-1 flex w-full items-start gap-2 rounded-xl px-2 py-1 text-left text-sm leading-6 text-[var(--text)] transition hover:bg-[var(--accent-soft)] active:scale-[0.99]"
+            >
+              {content}
+            </button>
+          );
+        }
+        return (
+          <div key={index} className="my-1 flex gap-2 text-sm leading-6 text-[var(--text)]">
+            {content}
           </div>
         );
       }
@@ -383,13 +419,55 @@ export function IssueNotesView({
     }
   }
 
+  async function toggleMarkdownTask(field: IssueMarkdownField, lineIndex: number) {
+    const current = draftRef.current;
+    if (!current || saving) return;
+    const lines = String(current[field] || "").split(/\n/);
+    const line = lines[lineIndex] || "";
+    if (!/^- \[[ xX]\]\s+/.test(line)) return;
+
+    lines[lineIndex] = /^- \[[xX]\]/.test(line) ? line.replace(/^- \[[xX]\]/, "- [ ]") : line.replace(/^- \[ \]/, "- [x]");
+
+    const next: CGMPIssueNote = {
+      ...current,
+      [field]: lines.join("\n"),
+      updated_at: new Date().toISOString(),
+    };
+
+    writeCachedIssueDraft(next);
+    setDraft(next);
+    setDraftDirty(true);
+    setSaving(true);
+    try {
+      const saved = await onSaveIssue(next);
+      if (saved) {
+        clearCachedIssueDraft(saved.id);
+        setDraft(saved);
+        setSelectedId(saved.id);
+        setDraftDirty(false);
+      }
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const statusMeta = draft ? getStatusMeta(draft.status) : STATUS_OPTIONS[0];
   const renderedPreview: ReactNode[] = draft
-    ? renderMarkdown(
-        [draft.context_markdown ? `## Context\n${draft.context_markdown}` : "", draft.body_markdown].filter(Boolean).join("\n\n"),
-        imageUrls,
-        draft.image_attachments
-      )
+    ? [
+        ...(draft.context_markdown
+          ? [
+              <h3 key="context-heading" className="mt-1 text-lg font-semibold text-[var(--text)]">
+                Context
+              </h3>,
+              ...renderMarkdown(draft.context_markdown, imageUrls, draft.image_attachments, {
+                onToggleTask: (lineIndex) => void toggleMarkdownTask("context_markdown", lineIndex),
+              }),
+            ]
+          : []),
+        ...renderMarkdown(draft.body_markdown, imageUrls, draft.image_attachments, {
+          onToggleTask: (lineIndex) => void toggleMarkdownTask("body_markdown", lineIndex),
+        }),
+      ]
     : [];
 
   return (

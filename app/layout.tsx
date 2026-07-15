@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { PreventNativePinchZoom } from "@/components/PreventNativePinchZoom";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -29,6 +30,8 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
   viewportFit: "cover",
   themeColor: "#0f172a",
 };
@@ -61,7 +64,10 @@ export default function RootLayout({
         <meta name="color-scheme" content="light dark" />
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
-      <body className="min-h-full flex flex-col bg-[var(--bg)] text-[var(--text)]">{children}</body>
+      <body className="min-h-full flex flex-col bg-[var(--bg)] text-[var(--text)]">
+        <PreventNativePinchZoom />
+        {children}
+      </body>
     </html>
   );
 }
