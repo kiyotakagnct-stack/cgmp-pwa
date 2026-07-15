@@ -39,6 +39,49 @@ const ACTION_DEFAULTS: Record<CGMPAction, { emoji: string; key: string; label: s
   unclear: { emoji: "❓", key: "action_unclear", label: "未分類" },
 };
 
+const RECORD_ICON_STOP_WORDS = [
+  "予定",
+  "スケジュール",
+  "カレンダー",
+  "calendar",
+  "リマインダー",
+  "reminder",
+  "タスク",
+  "todo",
+  "to-do",
+  "メモ",
+  "note",
+  "今日",
+  "明日",
+  "明後日",
+  "昨日",
+];
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const RECORD_ICON_STOP_WORD_PATTERN = new RegExp(RECORD_ICON_STOP_WORDS.map(escapeRegExp).join("|"), "gi");
+
+function normalizeRecordIconSource(value: unknown) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  return text
+    .replace(/[#＃]/g, " ")
+    .replace(/\d{4}[-/年]\d{1,2}[-/月]\d{1,2}日?/g, " ")
+    .replace(/\d{1,2}月\d{1,2}日/g, " ")
+    .replace(/\d{1,2}\/\d{1,2}/g, " ")
+    .replace(/\d{1,2}:\d{2}/g, " ")
+    .replace(RECORD_ICON_STOP_WORD_PATTERN, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildLabeledRecordIconLine(label: string, value: unknown) {
+  const normalized = normalizeRecordIconSource(value);
+  return normalized ? `${label}: ${normalized}` : "";
+}
+
 export function buildSemanticIconText(entry: CGMPSemanticIconEntry) {
   return [
     `emoji: ${entry.emoji}`,
@@ -54,19 +97,25 @@ export function buildRecordIconText(record: CGMPRecord) {
     .map((attachment) =>
       [attachment.summary_80, ...(attachment.image_tags || []), attachment.visible_text].filter(Boolean).join(" ")
     )
+    .map(normalizeRecordIconSource)
     .filter(Boolean)
     .join("\n");
-  return [
-    `title: ${record.title || ""}`,
-    `summary: ${record.summary || ""}`,
-    `body: ${record.body || ""}`,
-    `raw_input: ${record.raw_input || ""}`,
-    `tags: ${(record.tags || []).join(" ")}`,
-    `image: ${attachmentText}`,
-    `domain: ${record.domain || ""}`,
-    `para: ${record.para || ""}`,
-    `action: ${record.action || ""}`,
-  ].join("\n").trim();
+  const tags = (record.tags || []).map(normalizeRecordIconSource).filter(Boolean).join(" ");
+  const semanticText = [
+    buildLabeledRecordIconLine("title", record.title),
+    buildLabeledRecordIconLine("summary", record.summary),
+    buildLabeledRecordIconLine("body", record.body),
+    tags ? `tags: ${tags}` : "",
+    attachmentText ? `image: ${attachmentText}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+
+  if (semanticText) return semanticText;
+
+  const fallback = normalizeRecordIconSource(record.raw_input);
+  return fallback ? `fallback: ${fallback}` : "";
 }
 
 function createIcon({
