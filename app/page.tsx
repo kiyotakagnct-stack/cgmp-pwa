@@ -476,7 +476,7 @@ export default function Page() {
   }
 
   async function reloadIssueNotes() {
-    const nextIssues = await loadIssueNotes();
+    const nextIssues = await loadIssueNotes(true);
     setIssueNotes(nextIssues);
   }
 
@@ -2298,7 +2298,7 @@ export default function Page() {
           nextSemanticIconIndex,
         ] = await Promise.all([
           loadAllRecords(),
-          loadIssueNotes(),
+          loadIssueNotes(true),
           loadSettings(),
           getBackupStatus(),
           loadDeletedRecords(),

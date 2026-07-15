@@ -49,6 +49,8 @@ type MarkdownRenderOptions = {
   onToggleTask?: (lineIndex: number) => void;
 };
 
+type IssueListMode = "active" | "archived";
+
 function getStatusMeta(status: CGMPIssueNoteStatus) {
   return STATUS_OPTIONS.find((option) => option.value === status) || STATUS_OPTIONS[0];
 }
@@ -240,6 +242,7 @@ export function IssueNotesView({
   const [draftDirty, setDraftDirty] = useState(false);
   const [query, setQuery] = useState("");
   const [recordQuery, setRecordQuery] = useState("");
+  const [issueListMode, setIssueListMode] = useState<IssueListMode>("active");
   const [previewMode, setPreviewMode] = useState<"viewer" | "editor">("viewer");
   const [saving, setSaving] = useState(false);
   const [captioningId, setCaptioningId] = useState("");
@@ -248,15 +251,23 @@ export function IssueNotesView({
   const draftDirtyRef = useRef(false);
   const [imageUrls, setImageUrls] = useState<Map<string, string>>(new Map());
 
+  const activeIssueCount = useMemo(() => issues.filter((issue) => issue.status !== "archived").length, [issues]);
+  const archivedIssueCount = useMemo(() => issues.filter((issue) => issue.status === "archived").length, [issues]);
+
+  const modeIssues = useMemo(
+    () => issues.filter((issue) => (issueListMode === "archived" ? issue.status === "archived" : issue.status !== "archived")),
+    [issueListMode, issues]
+  );
+
   const filteredIssues = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    if (!normalized) return issues;
-    return issues.filter((issue) => issueSearchText(issue).includes(normalized));
-  }, [issues, query]);
+    if (!normalized) return modeIssues;
+    return modeIssues.filter((issue) => issueSearchText(issue).includes(normalized));
+  }, [modeIssues, query]);
 
   const selectedIssue = useMemo(
-    () => issues.find((issue) => issue.id === selectedId) || filteredIssues[0] || issues[0] || null,
-    [filteredIssues, issues, selectedId]
+    () => filteredIssues.find((issue) => issue.id === selectedId) || filteredIssues[0] || null,
+    [filteredIssues, selectedId]
   );
 
   useEffect(() => {
@@ -342,6 +353,7 @@ export function IssueNotesView({
   async function handleCreate() {
     const issue = await onCreateIssue();
     if (!issue) return;
+    setIssueListMode("active");
     clearCachedIssueDraft(issue.id);
     setSelectedId(issue.id);
     setDraft(issue);
@@ -358,6 +370,49 @@ export function IssueNotesView({
         clearCachedIssueDraft(saved.id);
         setDraft(saved);
         setSelectedId(saved.id);
+        setDraftDirty(false);
+      }
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleArchiveIssue() {
+    if (!draft) return;
+    clearCachedIssueDraft(draft.id);
+    const archivedDraft: CGMPIssueNote = {
+      ...draft,
+      status: "archived",
+      pinned: false,
+      updated_at: new Date().toISOString(),
+    };
+    setSaving(true);
+    setDraft(archivedDraft);
+    setDraftDirty(false);
+    setIssueListMode("archived");
+    setSelectedId(archivedDraft.id);
+    try {
+      await onArchiveIssue(archivedDraft.id);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleRestoreIssue() {
+    if (!draft) return;
+    const restored: CGMPIssueNote = {
+      ...draft,
+      status: "open",
+      updated_at: new Date().toISOString(),
+    };
+    clearCachedIssueDraft(restored.id);
+    setSaving(true);
+    try {
+      const saved = await onSaveIssue(restored);
+      if (saved) {
+        setIssueListMode("active");
+        setSelectedId(saved.id);
+        setDraft(saved);
         setDraftDirty(false);
       }
     } finally {
@@ -493,12 +548,36 @@ export function IssueNotesView({
 
       <div className="grid gap-4 lg:grid-cols-[minmax(260px,0.8fr)_minmax(0,1.5fr)]">
         <div className={`${panelClass} space-y-2`}>
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-[var(--text)]">Issue一覧</h2>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-lg font-semibold text-[var(--text)]">
+              {issueListMode === "archived" ? "Archive一覧" : "Issue一覧"}
+            </h2>
             <Badge compact>{filteredIssues.length}件</Badge>
           </div>
+          <div className="grid grid-cols-2 gap-2 rounded-2xl border border-[color:var(--border)] bg-[var(--card-soft)] p-1">
+            <button
+              type="button"
+              onClick={() => setIssueListMode("active")}
+              className={`rounded-xl px-3 py-2 text-sm font-semibold transition ${
+                issueListMode === "active" ? "bg-[var(--accent)] text-white" : "text-[var(--muted)] hover:bg-[var(--card)]"
+              }`}
+            >
+              Active {activeIssueCount}
+            </button>
+            <button
+              type="button"
+              onClick={() => setIssueListMode("archived")}
+              className={`rounded-xl px-3 py-2 text-sm font-semibold transition ${
+                issueListMode === "archived" ? "bg-[var(--accent)] text-white" : "text-[var(--muted)] hover:bg-[var(--card)]"
+              }`}
+            >
+              Archive {archivedIssueCount}
+            </button>
+          </div>
           {filteredIssues.length === 0 ? (
-            <div className={softPanelClass}>Issue Noteはまだありません。</div>
+            <div className={softPanelClass}>
+              {issueListMode === "archived" ? "アーカイブ済みのIssue Noteはありません。" : "Issue Noteはまだありません。"}
+            </div>
           ) : (
             filteredIssues.map((issue) => {
               const meta = getStatusMeta(issue.status);
@@ -549,9 +628,16 @@ export function IssueNotesView({
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {previewMode === "viewer" ? (
-                    <button type="button" onClick={() => setPreviewMode("editor")} className={primaryButtonClass}>
-                      編集
-                    </button>
+                    <>
+                      {draft.status === "archived" ? (
+                        <button type="button" disabled={saving} onClick={() => void handleRestoreIssue()} className={primaryButtonClass}>
+                          {saving ? "復元中..." : "復元"}
+                        </button>
+                      ) : null}
+                      <button type="button" onClick={() => setPreviewMode("editor")} className={draft.status === "archived" ? secondaryButtonClass : primaryButtonClass}>
+                        編集
+                      </button>
+                    </>
                   ) : (
                     <>
                       <button type="button" onClick={() => updateDraft({ pinned: !draft.pinned })} className={secondaryButtonClass}>
@@ -765,16 +851,15 @@ export function IssueNotesView({
               )}
 
               <div className="flex flex-wrap justify-between gap-2 border-t border-[color:var(--border)] pt-4">
-                <button
-                  type="button"
-                  onClick={() => {
-                    clearCachedIssueDraft(draft.id);
-                    void onArchiveIssue(draft.id);
-                  }}
-                  className={secondaryButtonClass}
-                >
-                  Archive
-                </button>
+                {draft.status === "archived" ? (
+                  <button type="button" disabled={saving} onClick={() => void handleRestoreIssue()} className={primaryButtonClass}>
+                    {saving ? "復元中..." : "アーカイブ解除"}
+                  </button>
+                ) : (
+                  <button type="button" disabled={saving} onClick={() => void handleArchiveIssue()} className={secondaryButtonClass}>
+                    {saving ? "Archive中..." : "Archive"}
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => {
