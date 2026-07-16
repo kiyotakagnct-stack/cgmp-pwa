@@ -420,6 +420,22 @@ export function IssueNotesView({
     }
   }
 
+  async function handleDeleteIssue() {
+    if (!draft || saving) return;
+    if (!window.confirm("このIssue Noteを完全に削除しますか？")) return;
+    const deletingId = draft.id;
+    clearCachedIssueDraft(deletingId);
+    setSaving(true);
+    try {
+      await onDeleteIssue(deletingId);
+      setSelectedId("");
+      setDraft(null);
+      setDraftDirty(false);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function updateDraft(patch: Partial<CGMPIssueNote>) {
     setDraft((current) => {
       if (!current) return current;
@@ -526,7 +542,7 @@ export function IssueNotesView({
     : [];
 
   return (
-    <section className="space-y-4">
+    <section className="space-y-4 pb-[calc(8rem+env(safe-area-inset-bottom))]">
       <div className={panelClass}>
         <SectionHeading
           eyebrow="Issue Note"
@@ -862,15 +878,11 @@ export function IssueNotesView({
                 )}
                 <button
                   type="button"
-                  onClick={() => {
-                    if (window.confirm("このIssue Noteを完全に削除しますか？")) {
-                      clearCachedIssueDraft(draft.id);
-                      void onDeleteIssue(draft.id);
-                    }
-                  }}
+                  disabled={saving}
+                  onClick={() => void handleDeleteIssue()}
                   className="rounded-2xl border border-[color:var(--danger)] bg-[var(--danger-soft)] px-4 py-2.5 text-sm font-semibold text-[var(--danger)]"
                 >
-                  削除
+                  {saving ? "削除中..." : "削除"}
                 </button>
               </div>
             </>

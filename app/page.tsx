@@ -34,6 +34,7 @@ import {
   clearAllRecords,
   clearSemanticIconIndex,
   createBlankIssueNote,
+  deleteIssueNote,
   deleteRecord,
   getIssueNote,
   loadIssueNotes,
@@ -2909,8 +2910,9 @@ export default function Page() {
   }
 
   async function deleteIssueNoteFromUi(issueId: string) {
-    await archiveIssueNoteFromUi(issueId);
-    setNotice({ kind: "info", text: "Issue Noteをアーカイブしました。Drive同期後も復元対象から外れます。" });
+    await deleteIssueNote(issueId);
+    await reloadIssueNotes();
+    setNotice({ kind: "info", text: "Issue Noteを削除しました。" });
   }
 
   async function addImagesToIssueNote(issueId: string, files: File[]) {
@@ -4592,7 +4594,7 @@ export default function Page() {
             aria-hidden="true"
           />
           <aside className="fixed inset-y-0 right-0 z-50 flex w-[min(92vw,420px)] animate-[miniListIn_300ms_cubic-bezier(0.22,1,0.36,1)] flex-col border-l border-[color:var(--border)] bg-[var(--card)] shadow-[-24px_0_80px_var(--shadow-soft)]">
-            <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-5 py-4">
+            <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-5 pb-4 pt-[calc(1rem+env(safe-area-inset-top))]">
               <div>
                 <div className="text-[11px] uppercase tracking-[0.34em] text-[var(--accent)]">Mini List</div>
                 <h2 className="mt-1 text-lg font-semibold text-[var(--text)]">縮小メモ一覧</h2>
